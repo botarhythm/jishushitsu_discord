@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   LiveKitRoom,
   RoomAudioRenderer,
@@ -16,6 +16,10 @@ import type { TrackReference } from '@livekit/components-react';
 import { Track, Participant } from 'livekit-client';
 import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS, BREAKOUT_ROOMS } from '@/lib/types';
 import InstructorDashboard from './InstructorDashboard';
+import { useSessionRecorder } from '@/hooks/useSessionRecorder';
+import { EndSessionButton } from './EndSessionButton';
+import { EndSessionModal, type EndSessionChoice } from './EndSessionModal';
+import { RecordingIndicator } from './RecordingIndicator';
 
 interface RoomViewProps {
   token: string;
@@ -62,17 +66,151 @@ function RoomInner({
   const isInstructor = role === 'instructor';
   const isBreakout = currentRoom !== 'main';
 
-  // Handle incoming data channel messages (room move commands)
+  // ── セッション録音（講師のみ・メインルームに居るときのみ録音継続） ──
+  const recordingEnabled = isInstructor && currentRoom === 'main';
+  const { isRecording, stopRecording } = useSessionRecorder({ enabled: recordingEnabled });
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (isRecording && !recordingStartedAt) setRecordingStartedAt(Date.now());
+    if (!isRecording) setRecordingStartedAt(null);
+  }, [isRecording, recordingStartedAt]);
+
+  // ── EchoNote 設定確認（講師の env が用意されているか） ──
+  const [echoNoteConfigured, setEchoNoteConfigured] = useState(false);
+  useEffect(() => {
+    if (!isInstructor || !instructorKey) return;
+    fetch('/api/echonote/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instructorKey }),
+    })
+      .then((r) => r.json())
+      .then((d) => setEchoNoteConfigured(!!d.configured))
+      .catch(() => setEchoNoteConfigured(false));
+  }, [isInstructor, instructorKey]);
+
+  // ── 終了モーダル状態 ──
+  const [endModalOpen, setEndModalOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<string>('');
+  const [uploadResult, setUploadResult] = useState<
+    { success: true; viewUrl?: string } | { success: false; error: string } | null
+  >(null);
+
+  // Handle incoming data channel messages (room move commands & end-session)
   useDataChannel((msg) => {
     try {
       const data = JSON.parse(new TextDecoder().decode(msg.payload));
       if (data.type === 'move-to-room') {
         onRoomChange(data.payload.targetRoom as RoomName);
+      } else if (data.type === 'end-session') {
+        // 講師から「セッション終了」が来た。受講生は自分から退出する。
+        if (!isInstructor) {
+          alert('講師がセッションを終了しました。退出します。');
+          room.disconnect().finally(() => {
+            try {
+              sessionStorage.clear();
+            } catch {
+              // ignore
+            }
+            window.location.href = '/';
+          });
+        }
       }
     } catch {
       // ignore malformed messages
     }
   });
+
+  const handleEndChoice = useCallback(
+    async (choice: EndSessionChoice) => {
+      if (choice === 'leave-self') {
+        await room.disconnect();
+        try {
+          sessionStorage.clear();
+        } catch {
+          // ignore
+        }
+        window.location.href = '/';
+        return;
+      }
+
+      // end-all-with-summary
+      setUploading(true);
+      setUploadProgress('録音を停止しています…');
+      try {
+        // 1. 録音停止 → Blob 取得
+        const recording = await stopRecording();
+
+        // 2. 全員退出シグナル送信（録音アップロードと並行）
+        if (instructorKey) {
+          fetch('/api/end-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ instructorKey, roomName: currentRoom }),
+          }).catch((err) => console.error('[end-session] error:', err));
+        }
+
+        // 3. 録音を EchoNote へ送信（EchoNote 未設定なら送信せず終了だけ）
+        if (recording && echoNoteConfigured && instructorKey) {
+          setUploadProgress(
+            `録音をEchoNoteへ送信中... (${(recording.blob.size / 1024 / 1024).toFixed(1)}MB)`
+          );
+          const today = new Date();
+          const yyyymmdd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+          const ext = recording.mimeType.includes('webm')
+            ? 'webm'
+            : recording.mimeType.includes('ogg')
+              ? 'ogg'
+              : 'mp4';
+          const fname = `${yyyymmdd}_自習室.${ext}`;
+
+          const form = new FormData();
+          form.append('file', new File([recording.blob], fname, { type: recording.mimeType }));
+          form.append('instructorKey', instructorKey);
+          form.append('clientName', '自習室');
+          form.append('sessionDate', yyyymmdd);
+
+          const res = await fetch('/api/echonote/upload', { method: 'POST', body: form });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          setUploadResult({ success: true, viewUrl: data.viewUrl });
+        } else if (recording && !echoNoteConfigured) {
+          // EchoNote 未設定: 録音は破棄、終了だけ通知
+          setUploadResult({
+            success: false,
+            error: 'EchoNoteが未設定のため録音は送信されませんでした。退出は完了しています。',
+          });
+        } else {
+          setUploadResult({ success: true });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[end-session] failed:', err);
+        setUploadResult({ success: false, error: msg });
+      } finally {
+        setUploading(false);
+      }
+    },
+    [room, stopRecording, instructorKey, currentRoom, echoNoteConfigured]
+  );
+
+  const handleCloseEndModal = useCallback(() => {
+    setEndModalOpen(false);
+    setUploadResult(null);
+    setUploadProgress('');
+    // 終了処理が成功していれば、自分も退出する
+    if (uploadResult?.success) {
+      room.disconnect().finally(() => {
+        try {
+          sessionStorage.clear();
+        } catch {
+          // ignore
+        }
+        window.location.href = '/';
+      });
+    }
+  }, [uploadResult, room]);
 
   const toggleMic = useCallback(async () => {
     await localParticipant.setMicrophoneEnabled(!isMicOn);
@@ -134,17 +272,21 @@ function RoomInner({
                 ブレイクアウト中
               </span>
             )}
+            <RecordingIndicator isRecording={isRecording} startedAt={recordingStartedAt} />
           </div>
           <span className="text-stone-400 text-sm">{participantName}</span>
         </div>
 
         {/* Participant grid */}
-        <div className="flex-1 overflow-auto p-3">
+        <div className="flex-1 overflow-auto p-3 relative">
           <ParticipantGrid
             participants={participants}
             focused={focusedParticipant}
             onFocus={setFocusedParticipant}
           />
+          {isInstructor && !isBreakout && (
+            <EndSessionButton onClick={() => setEndModalOpen(true)} />
+          )}
         </div>
 
         {/* Breakout list (main room only) */}
@@ -177,6 +319,20 @@ function RoomInner({
           instructorKey={instructorKey}
           instructorName={participantName}
           onMoveParticipant={onRoomChange}
+        />
+      )}
+
+      {/* End session modal (instructor only) */}
+      {isInstructor && (
+        <EndSessionModal
+          open={endModalOpen}
+          isRecording={isRecording}
+          echoNoteConfigured={echoNoteConfigured}
+          uploading={uploading}
+          uploadProgress={uploadProgress}
+          uploadResult={uploadResult}
+          onChoose={handleEndChoice}
+          onClose={handleCloseEndModal}
         />
       )}
     </div>
