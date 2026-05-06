@@ -4,6 +4,13 @@ import { useEffect, useState } from 'react';
 
 export type EndSessionChoice = 'end-all-with-summary' | 'leave-self';
 
+export interface RecordingSummary {
+  /** ルームの表示名（例: "メインルーム"） */
+  roomLabel: string;
+  /** 録音時間（秒） */
+  durationSec: number;
+}
+
 interface EndSessionModalProps {
   open: boolean;
   isRecording: boolean;
@@ -11,6 +18,12 @@ interface EndSessionModalProps {
   uploading: boolean;
   uploadProgress?: string;
   uploadResult?: { success: true; viewUrl?: string } | { success: false; error: string } | null;
+  /** 確定した録音の内訳（ルームごと） */
+  completedSummaries?: RecordingSummary[];
+  /** 進行中の録音のルーム名（あれば表示） */
+  activeRoomLabel?: string;
+  /** 進行中の録音の経過秒 */
+  activeDurationSec?: number;
   onChoose: (choice: EndSessionChoice) => void;
   onClose: () => void;
 }
@@ -29,6 +42,9 @@ export function EndSessionModal({
   uploading,
   uploadProgress,
   uploadResult,
+  completedSummaries = [],
+  activeRoomLabel,
+  activeDurationSec,
   onChoose,
   onClose,
 }: EndSessionModalProps) {
@@ -150,12 +166,29 @@ export function EndSessionModal({
   }
 
   // 通常モーダル（最初の表示）
+  const totalRecordings = completedSummaries.length + (isRecording ? 1 : 0);
   return (
     <Backdrop onBackdropClick={onClose}>
       <Panel>
         <h2 className="text-lg font-bold text-stone-900 mb-1">セッションを終了しますか？</h2>
-        {isRecording ? (
-          <p className="text-xs text-stone-500 mb-4">録音中です</p>
+        {totalRecordings > 0 ? (
+          <div className="mb-4 rounded-lg bg-stone-50 p-3 border border-stone-200">
+            <p className="text-xs text-stone-500 mb-1.5">これまでの録音（{totalRecordings}件）</p>
+            <ul className="space-y-1 text-xs text-stone-700">
+              {completedSummaries.map((s, i) => (
+                <li key={i} className="flex justify-between">
+                  <span>{s.roomLabel}</span>
+                  <span className="font-mono text-stone-500">{formatDuration(s.durationSec)}</span>
+                </li>
+              ))}
+              {isRecording && activeRoomLabel && (
+                <li className="flex justify-between text-red-600">
+                  <span>● {activeRoomLabel}（録音中）</span>
+                  <span className="font-mono">{formatDuration(activeDurationSec || 0)}</span>
+                </li>
+              )}
+            </ul>
+          </div>
         ) : (
           <p className="text-xs text-stone-500 mb-4">録音は行われていません</p>
         )}
@@ -208,6 +241,12 @@ function Backdrop({
       {children}
     </div>
   );
+}
+
+function formatDuration(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 function Panel({ children }: { children: React.ReactNode }) {
