@@ -20,6 +20,7 @@ import { useSessionRecorder, type RoomRecording } from '@/hooks/useSessionRecord
 import { EndSessionButton } from './EndSessionButton';
 import { EndSessionModal, type EndSessionChoice } from './EndSessionModal';
 import { RecordingIndicator } from './RecordingIndicator';
+import { MobileHostWarning } from './MobileHostWarning';
 import { InviteModal } from './InviteModal';
 
 const ROOM_FILENAME_LABELS: Record<RoomName, string> = {
@@ -127,6 +128,9 @@ function RoomInner({
       .then((d) => setEchoNoteConfigured(!!d.configured))
       .catch(() => setEchoNoteConfigured(false));
   }, [isInstructor, instructorKey]);
+
+  // ── モバイル時のダッシュボードドロワー ──
+  const [dashboardOpen, setDashboardOpen] = useState(false);
 
   // ── 招待モーダル ──
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -370,6 +374,19 @@ function RoomInner({
           </div>
           <div className="flex items-center gap-2">
             <span className="text-stone-400 text-sm hidden sm:inline">{participantName}</span>
+            {/* モバイル時のみ: ダッシュボード開閉ボタン（講師のみ） */}
+            {isInstructor && instructorKey && (
+              <button
+                onClick={() => setDashboardOpen(true)}
+                className="md:hidden inline-flex items-center gap-1 rounded-lg border border-stone-600 bg-stone-700 px-2.5 py-1.5 text-xs font-medium text-stone-200 hover:bg-stone-600 active:scale-95"
+                aria-label="ダッシュボードを開く"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+                ダッシュボード
+              </button>
+            )}
             {/* 招待ボタン（講師のみ） */}
             {isInstructor && (
               <button
@@ -428,8 +445,13 @@ function RoomInner({
           instructorKey={instructorKey}
           instructorName={participantName}
           onMoveParticipant={onRoomChange}
+          drawerOpen={dashboardOpen}
+          onCloseDrawer={() => setDashboardOpen(false)}
         />
       )}
+
+      {/* モバイルホスト向け警告（モバイル時のみ自動表示） */}
+      <MobileHostWarning isInstructor={isInstructor} />
 
       {/* 招待モーダル（講師のみ） */}
       {isInstructor && (

@@ -10,6 +10,10 @@ interface InstructorDashboardProps {
   instructorKey: string;
   instructorName: string;
   onMoveParticipant: (room: RoomName) => void;
+  /** モバイル時のドロワー開閉状態（PCでは無視） */
+  drawerOpen?: boolean;
+  /** モバイル時の閉じる動作 */
+  onCloseDrawer?: () => void;
 }
 
 interface RaisedHandEntry {
@@ -24,6 +28,8 @@ export default function InstructorDashboard({
   instructorKey,
   instructorName,
   onMoveParticipant,
+  drawerOpen = false,
+  onCloseDrawer,
 }: InstructorDashboardProps) {
   const [isMoving, setIsMoving] = useState<string | null>(null);
 
@@ -100,11 +106,40 @@ export default function InstructorDashboard({
   );
 
   return (
-    <aside className="w-72 bg-stone-800 border-l border-stone-700 flex flex-col overflow-hidden flex-shrink-0">
-      <div className="px-4 py-3 border-b border-stone-700">
-        <h2 className="text-sm font-semibold text-stone-200">講師ダッシュボード</h2>
-        <p className="text-xs text-stone-400">{instructorName}</p>
-      </div>
+    <>
+      {/* モバイル: ドロワー開放時の暗転バックドロップ */}
+      {drawerOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={onCloseDrawer}
+          aria-hidden
+        />
+      )}
+
+      <aside
+        className={`bg-stone-800 border-l border-stone-700 flex flex-col overflow-hidden
+          fixed inset-y-0 right-0 z-40 w-80 max-w-[85vw] transform transition-transform
+          md:relative md:transform-none md:translate-x-0 md:w-72 md:flex-shrink-0
+          ${drawerOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}`}
+      >
+        <div className="px-4 py-3 border-b border-stone-700 flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-stone-200">講師ダッシュボード</h2>
+            <p className="text-xs text-stone-400">{instructorName}</p>
+          </div>
+          {/* モバイルのみ表示する閉じるボタン */}
+          {onCloseDrawer && (
+            <button
+              onClick={onCloseDrawer}
+              className="md:hidden p-1.5 rounded hover:bg-stone-700 text-stone-400"
+              aria-label="ダッシュボードを閉じる"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
 
       <div className="flex-1 overflow-y-auto">
         {/* Raised hands section */}
@@ -213,6 +248,7 @@ export default function InstructorDashboard({
           </ul>
         </section>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

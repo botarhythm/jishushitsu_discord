@@ -6,10 +6,10 @@
  */
 export function EndSessionButton({ onClick }: { onClick: () => void }) {
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center">
+    <div className="pointer-events-none absolute inset-x-0 bottom-4 sm:bottom-3 z-10 flex justify-center">
       <button
         onClick={onClick}
-        className="pointer-events-auto group flex items-center gap-2 rounded-full bg-red-600/90 px-4 py-2 text-sm font-medium text-white shadow-lg backdrop-blur-sm hover:bg-red-700 active:scale-95 transition-all"
+        className="pointer-events-auto group flex items-center gap-2 rounded-full bg-red-600/90 px-5 py-3 sm:px-4 sm:py-2 text-sm font-medium text-white shadow-lg backdrop-blur-sm hover:bg-red-700 active:scale-95 transition-all min-h-[44px]"
         aria-label="セッションを終了"
       >
         <svg
