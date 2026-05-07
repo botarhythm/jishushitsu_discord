@@ -20,6 +20,7 @@ import { useSessionRecorder, type RoomRecording } from '@/hooks/useSessionRecord
 import { EndSessionButton } from './EndSessionButton';
 import { EndSessionModal, type EndSessionChoice } from './EndSessionModal';
 import { RecordingIndicator } from './RecordingIndicator';
+import { InviteModal } from './InviteModal';
 
 const ROOM_FILENAME_LABELS: Record<RoomName, string> = {
   main: 'メイン',
@@ -127,12 +128,23 @@ function RoomInner({
       .catch(() => setEchoNoteConfigured(false));
   }, [isInstructor, instructorKey]);
 
+  // ── 招待モーダル ──
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [participantUrl, setParticipantUrl] = useState('');
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setParticipantUrl(`${window.location.protocol}//${window.location.host}/`);
+    }
+  }, []);
+
   // ── 終了モーダル状態 ──
   const [endModalOpen, setEndModalOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string>('');
   const [uploadResult, setUploadResult] = useState<
-    { success: true; viewUrl?: string } | { success: false; error: string } | null
+    | { success: true; viewUrl?: string; discarded?: boolean }
+    | { success: false; error: string }
+    | null
   >(null);
 
   // Handle incoming data channel messages (room move commands & end-session)
@@ -170,6 +182,30 @@ function RoomInner({
           // ignore
         }
         window.location.href = '/';
+        return;
+      }
+
+      // end-all-discard: 全員退出 + 録音破棄（アップロードしない）
+      if (choice === 'end-all-discard') {
+        setUploading(true);
+        setUploadProgress('セッションを終了しています…');
+        try {
+          // 録音はクローズのみ。Blobは取得するが破棄して使わない。
+          await finalizeAll();
+          if (instructorKey) {
+            fetch('/api/end-session', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ instructorKey, roomName: currentRoom }),
+            }).catch((err) => console.error('[end-session] error:', err));
+          }
+          setUploadResult({ success: true, discarded: true });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          setUploadResult({ success: false, error: msg });
+        } finally {
+          setUploading(false);
+        }
         return;
       }
 
@@ -332,7 +368,22 @@ function RoomInner({
               completedCount={completedRecordings.length}
             />
           </div>
-          <span className="text-stone-400 text-sm">{participantName}</span>
+          <div className="flex items-center gap-2">
+            <span className="text-stone-400 text-sm hidden sm:inline">{participantName}</span>
+            {/* 招待ボタン（講師のみ） */}
+            {isInstructor && (
+              <button
+                onClick={() => setInviteOpen(true)}
+                className="inline-flex items-center gap-1 rounded-lg border border-amber-600/60 bg-amber-700/30 px-2.5 py-1.5 text-xs font-medium text-amber-100 hover:bg-amber-700/50 active:scale-95"
+                aria-label="受講生を招待"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                <span className="hidden sm:inline">招待</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Participant grid */}
@@ -377,6 +428,15 @@ function RoomInner({
           instructorKey={instructorKey}
           instructorName={participantName}
           onMoveParticipant={onRoomChange}
+        />
+      )}
+
+      {/* 招待モーダル（講師のみ） */}
+      {isInstructor && (
+        <InviteModal
+          open={inviteOpen}
+          participantUrl={participantUrl}
+          onClose={() => setInviteOpen(false)}
         />
       )}
 
