@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from 'react';
 
-export type EndSessionChoice = 'end-all-with-summary' | 'leave-self';
+export type EndSessionChoice =
+  | 'end-all-with-summary'
+  | 'end-all-discard'
+  | 'leave-self';
 
 export interface RecordingSummary {
   /** ルームの表示名（例: "メインルーム"） */
@@ -17,7 +20,10 @@ interface EndSessionModalProps {
   echoNoteConfigured: boolean;
   uploading: boolean;
   uploadProgress?: string;
-  uploadResult?: { success: true; viewUrl?: string } | { success: false; error: string } | null;
+  uploadResult?:
+    | { success: true; viewUrl?: string; discarded?: boolean }
+    | { success: false; error: string }
+    | null;
   /** 確定した録音の内訳（ルームごと） */
   completedSummaries?: RecordingSummary[];
   /** 進行中の録音のルーム名（あれば表示） */
@@ -31,8 +37,9 @@ interface EndSessionModalProps {
 /**
  * Zoom 風の「セッションを終了しますか？」モーダル。
  *
- * - 「全員終了 + 要約を生成」: 全員退出 + 録音をEchoNoteへ送信（EchoNote設定済みのときのみ要約付き）
- * - 「自分だけ退出」: 講師だけ退出（受講生は残る）
+ * - 「全員終了 + 要約を生成」: 全員退出 + 録音をEchoNoteへ送信（要約生成）
+ * - 「要約せず終了」: 全員退出 + 録音は破棄（EchoNoteへ送らない）
+ * - 「自分だけ退出」: 講師だけ退出（受講生は自習室に残る）
  * - 「キャンセル」: 何もせず閉じる
  */
 export function EndSessionModal({
@@ -49,24 +56,33 @@ export function EndSessionModal({
   onClose,
 }: EndSessionModalProps) {
   const [confirmingEndAll, setConfirmingEndAll] = useState(false);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
 
   // 開閉時に状態リセット
   useEffect(() => {
-    if (!open) setConfirmingEndAll(false);
+    if (!open) {
+      setConfirmingEndAll(false);
+      setConfirmingDiscard(false);
+    }
   }, [open]);
 
   if (!open) return null;
 
   // アップロード成功時
   if (uploadResult?.success) {
+    const isDiscarded = uploadResult.discarded === true;
     return (
       <Backdrop>
         <Panel>
-          <h2 className="text-lg font-bold text-stone-900 mb-2">セッションを終了しました</h2>
+          <h2 className="text-lg font-bold text-stone-900 mb-2">
+            {isDiscarded ? '録音を破棄して終了しました' : 'セッションを終了しました'}
+          </h2>
           <p className="text-sm text-stone-700 mb-4">
-            録音を EchoNote に送信しました。文字起こしと要約は数分〜十数分で完了します。
+            {isDiscarded
+              ? '録音データは保存されていません。要約は生成されません。'
+              : '録音を EchoNote に送信しました。文字起こしと要約は数分〜十数分で完了します。'}
           </p>
-          {uploadResult.viewUrl && (
+          {uploadResult.viewUrl && !isDiscarded && (
             <a
               href={uploadResult.viewUrl}
               target="_blank"
@@ -126,6 +142,47 @@ export function EndSessionModal({
           <div className="h-2 w-full overflow-hidden rounded-full bg-stone-200">
             <div className="h-full w-1/3 animate-pulse rounded-full bg-amber-500" />
           </div>
+        </Panel>
+      </Backdrop>
+    );
+  }
+
+  // 「要約せず終了」の確認ステップ
+  if (confirmingDiscard) {
+    const totalRecordings = completedSummaries.length + (isRecording ? 1 : 0);
+    return (
+      <Backdrop onBackdropClick={onClose}>
+        <Panel>
+          <h2 className="text-lg font-bold text-stone-900 mb-2">
+            録音を破棄して終了しますか？
+          </h2>
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3">
+            <p className="text-sm text-red-800 leading-relaxed">
+              <strong className="font-semibold">⚠ 録音データは保存されません。</strong>
+              <br />
+              文字起こし・AI要約も生成されません。
+            </p>
+            {totalRecordings > 0 && (
+              <p className="mt-2 text-xs text-red-700">
+                これまでの録音 {totalRecordings} 件はすべて破棄されます。元に戻せません。
+              </p>
+            )}
+          </div>
+          <p className="mb-4 text-xs text-stone-600">
+            機密性の高い会話で録音を残したくない時にお使いください。
+          </p>
+          <button
+            onClick={() => onChoose('end-all-discard')}
+            className="block w-full rounded-lg bg-red-600 px-4 py-3 text-sm font-medium text-white hover:bg-red-700 mb-2"
+          >
+            録音を破棄して終了する
+          </button>
+          <button
+            onClick={() => setConfirmingDiscard(false)}
+            className="block w-full rounded-lg border border-stone-300 px-4 py-3 text-sm font-medium text-stone-700 hover:bg-stone-50"
+          >
+            戻る
+          </button>
         </Panel>
       </Backdrop>
     );
@@ -204,6 +261,18 @@ export function EndSessionModal({
               : '受講生も含めて全員が退出します'}
           </div>
         </button>
+
+        {(isRecording || completedSummaries.length > 0) && (
+          <button
+            onClick={() => setConfirmingDiscard(true)}
+            className="block w-full rounded-lg border border-red-300 bg-white px-4 py-3 text-sm font-medium text-red-700 hover:bg-red-50 mb-2 text-left"
+          >
+            <div className="font-semibold">要約せず終了（録音を破棄）</div>
+            <div className="text-xs text-red-600/80 mt-0.5">
+              全員退出。録音データは保存されません（機密会話の場合に）
+            </div>
+          </button>
+        )}
 
         <button
           onClick={() => onChoose('leave-self')}
