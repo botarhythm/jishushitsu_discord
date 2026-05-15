@@ -32,8 +32,12 @@ export default function RoomPage() {
       return;
     }
 
-    setSession({ token, livekitUrl, participantName, role, currentRoom, instructorKey });
-    setLoading(false);
+    // setState を microtask に逃がし、effect body 内での同期 setState を回避。
+    // (hydration 後の sessionStorage 読み出しによる初期化)
+    queueMicrotask(() => {
+      setSession({ token, livekitUrl, participantName, role, currentRoom, instructorKey });
+      setLoading(false);
+    });
   }, [router]);
 
   const handleRoomChange = async (targetRoom: RoomName) => {

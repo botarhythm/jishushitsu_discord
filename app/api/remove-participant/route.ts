@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { RoomServiceClient, DataPacket_Kind } from 'livekit-server-sdk';
-import { MoveParticipantRequest } from '@/lib/types';
+import { RoomServiceClient } from 'livekit-server-sdk';
 
 function validateInstructorKey(key: string): boolean {
   const validKeys = [
@@ -10,13 +9,23 @@ function validateInstructorKey(key: string): boolean {
   return validKeys.includes(key);
 }
 
+interface RemoveParticipantRequest {
+  instructorKey: string;
+  roomName: string;
+  participantIdentity: string;
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const body: MoveParticipantRequest = await request.json();
-    const { instructorKey, participantIdentity, targetRoomName, currentRoomName } = body;
+    const body: RemoveParticipantRequest = await request.json();
+    const { instructorKey, roomName, participantIdentity } = body;
 
     if (!validateInstructorKey(instructorKey)) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    if (!roomName || !participantIdentity) {
+      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
     const apiKey = process.env.LIVEKIT_API_KEY!;
@@ -28,26 +37,12 @@ export async function POST(request: NextRequest) {
     }
 
     const roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
-
-    // Send data message to target participant to trigger client-side reconnect
-    const message = JSON.stringify({
-      type: 'move-to-room',
-      payload: {
-        targetRoom: targetRoomName,
-        instructedBy: 'instructor',
-      },
-    });
-
-    const encoder = new TextEncoder();
-    const data = encoder.encode(message);
-
-    await roomService.sendData(currentRoomName, data, DataPacket_Kind.RELIABLE, {
-      destinationIdentities: [participantIdentity],
-    });
+    await roomService.removeParticipant(roomName, participantIdentity);
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('Move participant error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    console.error('Remove participant error:', error);
+    const msg = error instanceof Error ? error.message : 'Internal server error';
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

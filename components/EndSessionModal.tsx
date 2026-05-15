@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 export type EndSessionChoice =
   | 'end-all-with-summary'
@@ -15,7 +15,6 @@ export interface RecordingSummary {
 }
 
 interface EndSessionModalProps {
-  open: boolean;
   isRecording: boolean;
   echoNoteConfigured: boolean;
   uploading: boolean;
@@ -43,7 +42,6 @@ interface EndSessionModalProps {
  * - 「キャンセル」: 何もせず閉じる
  */
 export function EndSessionModal({
-  open,
   isRecording,
   echoNoteConfigured,
   uploading,
@@ -55,18 +53,10 @@ export function EndSessionModal({
   onChoose,
   onClose,
 }: EndSessionModalProps) {
+  // confirmingEndAll/confirmingDiscard はモーダルがマウント中だけ有効。
+  // 親が条件レンダリングで unmount するため、再オープン時は自動的にリセットされる。
   const [confirmingEndAll, setConfirmingEndAll] = useState(false);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
-
-  // 開閉時に状態リセット
-  useEffect(() => {
-    if (!open) {
-      setConfirmingEndAll(false);
-      setConfirmingDiscard(false);
-    }
-  }, [open]);
-
-  if (!open) return null;
 
   // アップロード成功時
   if (uploadResult?.success) {

@@ -23,7 +23,10 @@ export function MobileHostWarning({ isInstructor }: { isInstructor: boolean }) {
     const dismissed = sessionStorage.getItem(STORAGE_KEY) === '1';
     if (dismissed) return;
     const isMobile = window.matchMedia('(max-width: 767px)').matches;
-    if (isMobile) setShow(true);
+    if (!isMobile) return;
+    // setState を microtask に逃がし、effect body 内での同期 setState を回避。
+    // (hydration 後にモーダル表示を行うクライアント専用の初期化)
+    queueMicrotask(() => setShow(true));
   }, [isInstructor]);
 
   const handleDismiss = () => {
