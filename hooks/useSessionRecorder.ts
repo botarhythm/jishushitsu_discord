@@ -8,7 +8,6 @@ import {
   RoomEvent,
   type LocalTrackPublication,
   type RemoteTrackPublication,
-  type RemoteParticipant,
 } from 'livekit-client';
 import { SessionAudioRecorder } from '@/lib/audio-recorder';
 import type { RoomName } from '@/lib/types';
@@ -47,6 +46,7 @@ export function useSessionRecorder({ enabled, currentRoom }: UseSessionRecorderO
   const recorderStartedAtRef = useRef<number | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [currentRoomLabel, setCurrentRoomLabel] = useState<RoomName | null>(null);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
   const [completedRecordings, setCompletedRecordings] = useState<RoomRecording[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,8 +79,7 @@ export function useSessionRecorder({ enabled, currentRoom }: UseSessionRecorderO
 
     const handleTrackSubscribed = (
       track: RemoteTrack,
-      publication: RemoteTrackPublication,
-      _participant: RemoteParticipant
+      publication: RemoteTrackPublication
     ) => {
       if (track.kind === Track.Kind.Audio && track.mediaStreamTrack) {
         audioRecorder.addTrack(`remote-${publication.trackSid}`, track.mediaStreamTrack);
@@ -123,6 +122,7 @@ export function useSessionRecorder({ enabled, currentRoom }: UseSessionRecorderO
         room.on(RoomEvent.LocalTrackPublished, handleLocalTrackPublished);
         setIsRecording(true);
         setCurrentRoomLabel(thisRoom);
+        setStartedAt(startedAt);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error('[recorder] start failed:', err);
@@ -167,6 +167,7 @@ export function useSessionRecorder({ enabled, currentRoom }: UseSessionRecorderO
       }
       setIsRecording(false);
       setCurrentRoomLabel(null);
+      setStartedAt(null);
     };
   }, [enabled, currentRoom, room]);
 
@@ -211,6 +212,7 @@ export function useSessionRecorder({ enabled, currentRoom }: UseSessionRecorderO
         recorderStartedAtRef.current = null;
         setIsRecording(false);
         setCurrentRoomLabel(null);
+        setStartedAt(null);
       }
     }
     setCompletedRecordings([]);
@@ -220,6 +222,7 @@ export function useSessionRecorder({ enabled, currentRoom }: UseSessionRecorderO
   return {
     isRecording,
     currentRoomLabel,
+    startedAt,
     completedRecordings,
     error,
     finalizeAll,

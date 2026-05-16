@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Participant } from 'livekit-client';
-import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS, BREAKOUT_ROOMS } from '@/lib/types';
+import { Participant, Track } from 'livekit-client';
+import { RoomName, ParticipantMetadata, ROOM_LABELS, BREAKOUT_ROOMS } from '@/lib/types';
 
 interface InstructorDashboardProps {
   participants: Participant[];
@@ -32,6 +32,7 @@ export default function InstructorDashboard({
   onCloseDrawer,
 }: InstructorDashboardProps) {
   const [isMoving, setIsMoving] = useState<string | null>(null);
+  const [isMuting, setIsMuting] = useState<string | null>(null);
 
   const raisedHandEntries: RaisedHandEntry[] = participants
     .filter((p) => {
@@ -57,19 +58,46 @@ export default function InstructorDashboard({
     }
   });
 
+  const toggleMute = useCallback(
+    async (participant: Participant) => {
+      if (isMuting) return;
+      const audioPub = participant.getTrackPublication(Track.Source.Microphone);
+      const trackSid = audioPub?.trackSid;
+      if (!trackSid) {
+        alert('この参加者はマイクを公開していません');
+        return;
+      }
+      const shouldMute = !audioPub.isMuted;
+      setIsMuting(participant.identity);
+      try {
+        const res = await fetch('/api/mute-participant', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            instructorKey,
+            roomName: currentRoom,
+            participantIdentity: participant.identity,
+            trackSid,
+            muted: shouldMute,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(`操作に失敗しました: ${err.error ?? res.status}`);
+        }
+      } catch (err) {
+        console.error('Mute failed:', err);
+        alert('操作に失敗しました。もう一度お試しください。');
+      } finally {
+        setIsMuting(null);
+      }
+    },
+    [currentRoom, instructorKey, isMuting]
+  );
+
   const moveParticipantToRoom = useCallback(
     async (participantIdentity: string, participantName: string, targetRoom: RoomName) => {
       if (isMoving) return;
-
-      // Check if BO already has an instructor
-      const boParticipants = participants.filter((p) => {
-        try {
-          const meta = JSON.parse(p.metadata ?? '{}');
-          return meta.currentRoom === targetRoom && meta.role === 'instructor';
-        } catch {
-          return false;
-        }
-      });
 
       setIsMoving(participantIdentity);
 
@@ -102,7 +130,7 @@ export default function InstructorDashboard({
         setIsMoving(null);
       }
     },
-    [currentRoom, instructorKey, isMoving, onMoveParticipant, participants]
+    [currentRoom, instructorKey, isMoving, onMoveParticipant]
   );
 
   return (
@@ -182,6 +210,10 @@ export default function InstructorDashboard({
                 if (participant.metadata) meta = JSON.parse(participant.metadata);
               } catch {}
 
+              const audioPub = participant.getTrackPublication(Track.Source.Microphone);
+              const hasMicTrack = !!audioPub?.trackSid;
+              const isMicMuted = !audioPub || audioPub.isMuted;
+
               return (
                 <li key={participant.identity} className="rounded-lg bg-stone-700/50 p-2">
                   <div className="flex items-center justify-between mb-1">
@@ -189,14 +221,35 @@ export default function InstructorDashboard({
                       {participant.name ?? participant.identity}
                       {meta?.raisedHand && ' ✋'}
                     </span>
-                    <span
-                      className={`w-2 h-2 rounded-full ${
-                        participant.connectionQuality === 'excellent' ||
-                        participant.connectionQuality === 'good'
-                          ? 'bg-green-400'
-                          : 'bg-yellow-400'
-                      }`}
-                    />
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => toggleMute(participant)}
+                        disabled={!hasMicTrack || isMuting === participant.identity}
+                        className={`text-xs px-1.5 py-0.5 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                          isMicMuted
+                            ? 'bg-stone-600 text-stone-300 hover:bg-stone-500'
+                            : 'bg-green-700/50 text-green-200 hover:bg-green-700/70'
+                        }`}
+                        title={
+                          !hasMicTrack
+                            ? 'マイク未公開'
+                            : isMicMuted
+                              ? 'マイクを解除'
+                              : 'マイクをミュート'
+                        }
+                        aria-label={isMicMuted ? 'マイクを解除' : 'マイクをミュート'}
+                      >
+                        {isMicMuted ? '🔇' : '🎤'}
+                      </button>
+                      <span
+                        className={`w-2 h-2 rounded-full ${
+                          participant.connectionQuality === 'excellent' ||
+                          participant.connectionQuality === 'good'
+                            ? 'bg-green-400'
+                            : 'bg-yellow-400'
+                        }`}
+                      />
+                    </div>
                   </div>
                   {currentRoom === 'main' && (
                     <div className="flex gap-1 flex-wrap">

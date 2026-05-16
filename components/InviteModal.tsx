@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 
 interface InviteModalProps {
-  open: boolean;
   participantUrl: string;
   onClose: () => void;
 }
@@ -17,23 +16,21 @@ interface ChannelStatus {
  * セッション中に講師が受講生を招待するためのモーダル。
  * メッセージを編集して、メール / Discord / Slack / コピー のいずれかで送信できる。
  */
-export function InviteModal({ open, participantUrl, onClose }: InviteModalProps) {
+export function InviteModal({ participantUrl, onClose }: InviteModalProps) {
+  // 親が条件レンダリングで unmount するため、開く度に lazy init で fresh state になる。
   const [message, setMessage] = useState(() => buildDefaultMessage(participantUrl));
   const [status, setStatus] = useState<ChannelStatus>({ discord: false, slack: false });
   const [busy, setBusy] = useState<null | 'discord' | 'slack' | 'copy'>(null);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
-    if (!open) return;
-    setMessage(buildDefaultMessage(participantUrl));
-    setFeedback(null);
+    // 設定状態(Discord/Slack webhook)を取得。setState は async callback 内なので
+    // react-hooks/set-state-in-effect には抵触しない。
     fetch('/api/invite')
       .then((r) => r.json())
       .then((d: ChannelStatus) => setStatus(d))
       .catch(() => setStatus({ discord: false, slack: false }));
-  }, [open, participantUrl]);
-
-  if (!open) return null;
+  }, []);
 
   const sendVia = async (method: 'discord' | 'slack') => {
     setBusy(method);

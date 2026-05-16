@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { AccessToken } from 'livekit-server-sdk';
 import { TokenRequest, UserRole } from '@/lib/types';
 
-const INSTRUCTOR_NAMES: Record<string, string> = {};
-
 function getInstructorName(key: string): string | null {
   const motozawaKey = process.env.INSTRUCTOR_KEY_MOTOZAWA;
   const tsukakoshiKey = process.env.INSTRUCTOR_KEY_TSUKAKOSHI;

@@ -19,9 +19,10 @@ export default function LandingContent() {
   // 講師の自動ログイン処理
   useEffect(() => {
     if (role === 'instructor' && instructorKey) {
-      setIsInstructor(true);
       const loginAsInstructor = async () => {
         try {
+          // setState は async コールバック内に置く: effect body での同期 setState を回避。
+          setIsInstructor(true);
           setIsLoading(true);
           const response = await fetch('/api/token', {
             method: 'POST',
