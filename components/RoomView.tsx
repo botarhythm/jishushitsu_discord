@@ -69,8 +69,19 @@ function RoomInner({
   const isInstructor = role === 'instructor';
   const isBreakout = currentRoom !== 'main';
 
-  // ── セッション録音（講師のみ。メイン/各ブレイクアウトを別ファイルとして録音） ──
-  const recordingEnabled = isInstructor;
+  // ── EchoNote 設定確認（認証は Cookie 経由） ──
+  // 先に echoNoteConfigured を確定させ、未設定なら音声録音自体を行わない（UIもシンプル化される）
+  const [echoNoteConfigured, setEchoNoteConfigured] = useState(false);
+  useEffect(() => {
+    if (!isInstructor) return;
+    fetch('/api/echonote/status', { method: 'POST' })
+      .then((r) => r.json())
+      .then((d) => setEchoNoteConfigured(!!d.configured))
+      .catch(() => setEchoNoteConfigured(false));
+  }, [isInstructor]);
+
+  // ── セッション録音（講師 かつ EchoNote 設定済みのときのみ） ──
+  const recordingEnabled = isInstructor && echoNoteConfigured;
   const {
     isRecording,
     currentRoomLabel,
@@ -129,16 +140,6 @@ function RoomInner({
     enabled: !isInstructor,
     onTimeout: handleAutoLogout,
   });
-
-  // ── EchoNote 設定確認（認証は Cookie 経由） ──
-  const [echoNoteConfigured, setEchoNoteConfigured] = useState(false);
-  useEffect(() => {
-    if (!isInstructor) return;
-    fetch('/api/echonote/status', { method: 'POST' })
-      .then((r) => r.json())
-      .then((d) => setEchoNoteConfigured(!!d.configured))
-      .catch(() => setEchoNoteConfigured(false));
-  }, [isInstructor]);
 
   // ── モバイル時のダッシュボードドロワー ──
   const [dashboardOpen, setDashboardOpen] = useState(false);
