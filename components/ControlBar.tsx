@@ -7,10 +7,12 @@ interface ControlBarProps {
   raisedHand: boolean;
   isInstructor: boolean;
   isBreakout: boolean;
+  isLocalRecording: boolean;
   onToggleMic: () => void;
   onToggleCamera: () => void;
   onToggleScreenShare: () => void;
   onToggleRaiseHand: () => void;
+  onToggleLocalRecording: () => void;
   onReturnToMain: () => void;
   onEndBreakout: () => void;
 }
@@ -22,10 +24,12 @@ export function ControlBar({
   raisedHand,
   isInstructor,
   isBreakout,
+  isLocalRecording,
   onToggleMic,
   onToggleCamera,
   onToggleScreenShare,
   onToggleRaiseHand,
+  onToggleLocalRecording,
   onReturnToMain,
   onEndBreakout,
 }: ControlBarProps) {
@@ -49,6 +53,20 @@ export function ControlBar({
         icon="🖥️"
         onClick={onToggleScreenShare}
       />
+
+      <button
+        onClick={onToggleLocalRecording}
+        className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
+          isLocalRecording
+            ? 'bg-red-600 text-white shadow-lg shadow-red-500/30 animate-pulse'
+            : 'bg-stone-700 text-stone-400 hover:bg-stone-600 hover:text-stone-300'
+        }`}
+        aria-label={isLocalRecording ? '録画を停止して保存' : 'ローカル録画を開始'}
+        aria-pressed={isLocalRecording}
+      >
+        <span className="text-lg">{isLocalRecording ? '⏹️' : '⏺️'}</span>
+        <span>{isLocalRecording ? '録画停止' : '録画'}</span>
+      </button>
 
       {!isInstructor && !isBreakout && (
         <button

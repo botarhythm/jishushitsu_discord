@@ -47,6 +47,8 @@ interface UseEndSessionOptions {
   finalizeAll: () => Promise<RoomRecording[]>;
   /** 録音開始時刻(epoch ms)。モーダルを開いた瞬間の経過秒スナップショットに使う。 */
   recordingStartedAt: number | null;
+  /** ローカル録画(getDisplayMedia)を停止しBlobをDLする。退出系操作の直前に呼ばれる。 */
+  stopLocalRecording?: () => Promise<Blob | null>;
 }
 
 export function useEndSession({
@@ -54,6 +56,7 @@ export function useEndSession({
   echoNoteConfigured,
   finalizeAll,
   recordingStartedAt,
+  stopLocalRecording,
 }: UseEndSessionOptions) {
   const room = useRoomContext();
   const [endModalOpen, setEndModalOpen] = useState(false);
@@ -71,6 +74,15 @@ export function useEndSession({
 
   const handleEndChoice = useCallback(
     async (choice: EndSessionChoice) => {
+      // 退出系すべてに先立ってローカル録画を停止＆DL
+      if (stopLocalRecording) {
+        try {
+          await stopLocalRecording();
+        } catch (err) {
+          console.error('[end-session] local recording stop failed:', err);
+        }
+      }
+
       if (choice === 'leave-self') {
         await room.disconnect();
         window.location.href = '/api/auth/logout';
@@ -163,7 +175,7 @@ export function useEndSession({
         setUploading(false);
       }
     },
-    [room, finalizeAll, currentRoom, echoNoteConfigured]
+    [room, finalizeAll, currentRoom, echoNoteConfigured, stopLocalRecording]
   );
 
   const handleCloseEndModal = useCallback(() => {

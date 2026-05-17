@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   LiveKitRoom,
   RoomAudioRenderer,
@@ -13,6 +13,8 @@ import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS } from '@/lib/type
 import InstructorDashboard from './InstructorDashboard';
 import { useSessionRecorder } from '@/hooks/useSessionRecorder';
 import { useEndSession } from '@/hooks/useEndSession';
+import { useAutoLogout } from '@/hooks/useAutoLogout';
+import { useLocalRecording } from '@/hooks/useLocalRecording';
 import { EndSessionButton } from './EndSessionButton';
 import { EndSessionModal } from './EndSessionModal';
 import { RecordingIndicator } from './RecordingIndicator';
@@ -22,6 +24,7 @@ import { ParticipantGrid } from './ParticipantGrid';
 import { BreakoutList } from './BreakoutList';
 import { ControlBar } from './ControlBar';
 import { PresenceToast } from './PresenceToast';
+import { AutoLogoutModal } from './AutoLogoutModal';
 
 interface RoomViewProps {
   token: string;
@@ -76,6 +79,57 @@ function RoomInner({
     finalizeAll,
   } = useSessionRecorder({ enabled: recordingEnabled, currentRoom });
 
+  // ── ローカル録画（全員対象。タブを録画して WebM 保存） ──
+  const {
+    isRecording: isLocalRecording,
+    start: startLocalRecording,
+    stop: stopLocalRecording,
+    error: localRecordingError,
+  } = useLocalRecording();
+
+  useEffect(() => {
+    if (localRecordingError) {
+      console.error('[useLocalRecording] error:', localRecordingError);
+    }
+  }, [localRecordingError]);
+
+  const toggleLocalRecording = useCallback(() => {
+    if (isLocalRecording) {
+      stopLocalRecording();
+    } else {
+      startLocalRecording();
+    }
+  }, [isLocalRecording, startLocalRecording, stopLocalRecording]);
+
+  // 退出処理の前に必ず録画を停止＆DLするためのラッパー
+  const stopRecordingRef = useRef(stopLocalRecording);
+  useEffect(() => {
+    stopRecordingRef.current = stopLocalRecording;
+  }, [stopLocalRecording]);
+
+  // ── 自動退出（受講生のみ。1時間経過で確認、5分応答なしで退出） ──
+  const handleAutoLogout = useCallback(() => {
+    stopRecordingRef
+      .current()
+      .catch(() => {
+        // ignore — 録画停止失敗でも退出続行
+      })
+      .finally(() => {
+        room.disconnect().finally(() => {
+          window.location.href = '/api/auth/logout';
+        });
+      });
+  }, [room]);
+
+  const {
+    promptOpen: autoLogoutPromptOpen,
+    remainingMs: autoLogoutRemainingMs,
+    confirmContinue: confirmAutoLogout,
+  } = useAutoLogout({
+    enabled: !isInstructor,
+    onTimeout: handleAutoLogout,
+  });
+
   // ── EchoNote 設定確認（認証は Cookie 経由） ──
   const [echoNoteConfigured, setEchoNoteConfigured] = useState(false);
   useEffect(() => {
@@ -119,6 +173,7 @@ function RoomInner({
     echoNoteConfigured,
     finalizeAll,
     recordingStartedAt,
+    stopLocalRecording,
   });
 
   // Handle incoming data channel messages (room move commands & end-session)
@@ -130,9 +185,16 @@ function RoomInner({
       } else if (data.type === 'end-session') {
         if (!isInstructor) {
           alert('講師がセッションを終了しました。退出します。');
-          room.disconnect().finally(() => {
-            window.location.href = '/api/auth/logout';
-          });
+          stopRecordingRef
+            .current()
+            .catch(() => {
+              // ignore — 録画停止失敗でも退出
+            })
+            .finally(() => {
+              room.disconnect().finally(() => {
+                window.location.href = '/api/auth/logout';
+              });
+            });
         }
       }
     } catch {
@@ -267,10 +329,12 @@ function RoomInner({
           raisedHand={raisedHand}
           isInstructor={isInstructor}
           isBreakout={isBreakout}
+          isLocalRecording={isLocalRecording}
           onToggleMic={toggleMic}
           onToggleCamera={toggleCamera}
           onToggleScreenShare={toggleScreenShare}
           onToggleRaiseHand={toggleRaiseHand}
+          onToggleLocalRecording={toggleLocalRecording}
           onReturnToMain={returnToMain}
           onEndBreakout={handleEndBreakout}
         />
@@ -299,6 +363,14 @@ function RoomInner({
         <InviteModal
           participantUrl={inviteState.url}
           onClose={closeInvite}
+        />
+      )}
+
+      {/* 自動退出確認モーダル（受講生のみ） */}
+      {autoLogoutPromptOpen && (
+        <AutoLogoutModal
+          remainingMs={autoLogoutRemainingMs}
+          onContinue={confirmAutoLogout}
         />
       )}
 
