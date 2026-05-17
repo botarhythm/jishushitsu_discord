@@ -1,21 +1,21 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { resolveEchoNoteEndpoint } from '@/lib/echonote';
+import { NextResponse } from 'next/server';
+import { hasEchoNoteConfigForDiscordId } from '@/lib/echonote';
+import { requireInstructor } from '@/lib/auth-guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
  * 講師の EchoNote 設定状態を返す（UI で「録音→要約に対応」表示の判定用）。
- *
- * リクエスト: POST { instructorKey }
- * レスポンス: { configured: boolean, instructorName?: string }
+ * 認証は session Cookie。
  */
-export async function POST(request: NextRequest) {
-  const body = await request.json().catch(() => ({}));
-  const instructorKey = typeof body?.instructorKey === 'string' ? body.instructorKey : '';
-  const endpoint = resolveEchoNoteEndpoint(instructorKey);
-  if (!endpoint) {
-    return NextResponse.json({ configured: false });
-  }
-  return NextResponse.json({ configured: true, instructorName: endpoint.instructorName });
+export async function POST() {
+  const auth = await requireInstructor();
+  if (!auth.ok) return auth.response;
+
+  const configured = hasEchoNoteConfigForDiscordId(auth.session.discordId);
+  return NextResponse.json({
+    configured,
+    instructorName: auth.session.displayName,
+  });
 }

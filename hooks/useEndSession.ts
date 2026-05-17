@@ -15,7 +15,6 @@ const ROOM_FILENAME_LABELS: Record<RoomName, string> = {
 
 async function uploadRecordingToEchoNote(
   recording: RoomRecording,
-  instructorKey: string,
   yyyymmdd: string
 ): Promise<{ viewUrl?: string }> {
   const ext = recording.mimeType.includes('webm')
@@ -28,7 +27,6 @@ async function uploadRecordingToEchoNote(
 
   const form = new FormData();
   form.append('file', new File([recording.blob], fname, { type: recording.mimeType }));
-  form.append('instructorKey', instructorKey);
   form.append('clientName', '自習室');
   form.append('memo', roomLabel);
   form.append('sessionDate', yyyymmdd);
@@ -44,7 +42,6 @@ export type UploadResult =
   | { success: false; error: string };
 
 interface UseEndSessionOptions {
-  instructorKey?: string;
   currentRoom: RoomName;
   echoNoteConfigured: boolean;
   finalizeAll: () => Promise<RoomRecording[]>;
@@ -53,7 +50,6 @@ interface UseEndSessionOptions {
 }
 
 export function useEndSession({
-  instructorKey,
   currentRoom,
   echoNoteConfigured,
   finalizeAll,
@@ -77,12 +73,7 @@ export function useEndSession({
     async (choice: EndSessionChoice) => {
       if (choice === 'leave-self') {
         await room.disconnect();
-        try {
-          sessionStorage.clear();
-        } catch {
-          // ignore
-        }
-        window.location.href = '/';
+        window.location.href = '/api/auth/logout';
         return;
       }
 
@@ -92,13 +83,11 @@ export function useEndSession({
         setUploadProgress('セッションを終了しています…');
         try {
           await finalizeAll();
-          if (instructorKey) {
-            fetch('/api/end-session', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ instructorKey, roomName: currentRoom }),
-            }).catch((err) => console.error('[end-session] error:', err));
-          }
+          fetch('/api/end-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roomName: currentRoom }),
+          }).catch((err) => console.error('[end-session] error:', err));
           setUploadResult({ success: true, discarded: true });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -115,19 +104,17 @@ export function useEndSession({
       try {
         const recordings = await finalizeAll();
 
-        if (instructorKey) {
-          fetch('/api/end-session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ instructorKey, roomName: currentRoom }),
-          }).catch((err) => console.error('[end-session] error:', err));
-        }
+        fetch('/api/end-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomName: currentRoom }),
+        }).catch((err) => console.error('[end-session] error:', err));
 
         if (recordings.length === 0) {
           setUploadResult({ success: true });
           return;
         }
-        if (!echoNoteConfigured || !instructorKey) {
+        if (!echoNoteConfigured) {
           setUploadResult({
             success: false,
             error: 'EchoNoteが未設定のため録音は送信されませんでした。退出は完了しています。',
@@ -144,7 +131,7 @@ export function useEndSession({
         );
 
         const results = await Promise.allSettled(
-          recordings.map((r) => uploadRecordingToEchoNote(r, instructorKey, yyyymmdd))
+          recordings.map((r) => uploadRecordingToEchoNote(r, yyyymmdd))
         );
 
         const successes = results.filter((r) => r.status === 'fulfilled');
@@ -176,7 +163,7 @@ export function useEndSession({
         setUploading(false);
       }
     },
-    [room, finalizeAll, instructorKey, currentRoom, echoNoteConfigured]
+    [room, finalizeAll, currentRoom, echoNoteConfigured]
   );
 
   const handleCloseEndModal = useCallback(() => {
@@ -185,12 +172,7 @@ export function useEndSession({
     setUploadProgress('');
     if (uploadResult?.success) {
       room.disconnect().finally(() => {
-        try {
-          sessionStorage.clear();
-        } catch {
-          // ignore
-        }
-        window.location.href = '/';
+        window.location.href = '/api/auth/logout';
       });
     }
   }, [uploadResult, room]);

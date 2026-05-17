@@ -8,9 +8,6 @@ export interface ParticipantMetadata {
 
 export interface TokenRequest {
   roomName: RoomName;
-  participantName: string;
-  role: UserRole;
-  instructorKey?: string;
 }
 
 export interface TokenResponse {
@@ -18,10 +15,10 @@ export interface TokenResponse {
   livekitUrl: string;
   participantName?: string;
   role?: UserRole;
+  avatarUrl?: string;
 }
 
 export interface MoveParticipantRequest {
-  instructorKey: string;
   participantIdentity: string;
   targetRoomName: RoomName;
   currentRoomName: RoomName;

@@ -11,62 +11,74 @@ interface RoomSession {
   participantName: string;
   role: UserRole;
   currentRoom: RoomName;
-  instructorKey?: string;
+}
+
+async function fetchLiveKitToken(roomName: RoomName): Promise<RoomSession | 'unauthorized'> {
+  const res = await fetch('/api/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ roomName }),
+  });
+  if (res.status === 401) return 'unauthorized';
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.error || `トークン取得失敗 (${res.status})`);
+  }
+  const data = await res.json();
+  return {
+    token: data.token,
+    livekitUrl: data.livekitUrl,
+    participantName: data.participantName,
+    role: data.role,
+    currentRoom: roomName,
+  };
 }
 
 export default function RoomPage() {
   const router = useRouter();
   const [session, setSession] = useState<RoomSession | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const token = sessionStorage.getItem('lk_token');
-    const livekitUrl = sessionStorage.getItem('lk_url');
-    const participantName = sessionStorage.getItem('lk_name');
-    const role = sessionStorage.getItem('lk_role') as UserRole | null;
-    const currentRoom = (sessionStorage.getItem('lk_room') as RoomName) || 'main';
-    const instructorKey = sessionStorage.getItem('lk_instructor_key') || undefined;
-
-    if (!token || !livekitUrl || !participantName || !role) {
-      router.replace('/');
-      return;
-    }
-
-    // setState を microtask に逃がし、effect body 内での同期 setState を回避。
-    // (hydration 後の sessionStorage 読み出しによる初期化)
-    queueMicrotask(() => {
-      setSession({ token, livekitUrl, participantName, role, currentRoom, instructorKey });
-      setLoading(false);
-    });
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await fetchLiveKitToken('main');
+        if (cancelled) return;
+        if (result === 'unauthorized') {
+          router.replace('/');
+          return;
+        }
+        setSession(result);
+        setLoading(false);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : '予期しないエラー');
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   const handleRoomChange = async (targetRoom: RoomName) => {
-    if (!session) return;
-
     try {
-      const res = await fetch('/api/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomName: targetRoom,
-          participantName: session.participantName,
-          role: session.role,
-          ...(session.instructorKey && { instructorKey: session.instructorKey }),
-        }),
-      });
-
-      if (!res.ok) throw new Error('Failed to get token');
-
-      const data = await res.json();
-
-      sessionStorage.setItem('lk_token', data.token);
-      sessionStorage.setItem('lk_url', data.livekitUrl);
-      sessionStorage.setItem('lk_room', targetRoom);
-
+      const result = await fetchLiveKitToken(targetRoom);
+      if (result === 'unauthorized') {
+        router.replace('/');
+        return;
+      }
       setSession((prev) =>
         prev
-          ? { ...prev, token: data.token, livekitUrl: data.livekitUrl, currentRoom: targetRoom }
-          : null
+          ? {
+              ...prev,
+              token: result.token,
+              livekitUrl: result.livekitUrl,
+              currentRoom: targetRoom,
+            }
+          : result
       );
     } catch (err) {
       console.error('Room change failed:', err);
@@ -80,7 +92,13 @@ export default function RoomPage() {
       </div>
     );
   }
-
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-stone-50 px-4">
+        <p className="text-red-600 text-sm text-center">{error}</p>
+      </div>
+    );
+  }
   if (!session) return null;
 
   return (
@@ -90,7 +108,6 @@ export default function RoomPage() {
       participantName={session.participantName}
       role={session.role}
       currentRoom={session.currentRoom}
-      instructorKey={session.instructorKey}
       onRoomChange={handleRoomChange}
     />
   );

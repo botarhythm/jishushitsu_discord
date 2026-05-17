@@ -29,7 +29,6 @@ interface RoomViewProps {
   participantName: string;
   role: UserRole;
   currentRoom: RoomName;
-  instructorKey?: string;
   onRoomChange: (room: RoomName) => void;
 }
 
@@ -54,7 +53,6 @@ function RoomInner({
   participantName,
   role,
   currentRoom,
-  instructorKey,
   onRoomChange,
 }: RoomViewProps) {
   const room = useRoomContext();
@@ -78,19 +76,15 @@ function RoomInner({
     finalizeAll,
   } = useSessionRecorder({ enabled: recordingEnabled, currentRoom });
 
-  // ── EchoNote 設定確認 ──
+  // ── EchoNote 設定確認（認証は Cookie 経由） ──
   const [echoNoteConfigured, setEchoNoteConfigured] = useState(false);
   useEffect(() => {
-    if (!isInstructor || !instructorKey) return;
-    fetch('/api/echonote/status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instructorKey }),
-    })
+    if (!isInstructor) return;
+    fetch('/api/echonote/status', { method: 'POST' })
       .then((r) => r.json())
       .then((d) => setEchoNoteConfigured(!!d.configured))
       .catch(() => setEchoNoteConfigured(false));
-  }, [isInstructor, instructorKey]);
+  }, [isInstructor]);
 
   // ── モバイル時のダッシュボードドロワー ──
   const [dashboardOpen, setDashboardOpen] = useState(false);
@@ -121,7 +115,6 @@ function RoomInner({
     handleEndChoice,
     handleCloseEndModal,
   } = useEndSession({
-    instructorKey,
     currentRoom,
     echoNoteConfigured,
     finalizeAll,
@@ -138,12 +131,7 @@ function RoomInner({
         if (!isInstructor) {
           alert('講師がセッションを終了しました。退出します。');
           room.disconnect().finally(() => {
-            try {
-              sessionStorage.clear();
-            } catch {
-              // ignore
-            }
-            window.location.href = '/';
+            window.location.href = '/api/auth/logout';
           });
         }
       }
@@ -221,7 +209,7 @@ function RoomInner({
           <div className="flex items-center gap-2">
             <span className="text-stone-400 text-sm hidden sm:inline">{participantName}</span>
             {/* モバイル時のみ: ダッシュボード開閉ボタン（講師のみ） */}
-            {isInstructor && instructorKey && (
+            {isInstructor && (
               <button
                 onClick={() => setDashboardOpen(true)}
                 className="md:hidden inline-flex items-center gap-1 rounded-lg border border-stone-600 bg-stone-700 px-2.5 py-1.5 text-xs font-medium text-stone-200 hover:bg-stone-600 active:scale-95"
@@ -255,9 +243,8 @@ function RoomInner({
             focused={focusedParticipant}
             onFocus={setFocusedParticipant}
             instructorContext={
-              isInstructor && instructorKey
+              isInstructor
                 ? {
-                    instructorKey,
                     currentRoom,
                     selfIdentity: localParticipant.identity,
                   }
@@ -290,11 +277,10 @@ function RoomInner({
       </div>
 
       {/* Instructor dashboard (instructor only) */}
-      {isInstructor && instructorKey && (
+      {isInstructor && (
         <InstructorDashboard
           participants={participants}
           currentRoom={currentRoom}
-          instructorKey={instructorKey}
           instructorName={participantName}
           onMoveParticipant={onRoomChange}
           drawerOpen={dashboardOpen}

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { resolveEchoNoteEndpoint } from '@/lib/echonote';
+import { resolveEchoNoteEndpointByDiscordId } from '@/lib/echonote';
+import { requireInstructor } from '@/lib/auth-guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -7,21 +8,17 @@ export const dynamic = 'force-dynamic';
 /**
  * 自習室で録音した音声を、講師ごとの EchoNote へ転送するサーバープロキシ。
  *
+ * 認証: session Cookie (instructor 必須)
  * クライアントはマルチパートで以下を送る:
  *   - file:         音声 Blob（webm/opus 等）
- *   - instructorKey: 講師認証キー（form フィールド・本文側）
  *   - clientName:   任意（クライアント名 / 受講者名 / セッション名）
  *   - memo:         任意（補足）
  *   - sessionDate:  任意（YYYYMMDD）
- *
- * サーバー側で:
- *   1. instructorKey から該当講師の EchoNote URL+token を引く
- *   2. EchoNote の /api/ingest に Bearer 付きで multipart 転送
- *   3. EchoNote のレスポンスをそのまま返す
- *
- * これにより EchoNote の ingest token はブラウザに露出しない。
  */
 export async function POST(request: NextRequest) {
+  const auth = await requireInstructor();
+  if (!auth.ok) return auth.response;
+
   let form: FormData;
   try {
     form = await request.formData();
@@ -34,19 +31,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'file フィールドが必要です' }, { status: 400 });
   }
 
-  const instructorKey = form.get('instructorKey')?.toString() || '';
-  const endpoint = resolveEchoNoteEndpoint(instructorKey);
+  const endpoint = resolveEchoNoteEndpointByDiscordId(auth.session.discordId);
   if (!endpoint) {
     return NextResponse.json(
       {
         error:
-          'EchoNoteが未設定です。あなたの講師アカウントに ECHONOTE_URL/ECHONOTE_TOKEN を環境変数で設定してください。',
+          'EchoNoteが未設定です。INSTRUCTOR_<N>_DISCORD_ID にこの講師の Discord User ID を設定し、URL/TOKENを併設してください。',
       },
       { status: 412 }
     );
   }
 
-  // EchoNote へ転送するための form を組み直す（instructorKey はサーバー内部のみで使い、外には渡さない）
+  // EchoNote へ転送する form を組み直す
   const forward = new FormData();
   forward.append('file', file, file.name || 'recording.webm');
   forward.append('source', 'digihara_jishushitsu');
@@ -68,7 +64,6 @@ export async function POST(request: NextRequest) {
     try {
       data = text ? JSON.parse(text) : {};
     } catch {
-      // EchoNote 側が JSON 以外を返した場合はそのまま raw として返す
       data = { raw: text };
     }
     if (!res.ok) {

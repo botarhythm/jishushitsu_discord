@@ -7,7 +7,6 @@ import { RoomName, ParticipantMetadata, ROOM_LABELS, BREAKOUT_ROOMS } from '@/li
 interface InstructorDashboardProps {
   participants: Participant[];
   currentRoom: RoomName;
-  instructorKey: string;
   instructorName: string;
   onMoveParticipant: (room: RoomName) => void;
   /** モバイル時のドロワー開閉状態（PCでは無視） */
@@ -25,7 +24,6 @@ interface RaisedHandEntry {
 export default function InstructorDashboard({
   participants,
   currentRoom,
-  instructorKey,
   instructorName,
   onMoveParticipant,
   drawerOpen = false,
@@ -74,7 +72,6 @@ export default function InstructorDashboard({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            instructorKey,
             roomName: currentRoom,
             participantIdentity: participant.identity,
             trackSid,
@@ -92,7 +89,7 @@ export default function InstructorDashboard({
         setIsMuting(null);
       }
     },
-    [currentRoom, instructorKey, isMuting]
+    [currentRoom, isMuting]
   );
 
   const moveParticipantToRoom = useCallback(
@@ -107,7 +104,6 @@ export default function InstructorDashboard({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            instructorKey,
             participantIdentity,
             targetRoomName: targetRoom,
             currentRoomName: currentRoom,
@@ -130,7 +126,7 @@ export default function InstructorDashboard({
         setIsMoving(null);
       }
     },
-    [currentRoom, instructorKey, isMoving, onMoveParticipant]
+    [currentRoom, isMoving, onMoveParticipant]
   );
 
   return (

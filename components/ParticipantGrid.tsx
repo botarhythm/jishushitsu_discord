@@ -7,7 +7,6 @@ import { Track, Participant } from 'livekit-client';
 import { ParticipantMetadata, RoomName } from '@/lib/types';
 
 export interface InstructorActionContext {
-  instructorKey: string;
   currentRoom: RoomName;
   selfIdentity: string;
 }
@@ -151,7 +150,6 @@ function KickButton({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          instructorKey: instructorContext.instructorKey,
           roomName: instructorContext.currentRoom,
           participantIdentity: participant.identity,
         }),

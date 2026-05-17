@@ -1,34 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RoomServiceClient, DataPacket_Kind } from 'livekit-server-sdk';
+import { requireInstructor } from '@/lib/auth-guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-function validateInstructorKey(key: string): boolean {
-  const validKeys = [
-    process.env.INSTRUCTOR_KEY_MOTOZAWA,
-    process.env.INSTRUCTOR_KEY_TSUKAKOSHI,
-  ].filter(Boolean);
-  return validKeys.includes(key);
-}
 
 /**
  * 講師がセッションを終了するときに、対象ルーム内の全参加者に
  * 「end-session」シグナルをブロードキャストする。
  *
- * クライアント側の useDataChannel ハンドラがこれを受けて自分から退出する。
- *
- * Body: { instructorKey, roomName }
+ * Body: { roomName }
  */
 export async function POST(request: NextRequest) {
+  const auth = await requireInstructor();
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await request.json().catch(() => ({}));
-    const instructorKey = typeof body?.instructorKey === 'string' ? body.instructorKey : '';
     const roomName = typeof body?.roomName === 'string' ? body.roomName : '';
-
-    if (!validateInstructorKey(instructorKey)) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
     if (!roomName) {
       return NextResponse.json({ error: 'roomName が必要です' }, { status: 400 });
     }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireInstructor } from '@/lib/auth-guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,14 +13,12 @@ interface InviteBody {
 
 /**
  * 自習室の招待メッセージを Discord/Slack の Webhook 経由で送信する。
- *
- * 設定:
- *   DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/xxx/yyy
- *   SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
- *
- * メールは mailto: でクライアント完結、コピーはクライアントの clipboard API。
+ * 認証: instructor 必須 (session Cookie)
  */
 export async function POST(request: NextRequest) {
+  const auth = await requireInstructor();
+  if (!auth.ok) return auth.response;
+
   const body: InviteBody = await request.json().catch(() => ({}));
   const method = body.method as InviteMethod;
   const message = (body.message || '').toString().trim();
@@ -70,7 +69,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/** 設定状態の取得（フロントから「設定済みかどうか」を判定するため） */
+/** 設定状態の取得（フロントから「設定済みかどうか」を判定するため）。誰でも参照可。 */
 export async function GET() {
   return NextResponse.json({
     discord: !!process.env.DISCORD_WEBHOOK_URL,

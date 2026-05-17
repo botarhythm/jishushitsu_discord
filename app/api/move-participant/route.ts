@@ -1,23 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RoomServiceClient, DataPacket_Kind } from 'livekit-server-sdk';
-import { MoveParticipantRequest } from '@/lib/types';
+import { requireInstructor } from '@/lib/auth-guard';
 
-function validateInstructorKey(key: string): boolean {
-  const validKeys = [
-    process.env.INSTRUCTOR_KEY_MOTOZAWA,
-    process.env.INSTRUCTOR_KEY_TSUKAKOSHI,
-  ].filter(Boolean);
-  return validKeys.includes(key);
+interface MoveParticipantRequest {
+  participantIdentity: string;
+  targetRoomName: string;
+  currentRoomName: string;
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireInstructor();
+  if (!auth.ok) return auth.response;
+
   try {
     const body: MoveParticipantRequest = await request.json();
-    const { instructorKey, participantIdentity, targetRoomName, currentRoomName } = body;
-
-    if (!validateInstructorKey(instructorKey)) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const { participantIdentity, targetRoomName, currentRoomName } = body;
 
     const apiKey = process.env.LIVEKIT_API_KEY!;
     const apiSecret = process.env.LIVEKIT_API_SECRET!;
@@ -29,7 +26,6 @@ export async function POST(request: NextRequest) {
 
     const roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
 
-    // Send data message to target participant to trigger client-side reconnect
     const message = JSON.stringify({
       type: 'move-to-room',
       payload: {

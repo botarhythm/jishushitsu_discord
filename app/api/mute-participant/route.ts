@@ -1,16 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RoomServiceClient } from 'livekit-server-sdk';
-
-function validateInstructorKey(key: string): boolean {
-  const validKeys = [
-    process.env.INSTRUCTOR_KEY_MOTOZAWA,
-    process.env.INSTRUCTOR_KEY_TSUKAKOSHI,
-  ].filter(Boolean);
-  return validKeys.includes(key);
-}
+import { requireInstructor } from '@/lib/auth-guard';
 
 interface MuteParticipantRequest {
-  instructorKey: string;
   roomName: string;
   participantIdentity: string;
   trackSid: string;
@@ -18,13 +10,12 @@ interface MuteParticipantRequest {
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireInstructor();
+  if (!auth.ok) return auth.response;
+
   try {
     const body: MuteParticipantRequest = await request.json();
-    const { instructorKey, roomName, participantIdentity, trackSid, muted } = body;
-
-    if (!validateInstructorKey(instructorKey)) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const { roomName, participantIdentity, trackSid, muted } = body;
 
     if (!roomName || !participantIdentity || !trackSid) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
