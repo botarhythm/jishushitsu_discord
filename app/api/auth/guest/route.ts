@@ -49,11 +49,12 @@ export async function POST(request: NextRequest) {
   const jwt = await signSession({
     discordId: `guest:${payload.jti}`,
     displayName,
-    role: 'student',
+    role: payload.role,
     kind: 'guest',
     inviteJti: payload.jti,
+    initialRec: payload.initialRec,
   });
   await setSessionCookie(jwt);
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, role: payload.role, initialRec: payload.initialRec });
 }

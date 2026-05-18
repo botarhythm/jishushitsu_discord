@@ -62,5 +62,6 @@ export async function POST(request: NextRequest) {
     participantName: displayName,
     role: session.role,
     avatarUrl: session.avatarUrl,
+    initialRec: session.initialRec ?? 'off',
   });
 }

@@ -20,6 +20,7 @@ import { useLocalRecording } from '@/hooks/useLocalRecording';
 import { EndSessionButton } from './EndSessionButton';
 import { EndSessionModal } from './EndSessionModal';
 import { RecordingIndicator } from './RecordingIndicator';
+import { RecordingToast } from './RecordingToast';
 import { MobileHostWarning } from './MobileHostWarning';
 import { InviteModal } from './InviteModal';
 import { ParticipantGrid } from './ParticipantGrid';
@@ -29,12 +30,16 @@ import { AutoLogoutModal } from './AutoLogoutModal';
 import { ChatPanel } from './ChatPanel';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
 
+type InitialRec = 'off' | 'audio' | 'screen' | 'both';
+
 interface RoomViewProps {
   token: string;
   livekitUrl: string;
   participantName: string;
   role: UserRole;
   currentRoom: RoomName;
+  /** 入室直後に自動 ON にする録音/録画 (招待トークン由来) */
+  initialRec?: InitialRec;
   onRoomChange: (room: RoomName) => void;
 }
 
@@ -59,6 +64,7 @@ function RoomInner({
   participantName,
   role,
   currentRoom,
+  initialRec = 'off',
   onRoomChange,
 }: RoomViewProps) {
   const room = useRoomContext();
@@ -72,11 +78,22 @@ function RoomInner({
   const isInstructor = role === 'instructor';
   const isBreakout = currentRoom !== 'main';
 
-  // EchoNote 連携は招待リンク版では OFF (タブ録画 (useLocalRecording) は維持される)
-  const echoNoteConfigured = false;
+  // ── EchoNote 設定確認 (アップロード先 API が利用可能か) ──
+  const [echoNoteConfigured, setEchoNoteConfigured] = useState(false);
+  useEffect(() => {
+    if (!isInstructor) return;
+    fetch('/api/echonote/status', { method: 'POST' })
+      .then((r) => r.json())
+      .then((d) => setEchoNoteConfigured(!!d.configured))
+      .catch(() => setEchoNoteConfigured(false));
+  }, [isInstructor]);
 
-  // ── セッション録音（講師 かつ EchoNote 設定済みのときのみ） ──
-  const recordingEnabled = isInstructor && echoNoteConfigured;
+  // ── 録音 (LiveKit 音声 mix → EchoNote 送信用) のユーザ制御 ──
+  // initialRec に audio / both が含まれていれば入室時に自動 ON。以降はボタンで切替。
+  const [audioRecordingOn, setAudioRecordingOn] = useState<boolean>(
+    isInstructor && (initialRec === 'audio' || initialRec === 'both')
+  );
+  const recordingEnabled = isInstructor && audioRecordingOn;
   const {
     isRecording,
     currentRoomLabel,
@@ -84,6 +101,9 @@ function RoomInner({
     completedRecordings,
     finalizeAll,
   } = useSessionRecorder({ enabled: recordingEnabled, currentRoom });
+  const toggleAudioRecording = useCallback(() => {
+    setAudioRecordingOn((v) => !v);
+  }, []);
 
   // ── ローカル録画（全員対象。タブを録画して WebM 保存） ──
   const {
@@ -106,6 +126,18 @@ function RoomInner({
       startLocalRecording();
     }
   }, [isLocalRecording, startLocalRecording, stopLocalRecording]);
+
+  // initialRec に screen / both が指定されていれば入室時に 1 回だけ録画開始を試みる
+  // (getDisplayMedia の権限ダイアログは出る — ブラウザのユーザジェスチャ要件は許可される)
+  const autoScreenAttempted = useRef(false);
+  useEffect(() => {
+    if (autoScreenAttempted.current) return;
+    if (initialRec !== 'screen' && initialRec !== 'both') return;
+    autoScreenAttempted.current = true;
+    startLocalRecording().catch(() => {
+      // 拒否されても無視 — ボタンから手動開始できる
+    });
+  }, [initialRec, startLocalRecording]);
 
   // 退出処理の前に必ず録画を停止＆DLするためのラッパー
   const stopRecordingRef = useRef(stopLocalRecording);
@@ -341,6 +373,8 @@ function RoomInner({
           isInstructor={isInstructor}
           isBreakout={isBreakout}
           isLocalRecording={isLocalRecording}
+          isAudioRecording={isRecording}
+          showAudioRecordingButton={isInstructor && echoNoteConfigured}
           isChatOpen={chatOpen}
           chatUnreadCount={chatUnread}
           onToggleMic={toggleMic}
@@ -348,6 +382,7 @@ function RoomInner({
           onToggleScreenShare={toggleScreenShare}
           onToggleRaiseHand={toggleRaiseHand}
           onToggleLocalRecording={toggleLocalRecording}
+          onToggleAudioRecording={toggleAudioRecording}
           onToggleChat={toggleChat}
           onOpenDeviceSettings={openDeviceSettings}
           onReturnToMain={returnToMain}
@@ -384,6 +419,9 @@ function RoomInner({
 
       {/* モバイルホスト向け警告（モバイル時のみ自動表示） */}
       <MobileHostWarning isInstructor={isInstructor} />
+
+      {/* 録音/録画ステータストースト (全員) */}
+      <RecordingToast audioOn={isRecording} screenOn={isLocalRecording} />
 
       {/* 招待モーダル（講師のみ） */}
       {isInstructor && inviteOpen && <InviteModal onClose={closeInvite} />}

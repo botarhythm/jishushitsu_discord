@@ -3,6 +3,7 @@ import { SignJWT, jwtVerify } from 'jose';
 
 export type UserRole = 'instructor' | 'student';
 export type SessionKind = 'discord' | 'guest';
+export type InitialRecMode = 'off' | 'audio' | 'screen' | 'both';
 
 export interface SessionPayload {
   /** Discord User ID (snowflake) または guest:<jti> */
@@ -16,6 +17,8 @@ export interface SessionPayload {
   kind?: SessionKind;
   /** guest セッション時のみ: 招待トークンの jti (退出後の再入場検知などに使用) */
   inviteJti?: string;
+  /** 入室直後に自動 ON にしたい録音/録画モード (招待リンク発行時に指定) */
+  initialRec?: InitialRecMode;
 }
 
 const SESSION_COOKIE = 'lk_session';
@@ -40,6 +43,7 @@ export async function signSession(payload: SessionPayload): Promise<string> {
     role: payload.role,
     kind: payload.kind ?? 'discord',
     inviteJti: payload.inviteJti,
+    initialRec: payload.initialRec,
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
@@ -61,6 +65,7 @@ export async function verifySession(jwt: string): Promise<SessionPayload | null>
       role: payload.role,
       kind: payload.kind ?? 'discord',
       inviteJti: payload.inviteJti,
+      initialRec: payload.initialRec,
     };
   } catch {
     return null;
@@ -74,16 +79,24 @@ function isSessionPayload(obj: unknown): obj is {
   role: UserRole;
   kind?: SessionKind;
   inviteJti?: string;
+  initialRec?: InitialRecMode;
 } {
   if (!obj || typeof obj !== 'object') return false;
   const o = obj as Record<string, unknown>;
+  const validInitialRec =
+    o.initialRec === undefined ||
+    o.initialRec === 'off' ||
+    o.initialRec === 'audio' ||
+    o.initialRec === 'screen' ||
+    o.initialRec === 'both';
   return (
     typeof o.discordId === 'string' &&
     typeof o.displayName === 'string' &&
     (o.avatarUrl === undefined || typeof o.avatarUrl === 'string') &&
     (o.role === 'instructor' || o.role === 'student') &&
     (o.kind === undefined || o.kind === 'discord' || o.kind === 'guest') &&
-    (o.inviteJti === undefined || typeof o.inviteJti === 'string')
+    (o.inviteJti === undefined || typeof o.inviteJti === 'string') &&
+    validInitialRec
   );
 }
 
