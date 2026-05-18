@@ -1,12 +1,21 @@
 'use client';
 
 import { useCallback, useRef, useState } from 'react';
+import type { Room, RemoteParticipant, RemoteTrack, RemoteTrackPublication } from 'livekit-client';
+import { RoomEvent, Track } from 'livekit-client';
 
 interface UseLocalRecordingOptions {
-  /** ファイル名のprefix (デフォルト '自習室') */
   filePrefix?: string;
-  /** マイクをmixするか (デフォルト true) */
   includeMicrophone?: boolean;
+  /** LiveKit Room。渡すとリモート参加者の音声を mix する */
+  room?: Room | null;
+}
+
+interface RemoteAudioNode {
+  identity: string;
+  trackSid: string;
+  source: MediaStreamAudioSourceNode;
+  stream: MediaStream;
 }
 
 interface RecordingResources {
@@ -15,36 +24,45 @@ interface RecordingResources {
   displayStream: MediaStream;
   micStream: MediaStream | null;
   audioContext: AudioContext | null;
+  audioDestination: MediaStreamAudioDestinationNode | null;
+  remoteAudioNodes: Map<string, RemoteAudioNode>;
+  detachListeners: () => void;
 }
 
 /**
  * ローカル録画フック。
- * `getDisplayMedia` でタブ/画面を取得し、必要に応じてマイクをmixしてWebMで保存する。
  *
- * - start(): 画面選択ダイアログを表示。ユーザーが選んだ後 MediaRecorder で録画開始
- * - stop(): 録画を停止し、Blob を自動ダウンロードする。Blob を返す
- * - 画面共有を OS の「共有を停止」で止めた場合も自動で stop が走る
+ * - getDisplayMedia でタブ/画面を取得
+ * - includeMicrophone のときローカルマイクも mix
+ * - room を渡すと LiveKit のリモート参加者音声を全て mix（録画に他人の声を確実に入れる）
  */
 export function useLocalRecording({
   filePrefix = '自習室',
   includeMicrophone = true,
+  room = null,
 }: UseLocalRecordingOptions = {}) {
   const [isRecording, setIsRecording] = useState(false);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const resourcesRef = useRef<RecordingResources | null>(null);
-  // stop を ref 経由で参照できるようにし、track の 'ended' イベントから呼び出す
   const stopRef = useRef<() => Promise<Blob | null>>(() => Promise.resolve(null));
 
   const cleanup = useCallback(() => {
     const r = resourcesRef.current;
     if (!r) return;
+    r.detachListeners();
     r.displayStream.getTracks().forEach((t) => t.stop());
     r.micStream?.getTracks().forEach((t) => t.stop());
-    r.audioContext?.close().catch(() => {
-      // ignore — context may already be closed
+    r.remoteAudioNodes.forEach((n) => {
+      try {
+        n.source.disconnect();
+      } catch {
+        // ignore
+      }
     });
+    r.remoteAudioNodes.clear();
+    r.audioContext?.close().catch(() => {});
     resourcesRef.current = null;
   }, []);
 
@@ -68,7 +86,6 @@ export function useLocalRecording({
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      // Blob URL は60秒後に解放（DLが走り終えている十分な時間）
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     },
     [filePrefix]
@@ -95,22 +112,19 @@ export function useLocalRecording({
     });
   }, [cleanup, downloadBlob]);
 
-  // stopRef は最新の stop を常に参照する
   stopRef.current = stop;
 
   const start = useCallback(async () => {
     setError(null);
-    if (resourcesRef.current) return; // 既に録画中
+    if (resourcesRef.current) return;
 
     let displayStream: MediaStream;
     try {
       displayStream = await navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: { ideal: 30, max: 30 } },
-        // タブ音声も拾いたいので true。ユーザーが「タブ音声を共有」をチェックすれば含まれる
         audio: true,
       });
     } catch (err) {
-      // ユーザーが画面選択ダイアログをキャンセルした場合などはエラーとして表示しない
       const msg = err instanceof Error ? err.message : String(err);
       if (err instanceof DOMException && err.name === 'NotAllowedError') {
         // silent
@@ -122,32 +136,99 @@ export function useLocalRecording({
 
     let micStream: MediaStream | null = null;
     let audioContext: AudioContext | null = null;
+    let audioDestination: MediaStreamAudioDestinationNode | null = null;
+    const remoteAudioNodes = new Map<string, RemoteAudioNode>();
     let finalStream = displayStream;
+    let detachListeners: () => void = () => {};
 
-    if (includeMicrophone) {
-      try {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        audioContext = new AudioContext();
-        const dest = audioContext.createMediaStreamDestination();
+    const willMixAudio = includeMicrophone || !!room;
+    if (willMixAudio) {
+      audioContext = new AudioContext();
+      audioDestination = audioContext.createMediaStreamDestination();
 
-        const tabAudioTracks = displayStream.getAudioTracks();
-        if (tabAudioTracks.length > 0) {
+      // タブ音声があれば足す
+      const tabAudioTracks = displayStream.getAudioTracks();
+      if (tabAudioTracks.length > 0 && audioContext && audioDestination) {
+        try {
           const tabSrc = audioContext.createMediaStreamSource(
             new MediaStream(tabAudioTracks)
           );
-          tabSrc.connect(dest);
+          tabSrc.connect(audioDestination);
+        } catch (e) {
+          console.warn('[useLocalRecording] タブ音声接続失敗', e);
         }
-        const micSrc = audioContext.createMediaStreamSource(micStream);
-        micSrc.connect(dest);
-
-        finalStream = new MediaStream([
-          ...displayStream.getVideoTracks(),
-          ...dest.stream.getAudioTracks(),
-        ]);
-      } catch (micErr) {
-        console.warn('[useLocalRecording] マイク取得失敗、タブ音声のみ録画:', micErr);
-        // 失敗してもタブ音声のみで続行
       }
+
+      // ローカルマイク
+      if (includeMicrophone) {
+        try {
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const micSrc = audioContext.createMediaStreamSource(micStream);
+          micSrc.connect(audioDestination);
+        } catch (micErr) {
+          console.warn('[useLocalRecording] マイク取得失敗:', micErr);
+        }
+      }
+
+      // LiveKit リモート音声トラックを追加
+      const addRemoteTrack = (
+        track: RemoteTrack,
+        _pub: RemoteTrackPublication,
+        participant: RemoteParticipant
+      ) => {
+        if (track.kind !== Track.Kind.Audio) return;
+        if (!audioContext || !audioDestination) return;
+        const ms = track.mediaStream ?? (track.mediaStreamTrack ? new MediaStream([track.mediaStreamTrack]) : null);
+        if (!ms) return;
+        const key = `${participant.identity}:${track.sid ?? Math.random()}`;
+        if (remoteAudioNodes.has(key)) return;
+        try {
+          const source = audioContext.createMediaStreamSource(ms);
+          source.connect(audioDestination);
+          remoteAudioNodes.set(key, { identity: participant.identity, trackSid: track.sid ?? '', source, stream: ms });
+        } catch (e) {
+          console.warn('[useLocalRecording] リモート音声接続失敗', e);
+        }
+      };
+
+      const removeRemoteTrack = (track: RemoteTrack, _pub: RemoteTrackPublication, participant: RemoteParticipant) => {
+        const sid = track.sid ?? '';
+        for (const [key, node] of remoteAudioNodes) {
+          if (node.identity === participant.identity && node.trackSid === sid) {
+            try {
+              node.source.disconnect();
+            } catch {
+              // ignore
+            }
+            remoteAudioNodes.delete(key);
+          }
+        }
+      };
+
+      if (room) {
+        room.remoteParticipants.forEach((participant) => {
+          participant.trackPublications.forEach((pub) => {
+            const t = pub.track;
+            if (t && t.kind === Track.Kind.Audio) {
+              addRemoteTrack(t as RemoteTrack, pub as RemoteTrackPublication, participant);
+            }
+          });
+        });
+        room.on(RoomEvent.TrackSubscribed, addRemoteTrack);
+        room.on(RoomEvent.TrackUnsubscribed, removeRemoteTrack);
+      }
+
+      finalStream = new MediaStream([
+        ...displayStream.getVideoTracks(),
+        ...audioDestination.stream.getAudioTracks(),
+      ]);
+
+      detachListeners = () => {
+        if (room) {
+          room.off(RoomEvent.TrackSubscribed, addRemoteTrack);
+          room.off(RoomEvent.TrackUnsubscribed, removeRemoteTrack);
+        }
+      };
     }
 
     const candidates = [
@@ -168,6 +249,7 @@ export function useLocalRecording({
       displayStream.getTracks().forEach((t) => t.stop());
       micStream?.getTracks().forEach((t) => t.stop());
       audioContext?.close().catch(() => {});
+      detachListeners();
       return;
     }
 
@@ -182,9 +264,11 @@ export function useLocalRecording({
       displayStream,
       micStream,
       audioContext,
+      audioDestination,
+      remoteAudioNodes,
+      detachListeners,
     };
 
-    // 画面共有を OS の停止ボタンで止めた場合は自動で stop
     displayStream.getVideoTracks()[0]?.addEventListener('ended', () => {
       stopRef.current();
     });
@@ -192,7 +276,7 @@ export function useLocalRecording({
     recorder.start(1000);
     setStartedAt(Date.now());
     setIsRecording(true);
-  }, [includeMicrophone]);
+  }, [includeMicrophone, room]);
 
   return { isRecording, startedAt, error, start, stop };
 }

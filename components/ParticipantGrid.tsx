@@ -1,7 +1,12 @@
 'use client';
 
-import { useState } from 'react';
-import { VideoTrack, useTracks, isTrackReference } from '@livekit/components-react';
+import { useMemo, useState } from 'react';
+import {
+  VideoTrack,
+  useTracks,
+  useParticipants,
+  isTrackReference,
+} from '@livekit/components-react';
 import type { TrackReference } from '@livekit/components-react';
 import { Track, Participant } from 'livekit-client';
 import { ParticipantMetadata, RoomName } from '@/lib/types';
@@ -17,115 +22,199 @@ interface ParticipantGridProps {
   instructorContext?: InstructorActionContext;
 }
 
+interface TileItem {
+  participant: Participant;
+  trackRef: TrackReference | null;
+  /** screen-share タイルかどうか。1人が camera と screen 両方持ってると2タイル出す */
+  source: 'camera' | 'screen' | 'none';
+}
+
 export function ParticipantGrid({ focused, onFocus, instructorContext }: ParticipantGridProps) {
   const tracks = useTracks(
     [Track.Source.ScreenShare, Track.Source.Camera],
     { onlySubscribed: false }
   );
+  const participants = useParticipants();
 
-  if (tracks.length === 0) {
+  const tiles = useMemo<TileItem[]>(() => {
+    const list: TileItem[] = [];
+    const seen = new Set<string>();
+    for (const t of tracks) {
+      if (!isTrackReference(t)) continue;
+      const src = t.source === Track.Source.ScreenShare ? 'screen' : 'camera';
+      list.push({ participant: t.participant, trackRef: t, source: src });
+      seen.add(`${t.participant.identity}:${src}`);
+    }
+    for (const p of participants) {
+      const hasCam = seen.has(`${p.identity}:camera`);
+      const hasScreen = seen.has(`${p.identity}:screen`);
+      if (!hasCam && !hasScreen) {
+        list.push({ participant: p, trackRef: null, source: 'none' });
+      }
+    }
+    return list;
+  }, [tracks, participants]);
+
+  if (tiles.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-stone-500 text-sm">
-        まだ誰も画面共有していません
+        参加者がいません
       </div>
     );
   }
 
-  const allVideoTracks = tracks.filter(isTrackReference);
-  const focusedTrack = focused
-    ? allVideoTracks.find((t) => t.participant.identity === focused)
-    : null;
+  const focusedTile = focused ? tiles.find((t) => t.participant.identity === focused) : null;
 
-  if (focusedTrack) {
+  if (focusedTile) {
     return (
       <div className="h-full flex flex-col gap-2">
-        <div className="group flex-1 rounded-lg overflow-hidden bg-stone-800 relative">
-          <VideoTrack trackRef={focusedTrack} className="w-full h-full object-contain" />
-          <div className="absolute bottom-2 left-2 bg-black/50 text-white text-xs px-2 py-1 rounded">
-            {focusedTrack.participant.name}
-          </div>
-          <button
-            onClick={() => onFocus(null)}
-            className="absolute top-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded hover:bg-black/70"
-          >
-            グリッドに戻る
-          </button>
-          {instructorContext &&
-            focusedTrack.participant.identity !== instructorContext.selfIdentity && (
-              <KickButton
-                participant={focusedTrack.participant}
-                instructorContext={instructorContext}
-              />
-            )}
-        </div>
-        <ThumbnailRow tracks={allVideoTracks} onFocus={onFocus} />
+        <Tile
+          item={focusedTile}
+          large
+          onClick={() => onFocus(null)}
+          instructorContext={instructorContext}
+          extraTopRight={
+            <button
+              onClick={() => onFocus(null)}
+              className="bg-black/50 text-white text-xs px-2 py-1 rounded hover:bg-black/70"
+            >
+              グリッドに戻る
+            </button>
+          }
+        />
+        <ThumbnailRow tiles={tiles} onFocus={onFocus} />
       </div>
     );
   }
 
-  const videoTracks = tracks.filter(isTrackReference);
-  const cols = videoTracks.length === 1 ? 1 : videoTracks.length <= 4 ? 2 : videoTracks.length <= 9 ? 3 : 4;
+  const cols = tiles.length === 1 ? 1 : tiles.length <= 4 ? 2 : tiles.length <= 9 ? 3 : 4;
 
   return (
     <div
       className="grid gap-2 h-full"
       style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
     >
-      {videoTracks.map((trackRef) => (
-        <div
-          key={`${trackRef.participant.identity}-${trackRef.source}`}
-          className="group rounded-lg overflow-hidden bg-stone-800 relative cursor-pointer hover:ring-2 hover:ring-amber-400 transition-all"
-          onClick={() => onFocus(trackRef.participant.identity)}
-        >
-          <VideoTrack trackRef={trackRef} className="w-full h-full object-contain" />
-          <ParticipantLabel participant={trackRef.participant} />
-          {instructorContext &&
-            trackRef.participant.identity !== instructorContext.selfIdentity && (
-              <KickButton
-                participant={trackRef.participant}
-                instructorContext={instructorContext}
-              />
-            )}
-        </div>
+      {tiles.map((item) => (
+        <Tile
+          key={`${item.participant.identity}-${item.source}`}
+          item={item}
+          onClick={() => onFocus(item.participant.identity)}
+          instructorContext={instructorContext}
+        />
       ))}
     </div>
   );
 }
 
-function ThumbnailRow({
-  tracks,
-  onFocus,
+function Tile({
+  item,
+  large = false,
+  onClick,
+  instructorContext,
+  extraTopRight,
 }: {
-  tracks: TrackReference[];
-  onFocus: (id: string) => void;
+  item: TileItem;
+  large?: boolean;
+  onClick: () => void;
+  instructorContext?: InstructorActionContext;
+  extraTopRight?: React.ReactNode;
 }) {
-  return (
-    <div className="flex gap-2 overflow-x-auto h-24 flex-shrink-0">
-      {tracks.map((trackRef) => (
-        <div
-          key={`thumb-${trackRef.participant.identity}-${trackRef.source}`}
-          className="h-full aspect-video rounded overflow-hidden bg-stone-700 relative cursor-pointer flex-shrink-0"
-          onClick={() => onFocus(trackRef.participant.identity)}
-        >
-          <VideoTrack trackRef={trackRef} className="w-full h-full object-contain" />
-        </div>
-      ))}
-    </div>
-  );
-}
+  const { participant, trackRef, source } = item;
+  const name = participant.name?.trim() || participant.identity;
 
-function ParticipantLabel({ participant }: { participant: Participant }) {
   let meta: ParticipantMetadata | null = null;
   try {
     if (participant.metadata) meta = JSON.parse(participant.metadata);
   } catch {}
 
   return (
-    <div className="absolute bottom-1 left-1 flex items-center gap-1">
-      <span className="bg-black/50 text-white text-xs px-1.5 py-0.5 rounded">
-        {participant.name}
-      </span>
-      {meta?.raisedHand && <span className="text-base">✋</span>}
+    <div
+      className={`group rounded-lg overflow-hidden bg-stone-800 relative ${large ? 'flex-1' : 'cursor-pointer hover:ring-2 hover:ring-amber-400 transition-all'}`}
+      onClick={large ? undefined : onClick}
+    >
+      <div className="aspect-video w-full bg-stone-900 flex items-center justify-center">
+        {trackRef ? (
+          <VideoTrack trackRef={trackRef} className="w-full h-full object-contain" />
+        ) : (
+          <AvatarPlaceholder name={name} />
+        )}
+      </div>
+
+      <div className="flex items-center justify-center gap-1.5 bg-stone-900/90 px-2 py-1 border-t border-stone-700">
+        {meta?.raisedHand && <span className="text-sm leading-none">✋</span>}
+        <span className="text-xs font-medium text-stone-100 truncate" title={name}>
+          {name}
+        </span>
+        {source === 'screen' && (
+          <span className="text-[10px] uppercase tracking-wide text-amber-400">screen</span>
+        )}
+        <MicIndicator participant={participant} />
+      </div>
+
+      {extraTopRight && <div className="absolute top-2 right-2">{extraTopRight}</div>}
+
+      {instructorContext &&
+        participant.identity !== instructorContext.selfIdentity && (
+          <KickButton participant={participant} instructorContext={instructorContext} />
+        )}
+    </div>
+  );
+}
+
+function AvatarPlaceholder({ name }: { name: string }) {
+  const initial = name.charAt(0).toUpperCase();
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center text-stone-400">
+      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-stone-700 text-2xl font-semibold text-stone-200">
+        {initial}
+      </div>
+    </div>
+  );
+}
+
+function MicIndicator({ participant }: { participant: Participant }) {
+  const micPub = participant.getTrackPublication(Track.Source.Microphone);
+  const muted = !micPub || micPub.isMuted;
+  return (
+    <span
+      className={`text-xs leading-none ${muted ? 'text-stone-500' : 'text-emerald-400'}`}
+      aria-label={muted ? 'マイクオフ' : 'マイクオン'}
+      title={muted ? 'マイクオフ' : 'マイクオン'}
+    >
+      {muted ? '🔇' : '🎤'}
+    </span>
+  );
+}
+
+function ThumbnailRow({
+  tiles,
+  onFocus,
+}: {
+  tiles: TileItem[];
+  onFocus: (id: string) => void;
+}) {
+  return (
+    <div className="flex gap-2 overflow-x-auto h-24 flex-shrink-0">
+      {tiles.map((item) => {
+        const name = item.participant.name?.trim() || item.participant.identity;
+        return (
+          <div
+            key={`thumb-${item.participant.identity}-${item.source}`}
+            className="h-full aspect-video rounded overflow-hidden bg-stone-700 relative cursor-pointer flex-shrink-0"
+            onClick={() => onFocus(item.participant.identity)}
+            title={name}
+          >
+            {item.trackRef ? (
+              <VideoTrack trackRef={item.trackRef} className="w-full h-full object-contain" />
+            ) : (
+              <AvatarPlaceholder name={name} />
+            )}
+            <div className="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[10px] px-1 py-0.5 truncate text-center">
+              {name}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
