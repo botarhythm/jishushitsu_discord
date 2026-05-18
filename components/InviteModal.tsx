@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 
 interface InviteModalProps {
-  participantUrl: string;
   onClose: () => void;
 }
 
@@ -12,24 +11,53 @@ interface ChannelStatus {
   slack: boolean;
 }
 
+interface InviteTokenResponse {
+  url: string;
+  expiresAt: number;
+}
+
 /**
  * セッション中に講師が受講生を招待するためのモーダル。
- * メッセージを編集して、メール / Discord / Slack / コピー のいずれかで送信できる。
+ * - 招待リンクは `/api/invite-token` で都度発行 (1 回限り・約 2h で失効)
+ * - 受講生は Discord 認証不要、リンク先で名前入力すれば入室できる
+ * - メッセージを編集して、メール / Discord / Slack / コピー のいずれかで送信できる
  */
-export function InviteModal({ participantUrl, onClose }: InviteModalProps) {
-  // 親が条件レンダリングで unmount するため、開く度に lazy init で fresh state になる。
-  const [message, setMessage] = useState(() => buildDefaultMessage(participantUrl));
+export function InviteModal({ onClose }: InviteModalProps) {
+  const [participantUrl, setParticipantUrl] = useState<string>('');
+  const [tokenError, setTokenError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string>('');
   const [status, setStatus] = useState<ChannelStatus>({ discord: false, slack: false });
   const [busy, setBusy] = useState<null | 'discord' | 'slack' | 'copy'>(null);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
-    // 設定状態(Discord/Slack webhook)を取得。setState は async callback 内なので
-    // react-hooks/set-state-in-effect には抵触しない。
     fetch('/api/invite')
       .then((r) => r.json())
       .then((d: ChannelStatus) => setStatus(d))
       .catch(() => setStatus({ discord: false, slack: false }));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/invite-token', { method: 'POST' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data?.error || `招待リンクの発行に失敗 (${res.status})`);
+        }
+        const data: InviteTokenResponse = await res.json();
+        if (cancelled) return;
+        setParticipantUrl(data.url);
+        setMessage(buildDefaultMessage(data.url));
+      } catch (err) {
+        if (cancelled) return;
+        setTokenError(err instanceof Error ? err.message : '招待リンクの発行に失敗しました');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const sendVia = async (method: 'discord' | 'slack') => {
@@ -86,7 +114,7 @@ export function InviteModal({ participantUrl, onClose }: InviteModalProps) {
           <div>
             <h2 className="text-base font-bold text-stone-900">受講生を招待</h2>
             <p className="text-xs text-stone-500">
-              メッセージを編集して、お好きな方法で送信できます
+              このリンクは 1 回限り (退出すると無効) です
             </p>
           </div>
           <button
@@ -111,20 +139,35 @@ export function InviteModal({ participantUrl, onClose }: InviteModalProps) {
           </button>
         </div>
 
-        <textarea
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          rows={7}
-          className="w-full rounded-lg border border-stone-300 bg-white p-3 text-sm font-mono text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-400"
-        />
+        {tokenError ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            {tokenError}
+          </div>
+        ) : !participantUrl ? (
+          <div className="rounded-lg border border-stone-200 bg-stone-50 p-3 text-sm text-stone-500">
+            招待リンクを発行中…
+          </div>
+        ) : (
+          <textarea
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            rows={7}
+            className="w-full rounded-lg border border-stone-300 bg-white p-3 text-sm font-mono text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-400"
+          />
+        )}
 
         <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <ActionButton onClick={sendViaMail} icon="✉️" label="メール" />
+          <ActionButton
+            onClick={sendViaMail}
+            icon="✉️"
+            label="メール"
+            disabled={!participantUrl}
+          />
           <ActionButton
             onClick={() => sendVia('discord')}
             icon="💬"
             label="Discord"
-            disabled={!status.discord || busy !== null}
+            disabled={!participantUrl || !status.discord || busy !== null}
             busy={busy === 'discord'}
             disabledHint={!status.discord ? '未設定' : undefined}
           />
@@ -132,7 +175,7 @@ export function InviteModal({ participantUrl, onClose }: InviteModalProps) {
             onClick={() => sendVia('slack')}
             icon="💼"
             label="Slack"
-            disabled={!status.slack || busy !== null}
+            disabled={!participantUrl || !status.slack || busy !== null}
             busy={busy === 'slack'}
             disabledHint={!status.slack ? '未設定' : undefined}
           />
@@ -141,7 +184,7 @@ export function InviteModal({ participantUrl, onClose }: InviteModalProps) {
             icon="📋"
             label="コピー"
             busy={busy === 'copy'}
-            disabled={busy !== null}
+            disabled={!participantUrl || busy !== null}
           />
         </div>
 
@@ -203,8 +246,8 @@ function buildDefaultMessage(participantUrl: string): string {
   return `【デジタル原っぱ大学 自習室のお知らせ】
 
 日時: ${yyyy}-${mm}-${dd}
-参加URL: ${participantUrl}
+参加URL (1 回限り・退出後は無効): ${participantUrl}
 
-お名前を入力してご参加ください。
+リンクを開いてお名前を入力するとご参加いただけます。
 ブラウザのマイク・カメラ権限を許可してください（推奨ブラウザ: Chrome 最新版）。`;
 }

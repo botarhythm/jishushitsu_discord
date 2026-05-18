@@ -25,7 +25,6 @@ import { InviteModal } from './InviteModal';
 import { ParticipantGrid } from './ParticipantGrid';
 import { BreakoutList } from './BreakoutList';
 import { ControlBar } from './ControlBar';
-import { PresenceToast } from './PresenceToast';
 import { AutoLogoutModal } from './AutoLogoutModal';
 import { ChatPanel } from './ChatPanel';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
@@ -73,16 +72,8 @@ function RoomInner({
   const isInstructor = role === 'instructor';
   const isBreakout = currentRoom !== 'main';
 
-  // ── EchoNote 設定確認（認証は Cookie 経由） ──
-  // 先に echoNoteConfigured を確定させ、未設定なら音声録音自体を行わない（UIもシンプル化される）
-  const [echoNoteConfigured, setEchoNoteConfigured] = useState(false);
-  useEffect(() => {
-    if (!isInstructor) return;
-    fetch('/api/echonote/status', { method: 'POST' })
-      .then((r) => r.json())
-      .then((d) => setEchoNoteConfigured(!!d.configured))
-      .catch(() => setEchoNoteConfigured(false));
-  }, [isInstructor]);
+  // EchoNote 連携は招待リンク版では OFF (タブ録画 (useLocalRecording) は維持される)
+  const echoNoteConfigured = false;
 
   // ── セッション録音（講師 かつ EchoNote 設定済みのときのみ） ──
   const recordingEnabled = isInstructor && echoNoteConfigured;
@@ -171,20 +162,10 @@ function RoomInner({
   const openDeviceSettings = useCallback(() => setDeviceSettingsOpen(true), []);
   const closeDeviceSettings = useCallback(() => setDeviceSettingsOpen(false), []);
 
-  // ── 招待モーダル ──
-  const [inviteState, setInviteState] = useState<{ open: boolean; url: string }>({
-    open: false,
-    url: '',
-  });
-  const openInvite = useCallback(() => {
-    setInviteState({
-      open: true,
-      url: `${window.location.protocol}//${window.location.host}/`,
-    });
-  }, []);
-  const closeInvite = useCallback(() => {
-    setInviteState((prev) => ({ ...prev, open: false }));
-  }, []);
+  // ── 招待モーダル (URL はモーダル内で /api/invite-token から取得) ──
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const openInvite = useCallback(() => setInviteOpen(true), []);
+  const closeInvite = useCallback(() => setInviteOpen(false), []);
 
   // ── 終了モーダル ──
   const {
@@ -404,16 +385,8 @@ function RoomInner({
       {/* モバイルホスト向け警告（モバイル時のみ自動表示） */}
       <MobileHostWarning isInstructor={isInstructor} />
 
-      {/* 入退室トースト通知 */}
-      <PresenceToast />
-
       {/* 招待モーダル（講師のみ） */}
-      {isInstructor && inviteState.open && (
-        <InviteModal
-          participantUrl={inviteState.url}
-          onClose={closeInvite}
-        />
-      )}
+      {isInstructor && inviteOpen && <InviteModal onClose={closeInvite} />}
 
       {/* 自動退出確認モーダル（受講生のみ） */}
       {autoLogoutPromptOpen && (

@@ -31,14 +31,19 @@ export async function POST(request: NextRequest) {
 
   const { session } = auth;
 
-  // identity は Discord User ID を使う（LiveKit内で一意かつ衝突しない）
-  const identity = `discord:${session.discordId}`;
+  // identity は kind に応じて prefix。guest の discordId は既に `guest:<jti>` 形式。
+  const identity =
+    session.kind === 'guest' ? session.discordId : `discord:${session.discordId}`;
   const displayName = session.displayName.substring(0, 32);
 
   const at = new AccessToken(apiKey, apiSecret, {
     identity,
     name: displayName,
-    metadata: JSON.stringify({ role: session.role, discordId: session.discordId }),
+    metadata: JSON.stringify({
+      role: session.role,
+      discordId: session.discordId,
+      kind: session.kind ?? 'discord',
+    }),
   });
 
   at.addGrant({
