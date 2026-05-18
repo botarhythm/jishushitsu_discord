@@ -49,6 +49,8 @@ interface UseEndSessionOptions {
   recordingStartedAt: number | null;
   /** ローカル録画(getDisplayMedia)を停止しBlobをDLする。退出系操作の直前に呼ばれる。 */
   stopLocalRecording?: () => Promise<Blob | null>;
+  /** 退出系操作の直前に呼ばれる任意フック（チャット履歴ダウンロード等）。 */
+  onBeforeLeave?: () => void;
 }
 
 export function useEndSession({
@@ -57,6 +59,7 @@ export function useEndSession({
   finalizeAll,
   recordingStartedAt,
   stopLocalRecording,
+  onBeforeLeave,
 }: UseEndSessionOptions) {
   const room = useRoomContext();
   const [endModalOpen, setEndModalOpen] = useState(false);
@@ -74,6 +77,12 @@ export function useEndSession({
 
   const handleEndChoice = useCallback(
     async (choice: EndSessionChoice) => {
+      // 退出系すべてに先立ってチャット履歴をDL
+      try {
+        onBeforeLeave?.();
+      } catch (err) {
+        console.error('[end-session] onBeforeLeave failed:', err);
+      }
       // 退出系すべてに先立ってローカル録画を停止＆DL
       if (stopLocalRecording) {
         try {
@@ -112,7 +121,9 @@ export function useEndSession({
 
       // end-all-with-summary
       setUploading(true);
-      setUploadProgress('録音を停止しています…');
+      setUploadProgress(
+        echoNoteConfigured ? '録音を停止しています…' : 'セッションを終了しています…'
+      );
       try {
         const recordings = await finalizeAll();
 
@@ -175,7 +186,7 @@ export function useEndSession({
         setUploading(false);
       }
     },
-    [room, finalizeAll, currentRoom, echoNoteConfigured, stopLocalRecording]
+    [room, finalizeAll, currentRoom, echoNoteConfigured, stopLocalRecording, onBeforeLeave]
   );
 
   const handleCloseEndModal = useCallback(() => {

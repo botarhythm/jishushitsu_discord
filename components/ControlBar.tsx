@@ -8,11 +8,15 @@ interface ControlBarProps {
   isInstructor: boolean;
   isBreakout: boolean;
   isLocalRecording: boolean;
+  isChatOpen: boolean;
+  chatUnreadCount: number;
   onToggleMic: () => void;
   onToggleCamera: () => void;
   onToggleScreenShare: () => void;
   onToggleRaiseHand: () => void;
   onToggleLocalRecording: () => void;
+  onToggleChat: () => void;
+  onOpenDeviceSettings: () => void;
   onReturnToMain: () => void;
   onEndBreakout: () => void;
 }
@@ -25,11 +29,15 @@ export function ControlBar({
   isInstructor,
   isBreakout,
   isLocalRecording,
+  isChatOpen,
+  chatUnreadCount,
   onToggleMic,
   onToggleCamera,
   onToggleScreenShare,
   onToggleRaiseHand,
   onToggleLocalRecording,
+  onToggleChat,
+  onOpenDeviceSettings,
   onReturnToMain,
   onEndBreakout,
 }: ControlBarProps) {
@@ -53,6 +61,34 @@ export function ControlBar({
         icon="🖥️"
         onClick={onToggleScreenShare}
       />
+
+      <button
+        onClick={onOpenDeviceSettings}
+        className="flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium bg-stone-700 text-stone-400 hover:bg-stone-600 hover:text-stone-300 transition-colors"
+        aria-label="入力デバイスを選択"
+      >
+        <span className="text-lg">⚙️</span>
+        <span>設定</span>
+      </button>
+
+      <button
+        onClick={onToggleChat}
+        className={`relative flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
+          isChatOpen
+            ? 'bg-stone-600 text-white'
+            : 'bg-stone-700 text-stone-400 hover:bg-stone-600 hover:text-stone-300'
+        }`}
+        aria-label={isChatOpen ? 'チャットを閉じる' : 'チャットを開く'}
+        aria-pressed={isChatOpen}
+      >
+        <span className="text-lg">💬</span>
+        <span>チャット</span>
+        {chatUnreadCount > 0 && !isChatOpen && (
+          <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+            {chatUnreadCount > 9 ? '9+' : chatUnreadCount}
+          </span>
+        )}
+      </button>
 
       <button
         onClick={onToggleLocalRecording}

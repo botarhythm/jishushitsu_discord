@@ -61,6 +61,7 @@ export function EndSessionModal({
   // アップロード成功時
   if (uploadResult?.success) {
     const isDiscarded = uploadResult.discarded === true;
+    const sentToEchoNote = echoNoteConfigured && !!uploadResult.viewUrl && !isDiscarded;
     return (
       <Backdrop>
         <Panel>
@@ -69,8 +70,10 @@ export function EndSessionModal({
           </h2>
           <p className="text-sm text-stone-700 mb-4">
             {isDiscarded
-              ? '録音データは保存されていません。要約は生成されません。'
-              : '録音を EchoNote に送信しました。文字起こしと要約は数分〜十数分で完了します。'}
+              ? '録音データは保存されていません。'
+              : sentToEchoNote
+                ? '録音を EchoNote に送信しました。文字起こしと要約は数分〜十数分で完了します。'
+                : '退出処理が完了しました。'}
           </p>
           {uploadResult.viewUrl && !isDiscarded && (
             <a
@@ -125,9 +128,14 @@ export function EndSessionModal({
     return (
       <Backdrop>
         <Panel>
-          <h2 className="text-lg font-bold text-stone-900 mb-2">送信中...</h2>
+          <h2 className="text-lg font-bold text-stone-900 mb-2">
+            {echoNoteConfigured ? '送信中...' : '終了処理中...'}
+          </h2>
           <p className="text-sm text-stone-700 mb-4">
-            {uploadProgress || '録音をEchoNoteへ送信しています。この画面を閉じないでください。'}
+            {uploadProgress ||
+              (echoNoteConfigured
+                ? '録音をEchoNoteへ送信しています。この画面を閉じないでください。'
+                : 'セッションを終了しています。この画面を閉じないでください。')}
           </p>
           <div className="h-2 w-full overflow-hidden rounded-full bg-stone-200">
             <div className="h-full w-1/3 animate-pulse rounded-full bg-amber-500" />

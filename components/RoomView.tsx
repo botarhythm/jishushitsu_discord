@@ -8,7 +8,9 @@ import {
   useParticipants,
   useLocalParticipant,
   useDataChannel,
+  useChat,
 } from '@livekit/components-react';
+import { downloadChatHistory } from '@/lib/chat-export';
 import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS } from '@/lib/types';
 import InstructorDashboard from './InstructorDashboard';
 import { useSessionRecorder } from '@/hooks/useSessionRecorder';
@@ -25,6 +27,8 @@ import { BreakoutList } from './BreakoutList';
 import { ControlBar } from './ControlBar';
 import { PresenceToast } from './PresenceToast';
 import { AutoLogoutModal } from './AutoLogoutModal';
+import { ChatPanel } from './ChatPanel';
+import { DeviceSettingsModal } from './DeviceSettingsModal';
 
 interface RoomViewProps {
   token: string;
@@ -96,7 +100,7 @@ function RoomInner({
     start: startLocalRecording,
     stop: stopLocalRecording,
     error: localRecordingError,
-  } = useLocalRecording();
+  } = useLocalRecording({ room });
 
   useEffect(() => {
     if (localRecordingError) {
@@ -118,8 +122,23 @@ function RoomInner({
     stopRecordingRef.current = stopLocalRecording;
   }, [stopLocalRecording]);
 
+  // ── チャット ──
+  const chat = useChat();
+  const chatMessagesRef = useRef(chat.chatMessages);
+  useEffect(() => {
+    chatMessagesRef.current = chat.chatMessages;
+  }, [chat.chatMessages]);
+  const exportChatIfAny = useCallback(() => {
+    try {
+      downloadChatHistory(chatMessagesRef.current);
+    } catch (e) {
+      console.error('[chat-export] failed', e);
+    }
+  }, []);
+
   // ── 自動退出（受講生のみ。1時間経過で確認、5分応答なしで退出） ──
   const handleAutoLogout = useCallback(() => {
+    exportChatIfAny();
     stopRecordingRef
       .current()
       .catch(() => {
@@ -130,7 +149,7 @@ function RoomInner({
           window.location.href = '/api/auth/logout';
         });
       });
-  }, [room]);
+  }, [room, exportChatIfAny]);
 
   const {
     promptOpen: autoLogoutPromptOpen,
@@ -143,6 +162,14 @@ function RoomInner({
 
   // ── モバイル時のダッシュボードドロワー ──
   const [dashboardOpen, setDashboardOpen] = useState(false);
+
+  // ── チャットUI / デバイス設定UI ──
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatUnread, setChatUnread] = useState(0);
+  const [deviceSettingsOpen, setDeviceSettingsOpen] = useState(false);
+  const toggleChat = useCallback(() => setChatOpen((v) => !v), []);
+  const openDeviceSettings = useCallback(() => setDeviceSettingsOpen(true), []);
+  const closeDeviceSettings = useCallback(() => setDeviceSettingsOpen(false), []);
 
   // ── 招待モーダル ──
   const [inviteState, setInviteState] = useState<{ open: boolean; url: string }>({
@@ -175,6 +202,7 @@ function RoomInner({
     finalizeAll,
     recordingStartedAt,
     stopLocalRecording,
+    onBeforeLeave: exportChatIfAny,
   });
 
   // Handle incoming data channel messages (room move commands & end-session)
@@ -186,6 +214,7 @@ function RoomInner({
       } else if (data.type === 'end-session') {
         if (!isInstructor) {
           alert('講師がセッションを終了しました。退出します。');
+          exportChatIfAny();
           stopRecordingRef
             .current()
             .catch(() => {
@@ -331,15 +360,34 @@ function RoomInner({
           isInstructor={isInstructor}
           isBreakout={isBreakout}
           isLocalRecording={isLocalRecording}
+          isChatOpen={chatOpen}
+          chatUnreadCount={chatUnread}
           onToggleMic={toggleMic}
           onToggleCamera={toggleCamera}
           onToggleScreenShare={toggleScreenShare}
           onToggleRaiseHand={toggleRaiseHand}
           onToggleLocalRecording={toggleLocalRecording}
+          onToggleChat={toggleChat}
+          onOpenDeviceSettings={openDeviceSettings}
           onReturnToMain={returnToMain}
           onEndBreakout={handleEndBreakout}
         />
       </div>
+
+      {/* Chat panel (全員) */}
+      <ChatPanel
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        onUnreadChange={setChatUnread}
+        chatMessages={chat.chatMessages}
+        send={chat.send}
+        isSending={chat.isSending}
+      />
+
+      {/* Device settings modal */}
+      {deviceSettingsOpen && (
+        <DeviceSettingsModal onClose={closeDeviceSettings} />
+      )}
 
       {/* Instructor dashboard (instructor only) */}
       {isInstructor && (
