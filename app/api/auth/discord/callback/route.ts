@@ -41,10 +41,18 @@ export async function GET(request: NextRequest) {
 
   const clientId = process.env.DISCORD_CLIENT_ID;
   const clientSecret = process.env.DISCORD_CLIENT_SECRET;
-  const guildId = process.env.DISCORD_GUILD_ID;
+  // 単一 guild 用 (後方互換) + カンマ区切りの追加 guild リスト
+  const primaryGuildId = process.env.DISCORD_GUILD_ID;
+  const extraGuildIds = (process.env.DISCORD_ADDITIONAL_GUILD_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const allowedGuildIds = Array.from(
+    new Set([primaryGuildId, ...extraGuildIds].filter(Boolean) as string[])
+  );
   const instructorRoleId = process.env.DISCORD_INSTRUCTOR_ROLE_ID;
 
-  if (!clientId || !clientSecret || !guildId) {
+  if (!clientId || !clientSecret || allowedGuildIds.length === 0) {
     return redirectToError(request, 'サーバー設定エラー（Discord OAuth未設定）');
   }
 
@@ -58,18 +66,25 @@ export async function GET(request: NextRequest) {
       redirectUri,
     });
 
-    const [user, member] = await Promise.all([
-      fetchCurrentUser(tokenRes.access_token),
-      fetchGuildMember(tokenRes.access_token, guildId),
-    ]);
+    const user = await fetchCurrentUser(tokenRes.access_token);
 
-    if (!member) {
+    // 許可 guild のいずれかにメンバーとして所属していれば OK。
+    // 並列に問い合わせ、最初に見つかったメンバーシップを採用 (instructor role の判定はそのメンバー情報を使う)。
+    const memberResults = await Promise.all(
+      allowedGuildIds.map((gid) =>
+        fetchGuildMember(tokenRes.access_token, gid).then((m) => ({ gid, m }))
+      )
+    );
+    const matched = memberResults.find((r) => r.m !== null);
+
+    if (!matched || !matched.m) {
       return redirectToError(
         request,
         'このアカウントは対象のDiscordサーバーに参加していません'
       );
     }
 
+    const member = matched.m;
     const role: UserRole =
       instructorRoleId && member.roles.includes(instructorRoleId)
         ? 'instructor'
