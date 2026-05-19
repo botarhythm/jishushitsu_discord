@@ -291,6 +291,22 @@ function RoomInner({
     onRoomChange('main');
   }, [room, onRoomChange]);
 
+  // 受講生用「退出」: 録画停止 → チャット履歴 DL → LiveKit 切断 → session Cookie 削除
+  const handleStudentLeave = useCallback(() => {
+    if (!window.confirm('自習室から退出します。よろしいですか?')) return;
+    exportChatIfAny();
+    stopRecordingRef
+      .current()
+      .catch(() => {
+        // ignore — 録画停止失敗でも退出続行
+      })
+      .finally(() => {
+        room.disconnect().finally(() => {
+          window.location.href = '/api/auth/logout';
+        });
+      });
+  }, [room, exportChatIfAny]);
+
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Main area */}
@@ -387,6 +403,7 @@ function RoomInner({
           onOpenDeviceSettings={openDeviceSettings}
           onReturnToMain={returnToMain}
           onEndBreakout={handleEndBreakout}
+          onLeave={handleStudentLeave}
         />
       </div>
 

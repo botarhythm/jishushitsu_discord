@@ -22,6 +22,8 @@ interface ControlBarProps {
   onOpenDeviceSettings: () => void;
   onReturnToMain: () => void;
   onEndBreakout: () => void;
+  /** 受講生用の退出ボタン (講師は EndSessionButton 経由なので未使用) */
+  onLeave: () => void;
 }
 
 export function ControlBar({
@@ -46,6 +48,7 @@ export function ControlBar({
   onOpenDeviceSettings,
   onReturnToMain,
   onEndBreakout,
+  onLeave,
 }: ControlBarProps) {
   return (
     <div className="flex items-center justify-center gap-3 px-4 py-3 bg-stone-800 border-t border-stone-700">
@@ -159,6 +162,17 @@ export function ControlBar({
         >
           <span className="text-lg">⏹️</span>
           <span>終了してメインへ</span>
+        </button>
+      )}
+
+      {!isInstructor && !isBreakout && (
+        <button
+          onClick={onLeave}
+          className="flex flex-col items-center gap-0.5 px-4 py-2 rounded-xl text-xs font-medium bg-red-600 text-white hover:bg-red-500 transition-colors"
+          aria-label="自習室から退出"
+        >
+          <span className="text-lg">🚪</span>
+          <span>退出</span>
         </button>
       )}
     </div>
