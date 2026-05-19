@@ -8,6 +8,8 @@ interface ControlBarProps {
   isInstructor: boolean;
   isBreakout: boolean;
   isLocalRecording: boolean;
+  isAudioRecording: boolean;
+  showAudioRecordingButton: boolean;
   isChatOpen: boolean;
   chatUnreadCount: number;
   onToggleMic: () => void;
@@ -15,6 +17,7 @@ interface ControlBarProps {
   onToggleScreenShare: () => void;
   onToggleRaiseHand: () => void;
   onToggleLocalRecording: () => void;
+  onToggleAudioRecording: () => void;
   onToggleChat: () => void;
   onOpenDeviceSettings: () => void;
   onReturnToMain: () => void;
@@ -29,6 +32,8 @@ export function ControlBar({
   isInstructor,
   isBreakout,
   isLocalRecording,
+  isAudioRecording,
+  showAudioRecordingButton,
   isChatOpen,
   chatUnreadCount,
   onToggleMic,
@@ -36,6 +41,7 @@ export function ControlBar({
   onToggleScreenShare,
   onToggleRaiseHand,
   onToggleLocalRecording,
+  onToggleAudioRecording,
   onToggleChat,
   onOpenDeviceSettings,
   onReturnToMain,
@@ -94,15 +100,31 @@ export function ControlBar({
         onClick={onToggleLocalRecording}
         className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
           isLocalRecording
-            ? 'bg-red-600 text-white shadow-lg shadow-red-500/30 animate-pulse'
+            ? 'bg-amber-600 text-white shadow-lg shadow-amber-500/30 animate-pulse'
             : 'bg-stone-700 text-stone-400 hover:bg-stone-600 hover:text-stone-300'
         }`}
         aria-label={isLocalRecording ? '録画を停止して保存' : 'ローカル録画を開始'}
         aria-pressed={isLocalRecording}
       >
-        <span className="text-lg">{isLocalRecording ? '⏹️' : '⏺️'}</span>
+        <span className="text-lg">{isLocalRecording ? '⏹️' : '🎥'}</span>
         <span>{isLocalRecording ? '録画停止' : '録画'}</span>
       </button>
+
+      {showAudioRecordingButton && (
+        <button
+          onClick={onToggleAudioRecording}
+          className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
+            isAudioRecording
+              ? 'bg-red-600 text-white shadow-lg shadow-red-500/30 animate-pulse'
+              : 'bg-stone-700 text-stone-400 hover:bg-stone-600 hover:text-stone-300'
+          }`}
+          aria-label={isAudioRecording ? '録音を停止' : '録音を開始'}
+          aria-pressed={isAudioRecording}
+        >
+          <span className="text-lg">{isAudioRecording ? '⏹️' : '🎙️'}</span>
+          <span>{isAudioRecording ? '録音停止' : '録音'}</span>
+        </button>
+      )}
 
       {!isInstructor && !isBreakout && (
         <button

@@ -5,12 +5,15 @@ import { useRouter } from 'next/navigation';
 import RoomView from '@/components/RoomView';
 import { RoomName, UserRole } from '@/lib/types';
 
+type InitialRec = 'off' | 'audio' | 'screen' | 'both';
+
 interface RoomSession {
   token: string;
   livekitUrl: string;
   participantName: string;
   role: UserRole;
   currentRoom: RoomName;
+  initialRec: InitialRec;
 }
 
 async function fetchLiveKitToken(roomName: RoomName): Promise<RoomSession | 'unauthorized'> {
@@ -25,12 +28,15 @@ async function fetchLiveKitToken(roomName: RoomName): Promise<RoomSession | 'una
     throw new Error(data?.error || `トークン取得失敗 (${res.status})`);
   }
   const data = await res.json();
+  const validRec: InitialRec[] = ['off', 'audio', 'screen', 'both'];
+  const initialRec: InitialRec = validRec.includes(data.initialRec) ? data.initialRec : 'off';
   return {
     token: data.token,
     livekitUrl: data.livekitUrl,
     participantName: data.participantName,
     role: data.role,
     currentRoom: roomName,
+    initialRec,
   };
 }
 
@@ -108,6 +114,7 @@ export default function RoomPage() {
       participantName={session.participantName}
       role={session.role}
       currentRoom={session.currentRoom}
+      initialRec={session.initialRec}
       onRoomChange={handleRoomChange}
     />
   );

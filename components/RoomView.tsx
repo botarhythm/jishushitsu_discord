@@ -20,15 +20,17 @@ import { useLocalRecording } from '@/hooks/useLocalRecording';
 import { EndSessionButton } from './EndSessionButton';
 import { EndSessionModal } from './EndSessionModal';
 import { RecordingIndicator } from './RecordingIndicator';
+import { RecordingToast } from './RecordingToast';
 import { MobileHostWarning } from './MobileHostWarning';
 import { InviteModal } from './InviteModal';
 import { ParticipantGrid } from './ParticipantGrid';
 import { BreakoutList } from './BreakoutList';
 import { ControlBar } from './ControlBar';
-import { PresenceToast } from './PresenceToast';
 import { AutoLogoutModal } from './AutoLogoutModal';
 import { ChatPanel } from './ChatPanel';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
+
+type InitialRec = 'off' | 'audio' | 'screen' | 'both';
 
 interface RoomViewProps {
   token: string;
@@ -36,6 +38,8 @@ interface RoomViewProps {
   participantName: string;
   role: UserRole;
   currentRoom: RoomName;
+  /** 入室直後に自動 ON にする録音/録画 (招待トークン由来) */
+  initialRec?: InitialRec;
   onRoomChange: (room: RoomName) => void;
 }
 
@@ -60,6 +64,7 @@ function RoomInner({
   participantName,
   role,
   currentRoom,
+  initialRec = 'off',
   onRoomChange,
 }: RoomViewProps) {
   const room = useRoomContext();
@@ -73,8 +78,7 @@ function RoomInner({
   const isInstructor = role === 'instructor';
   const isBreakout = currentRoom !== 'main';
 
-  // ── EchoNote 設定確認（認証は Cookie 経由） ──
-  // 先に echoNoteConfigured を確定させ、未設定なら音声録音自体を行わない（UIもシンプル化される）
+  // ── EchoNote 設定確認 (アップロード先 API が利用可能か) ──
   const [echoNoteConfigured, setEchoNoteConfigured] = useState(false);
   useEffect(() => {
     if (!isInstructor) return;
@@ -84,8 +88,12 @@ function RoomInner({
       .catch(() => setEchoNoteConfigured(false));
   }, [isInstructor]);
 
-  // ── セッション録音（講師 かつ EchoNote 設定済みのときのみ） ──
-  const recordingEnabled = isInstructor && echoNoteConfigured;
+  // ── 録音 (LiveKit 音声 mix → EchoNote 送信用) のユーザ制御 ──
+  // initialRec に audio / both が含まれていれば入室時に自動 ON。以降はボタンで切替。
+  const [audioRecordingOn, setAudioRecordingOn] = useState<boolean>(
+    isInstructor && (initialRec === 'audio' || initialRec === 'both')
+  );
+  const recordingEnabled = isInstructor && audioRecordingOn;
   const {
     isRecording,
     currentRoomLabel,
@@ -93,6 +101,9 @@ function RoomInner({
     completedRecordings,
     finalizeAll,
   } = useSessionRecorder({ enabled: recordingEnabled, currentRoom });
+  const toggleAudioRecording = useCallback(() => {
+    setAudioRecordingOn((v) => !v);
+  }, []);
 
   // ── ローカル録画（全員対象。タブを録画して WebM 保存） ──
   const {
@@ -115,6 +126,18 @@ function RoomInner({
       startLocalRecording();
     }
   }, [isLocalRecording, startLocalRecording, stopLocalRecording]);
+
+  // initialRec に screen / both が指定されていれば入室時に 1 回だけ録画開始を試みる
+  // (getDisplayMedia の権限ダイアログは出る — ブラウザのユーザジェスチャ要件は許可される)
+  const autoScreenAttempted = useRef(false);
+  useEffect(() => {
+    if (autoScreenAttempted.current) return;
+    if (initialRec !== 'screen' && initialRec !== 'both') return;
+    autoScreenAttempted.current = true;
+    startLocalRecording().catch(() => {
+      // 拒否されても無視 — ボタンから手動開始できる
+    });
+  }, [initialRec, startLocalRecording]);
 
   // 退出処理の前に必ず録画を停止＆DLするためのラッパー
   const stopRecordingRef = useRef(stopLocalRecording);
@@ -171,20 +194,10 @@ function RoomInner({
   const openDeviceSettings = useCallback(() => setDeviceSettingsOpen(true), []);
   const closeDeviceSettings = useCallback(() => setDeviceSettingsOpen(false), []);
 
-  // ── 招待モーダル ──
-  const [inviteState, setInviteState] = useState<{ open: boolean; url: string }>({
-    open: false,
-    url: '',
-  });
-  const openInvite = useCallback(() => {
-    setInviteState({
-      open: true,
-      url: `${window.location.protocol}//${window.location.host}/`,
-    });
-  }, []);
-  const closeInvite = useCallback(() => {
-    setInviteState((prev) => ({ ...prev, open: false }));
-  }, []);
+  // ── 招待モーダル (URL はモーダル内で /api/invite-token から取得) ──
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const openInvite = useCallback(() => setInviteOpen(true), []);
+  const closeInvite = useCallback(() => setInviteOpen(false), []);
 
   // ── 終了モーダル ──
   const {
@@ -360,6 +373,8 @@ function RoomInner({
           isInstructor={isInstructor}
           isBreakout={isBreakout}
           isLocalRecording={isLocalRecording}
+          isAudioRecording={isRecording}
+          showAudioRecordingButton={isInstructor && echoNoteConfigured}
           isChatOpen={chatOpen}
           chatUnreadCount={chatUnread}
           onToggleMic={toggleMic}
@@ -367,6 +382,7 @@ function RoomInner({
           onToggleScreenShare={toggleScreenShare}
           onToggleRaiseHand={toggleRaiseHand}
           onToggleLocalRecording={toggleLocalRecording}
+          onToggleAudioRecording={toggleAudioRecording}
           onToggleChat={toggleChat}
           onOpenDeviceSettings={openDeviceSettings}
           onReturnToMain={returnToMain}
@@ -404,16 +420,11 @@ function RoomInner({
       {/* モバイルホスト向け警告（モバイル時のみ自動表示） */}
       <MobileHostWarning isInstructor={isInstructor} />
 
-      {/* 入退室トースト通知 */}
-      <PresenceToast />
+      {/* 録音/録画ステータストースト (全員) */}
+      <RecordingToast audioOn={isRecording} screenOn={isLocalRecording} />
 
       {/* 招待モーダル（講師のみ） */}
-      {isInstructor && inviteState.open && (
-        <InviteModal
-          participantUrl={inviteState.url}
-          onClose={closeInvite}
-        />
-      )}
+      {isInstructor && inviteOpen && <InviteModal onClose={closeInvite} />}
 
       {/* 自動退出確認モーダル（受講生のみ） */}
       {autoLogoutPromptOpen && (
