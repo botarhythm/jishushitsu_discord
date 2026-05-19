@@ -17,9 +17,10 @@ import {
  * Discord OAuth2 callback。
  * 1. state を検証 (CSRF対策)
  * 2. code → access_token に交換
- * 3. /users/@me と /users/@me/guilds/{guild}/member を取得
- * 4. 対象guildのメンバーでなければ拒否
- * 5. 講師ロール所持で role=instructor、なければ student として session発行
+ * 3. /users/@me を取得
+ * 4. 許可 guild 群のいずれかに所属していなければ拒否
+ * 5. Discord User ID が DISCORD_INSTRUCTOR_USER_IDS に含まれていれば instructor、なければ student
+ *    (旧 DISCORD_INSTRUCTOR_ROLE_ID 方式は後方互換のためフォールバックとして残す)
  */
 export async function GET(request: NextRequest) {
   const url = request.nextUrl;
@@ -50,6 +51,12 @@ export async function GET(request: NextRequest) {
   const allowedGuildIds = Array.from(
     new Set([primaryGuildId, ...extraGuildIds].filter(Boolean) as string[])
   );
+  // 講師判定: Discord User ID 固定リスト (推奨)
+  const instructorUserIds = (process.env.DISCORD_INSTRUCTOR_USER_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // 後方互換: 旧来のロールベース判定 (新運用では未使用)
   const instructorRoleId = process.env.DISCORD_INSTRUCTOR_ROLE_ID;
 
   if (!clientId || !clientSecret || allowedGuildIds.length === 0) {
@@ -85,10 +92,12 @@ export async function GET(request: NextRequest) {
     }
 
     const member = matched.m;
+    // 優先: User ID リストによる判定 / フォールバック: ロール ID による判定
+    const isInstructorByUserId = instructorUserIds.includes(user.id);
+    const isInstructorByRole =
+      !!instructorRoleId && member.roles.includes(instructorRoleId);
     const role: UserRole =
-      instructorRoleId && member.roles.includes(instructorRoleId)
-        ? 'instructor'
-        : 'student';
+      isInstructorByUserId || isInstructorByRole ? 'instructor' : 'student';
 
     const displayName = resolveDisplayName(user, member);
     const avatarUrl = resolveAvatarUrl(user);

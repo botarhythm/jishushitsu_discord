@@ -121,9 +121,29 @@ npm run dev
 | `LIVEKIT_URL` | LiveKit Cloud WSS URL (`wss://...`) |
 | `DISCORD_CLIENT_ID` | Discord アプリの Client ID |
 | `DISCORD_CLIENT_SECRET` | Discord アプリの Client Secret |
-| `DISCORD_GUILD_ID` | 対象 Discord サーバーの Guild ID |
-| `DISCORD_INSTRUCTOR_ROLE_ID` | 講師ロールの Role ID |
+| `DISCORD_GUILD_ID` | プライマリ Discord サーバーの Guild ID (本番: ADHD `1500075036285866215`) |
+| `DISCORD_INSTRUCTOR_USER_IDS` | 講師の Discord User ID をカンマ区切り (本番: 元沢 `1016907741018726470`, 塚ちゃん `1337662562283683861`) |
 | `SESSION_SECRET` | JWT 署名鍵 (32バイト以上のランダム値) |
+
+#### Discord 追加 guild (任意)
+
+| 変数名 | 説明 |
+|--------|------|
+| `DISCORD_ADDITIONAL_GUILD_IDS` | 追加で許可する Guild ID をカンマ区切り (本番: デジハラ第1期 `1500085001717420134`) |
+
+許可 guild のいずれかに所属していれば入室可。User ID で講師判定するため、どの guild から来ても元沢/塚ちゃんは instructor、それ以外は student。
+
+#### 後方互換 (使用しない)
+
+| 変数名 | 説明 |
+|--------|------|
+| `DISCORD_INSTRUCTOR_ROLE_ID` | 旧来のロールベース講師判定。`DISCORD_INSTRUCTOR_USER_IDS` を設定していれば実質上書きされる。新規には使用しない |
+
+#### EchoNote 連携 / S2S (任意)
+
+| 変数名 | 説明 |
+|--------|------|
+| `SERVICE_SHARED_SECRET` | EchoNote から `/api/invite-token` を Discord 認証なしで叩く際の共有秘密。EchoNote 側の `JISHUSHITSU_SERVICE_SECRET` と一致させる |
 
 #### EchoNote 連携 (任意 / 講師ごとに別インスタンス可)
 
@@ -149,10 +169,17 @@ npm run dev
 1. ユーザーが `/` で「Discordでログイン」をクリック
 2. `/api/auth/discord/start` がランダム `state` を Cookie に保存して Discord 認可URLへリダイレクト
 3. ユーザーが Discord で認可（要求スコープ: `identify`, `guilds.members.read`）
-4. `/api/auth/discord/callback` が `state` 検証 → access_token 取得 → `/users/@me` と `/users/@me/guilds/<guild>/member` を取得
-5. **対象 Guild のメンバーでなければ拒否**
-6. 「講師」ロール所持なら `role=instructor`、それ以外は `student` として JWT を発行し httpOnly Cookie に保存
+4. `/api/auth/discord/callback` が `state` 検証 → access_token 取得 → `/users/@me` と、許可 guild 群 (プライマリ + 追加) すべてに対して `/users/@me/guilds/<guild>/member` を並列取得
+5. **どの許可 guild のメンバーでもなければ拒否**
+6. 最初に見つかった guild のメンバー情報を採用し、「講師」ロール所持なら `role=instructor`、それ以外は `student` として JWT を発行し httpOnly Cookie に保存
 7. `/room` にリダイレクト → LiveKit token を `/api/token` で取得して入室
+
+### ワンタイム招待リンク (ゲスト経路)
+
+Discord 認証を経由しない経路として `/api/invite-token` で発行する `/join/<token>` がある。
+- 講師セッション (Cookie) からの発行: 受講生用 student role
+- EchoNote 等の外部サービスからの `X-Service-Secret` ヘッダー付き発行: instructor / student いずれも指定可
+- token は 1 回限り (consume 後は 410)、TTL 2 時間、退出 (`/api/auth/logout`) で session Cookie 削除
 
 ## デプロイ (Vercel)
 
@@ -166,8 +193,8 @@ npm run dev
 | 症状 | 対処 |
 |------|------|
 | ローカルで `unable to verify the first certificate` | PCのTLS検査製品 (Zscaler等) が原因。Vercel本番では発生しない。本番URLでテストするのが最も確実 |
-| ログイン後 `/` に戻され「対象サーバーに参加していません」 | Discord User の所属サーバーと `DISCORD_GUILD_ID` を確認 |
-| 講師UIにならない (受講生UIになる) | Discord ロールIDと `DISCORD_INSTRUCTOR_ROLE_ID` を確認、本人にロール付与されているか確認 |
+| ログイン後 `/` に戻され「対象サーバーに参加していません」 | Discord User の所属サーバーと `DISCORD_GUILD_ID` / `DISCORD_ADDITIONAL_GUILD_IDS` を確認 |
+| 講師UIにならない (受講生UIになる) | `DISCORD_INSTRUCTOR_USER_IDS` に当該ユーザの Discord User ID が含まれているか確認 |
 | 招待Webhookが届かない | `DISCORD_WEBHOOK_URL` / `SLACK_WEBHOOK_URL` の Webhook が有効か |
 | 録画ボタンを押しても何も起きない | ブラウザの画面共有許可ダイアログを許可していない。「このタブ」+「タブ音声を共有」推奨 |
 
@@ -176,5 +203,6 @@ npm run dev
 - [管理者（講師）マニュアル](./docs/admin-manual.md)
 - [参加者マニュアル](./docs/participant-manual.md)
 - [EchoNote 連携](./docs/echonote-integration.md)
+- [Discord 認証 / 許可 guild 運用](./docs/discord-auth.md)
 - [LiveKit 公式ドキュメント](https://docs.livekit.io/)
 - [Discord OAuth2 リファレンス](https://discord.com/developers/docs/topics/oauth2)
