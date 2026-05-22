@@ -3,6 +3,17 @@
 import { RoomName, ROOM_LABELS, BREAKOUT_ROOMS } from '@/lib/types';
 import { RoomsStatusMap } from '@/hooks/useRoomsStatus';
 
+// Tailwind のパージ防止および静的文字列マップ
+const ROOM_THEME_CLASSES: Record<RoomName, string> = {
+  main: 'theme-main',
+  'bo-1': 'theme-bo-1',
+  'bo-2': 'theme-bo-2',
+  'bo-3': 'theme-bo-3',
+  'bo-4': 'theme-bo-4',
+  'bo-5': 'theme-bo-5',
+  'bo-6': 'theme-bo-6',
+};
+
 interface BreakoutListProps {
   onJoin: (room: RoomName) => void;
   roomsStatus?: RoomsStatusMap;
@@ -18,8 +29,10 @@ export function BreakoutList({ onJoin, roomsStatus }: BreakoutListProps) {
           return (
             <div
               key={room}
-              className={`flex flex-col bg-stone-900/50 rounded-lg p-2.5 border border-stone-700/60 justify-between gap-2.5 transition-all duration-200 hover:border-stone-600 theme-${room}`}
+              className={`relative flex flex-col bg-stone-900/40 rounded-lg pt-3.5 p-2.5 border border-amber-600/20 justify-between gap-2.5 transition-all duration-200 hover:border-amber-600/50 overflow-hidden ${ROOM_THEME_CLASSES[room]}`}
             >
+              {/* 各部屋のアースカラーを示す上部カラーバー */}
+              <div className="h-1 w-full bg-amber-600 absolute top-0 left-0" />
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs font-medium text-stone-200">{ROOM_LABELS[room]}</span>
