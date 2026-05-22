@@ -197,11 +197,6 @@ export function EndSessionModal({
             {echoNoteConfigured && isRecording && (
               <span> 録音はEchoNoteに送られ、文字起こしと要約が自動で生成されます。</span>
             )}
-            {!echoNoteConfigured && (
-              <span className="block mt-2 text-amber-700 text-xs">
-                ⚠ EchoNoteが未設定のため、要約は生成されません（退出のみ）
-              </span>
-            )}
           </p>
           <button
             onClick={() => onChoose('end-all-with-summary')}
