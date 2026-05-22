@@ -14,6 +14,7 @@ import { downloadChatHistory } from '@/lib/chat-export';
 import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS } from '@/lib/types';
 import InstructorDashboard from './InstructorDashboard';
 import { useSessionRecorder } from '@/hooks/useSessionRecorder';
+import { useRoomsStatus } from '@/hooks/useRoomsStatus';
 import { useEndSession } from '@/hooks/useEndSession';
 import { useAutoLogout } from '@/hooks/useAutoLogout';
 import { useLocalRecording } from '@/hooks/useLocalRecording';
@@ -70,6 +71,7 @@ function RoomInner({
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
   const participants = useParticipants();
+  const { roomsStatus } = useRoomsStatus();
   const [isMicOn, setIsMicOn] = useState(true);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
@@ -378,7 +380,7 @@ function RoomInner({
         </div>
 
         {/* Breakout list (main room only) */}
-        {!isBreakout && <BreakoutList onJoin={onRoomChange} />}
+        {!isBreakout && <BreakoutList onJoin={onRoomChange} roomsStatus={roomsStatus} />}
 
         {/* Control bar */}
         <ControlBar
@@ -431,6 +433,7 @@ function RoomInner({
           onMoveParticipant={onRoomChange}
           drawerOpen={dashboardOpen}
           onCloseDrawer={() => setDashboardOpen(false)}
+          roomsStatus={roomsStatus}
         />
       )}
 

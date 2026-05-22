@@ -1,4 +1,4 @@
-export type RoomName = 'main' | 'bo-1' | 'bo-2' | 'bo-3';
+export type RoomName = 'main' | 'bo-1' | 'bo-2' | 'bo-3' | 'bo-4' | 'bo-5';
 export type UserRole = 'instructor' | 'student';
 
 export interface ParticipantMetadata {
@@ -40,9 +40,11 @@ export const ROOM_LABELS: Record<RoomName, string> = {
   'bo-1': 'ブレイクアウト 1',
   'bo-2': 'ブレイクアウト 2',
   'bo-3': 'ブレイクアウト 3',
+  'bo-4': 'ブレイクアウト 4',
+  'bo-5': 'ブレイクアウト 5',
 };
 
-export const BREAKOUT_ROOMS: RoomName[] = ['bo-1', 'bo-2', 'bo-3'];
+export const BREAKOUT_ROOMS: RoomName[] = ['bo-1', 'bo-2', 'bo-3', 'bo-4', 'bo-5'];
 
 // DataChannel message types for room coordination
 export interface DataMessage {

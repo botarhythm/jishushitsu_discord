@@ -11,6 +11,8 @@ const ROOM_FILENAME_LABELS: Record<RoomName, string> = {
   'bo-1': 'BO1',
   'bo-2': 'BO2',
   'bo-3': 'BO3',
+  'bo-4': 'BO4',
+  'bo-5': 'BO5',
 };
 
 async function uploadRecordingToEchoNote(

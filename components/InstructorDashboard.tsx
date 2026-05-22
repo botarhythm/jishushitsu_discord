@@ -3,6 +3,7 @@
 import { useState, useCallback } from 'react';
 import { Participant, Track } from 'livekit-client';
 import { RoomName, ParticipantMetadata, ROOM_LABELS, BREAKOUT_ROOMS } from '@/lib/types';
+import { RoomsStatusMap } from '@/hooks/useRoomsStatus';
 
 interface InstructorDashboardProps {
   participants: Participant[];
@@ -13,6 +14,7 @@ interface InstructorDashboardProps {
   drawerOpen?: boolean;
   /** モバイル時の閉じる動作 */
   onCloseDrawer?: () => void;
+  roomsStatus?: RoomsStatusMap;
 }
 
 interface RaisedHandEntry {
@@ -28,6 +30,7 @@ export default function InstructorDashboard({
   onMoveParticipant,
   drawerOpen = false,
   onCloseDrawer,
+  roomsStatus,
 }: InstructorDashboardProps) {
   const [isMoving, setIsMoving] = useState<string | null>(null);
   const [isMuting, setIsMuting] = useState<string | null>(null);
@@ -278,22 +281,63 @@ export default function InstructorDashboard({
           <h3 className="text-xs font-medium text-stone-400 uppercase tracking-wider mb-2">
             ブレイクアウト状況
           </h3>
-          <ul className="space-y-1.5">
-            {BREAKOUT_ROOMS.map((room) => (
-              <li
-                key={room}
-                className={`rounded-lg px-3 py-2 text-xs ${
-                  currentRoom === room
-                    ? 'bg-green-800/40 text-green-300'
-                    : 'bg-stone-700/30 text-stone-400'
-                }`}
-              >
-                <span className="font-medium">{ROOM_LABELS[room]}</span>
-                {currentRoom === room && (
-                  <span className="ml-2 text-green-400">● 使用中</span>
-                )}
-              </li>
-            ))}
+          <ul className="space-y-2">
+            {BREAKOUT_ROOMS.map((room) => {
+              const roomParticipants = roomsStatus?.[room] || [];
+              const isActive = currentRoom === room;
+              return (
+                <li
+                  key={room}
+                  className={`rounded-lg p-2 text-xs flex flex-col gap-1.5 ${
+                    isActive
+                      ? 'bg-green-800/30 border border-green-700/40'
+                      : 'bg-stone-700/30 border border-stone-700/40'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className={`font-semibold ${isActive ? 'text-green-300' : 'text-stone-300'}`}>
+                      {ROOM_LABELS[room]}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {isActive && <span className="text-[10px] text-green-400">● 滞中</span>}
+                      {roomParticipants.length > 0 ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-400 font-medium">
+                          {roomParticipants.length}名
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-stone-500">空室</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 部屋のメンバーリスト */}
+                  {roomParticipants.length > 0 && (
+                    <div className="flex flex-col gap-1 pl-1.5 border-l border-stone-700/60 mt-0.5">
+                      {roomParticipants.map((p) => (
+                        <div key={p.identity} className="flex items-center justify-between text-[11px]">
+                          <span
+                            className={
+                              p.role === 'instructor'
+                                ? 'text-amber-400 font-medium'
+                                : 'text-stone-300'
+                            }
+                          >
+                            {p.name}
+                          </span>
+                          <span className={`text-[9px] px-1.5 py-0.2 rounded scale-90 origin-right ${
+                            p.role === 'instructor'
+                              ? 'bg-amber-950/40 text-amber-400 border border-amber-800/30'
+                              : 'bg-stone-800 text-stone-400 border border-stone-750'
+                          }`}>
+                            {p.role === 'instructor' ? '講師' : '受講生'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </section>
       </div>
