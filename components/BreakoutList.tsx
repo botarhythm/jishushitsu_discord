@@ -18,7 +18,7 @@ export function BreakoutList({ onJoin, roomsStatus }: BreakoutListProps) {
           return (
             <div
               key={room}
-              className="flex flex-col bg-stone-900/50 rounded-lg p-2.5 border border-stone-700/60 justify-between gap-2.5 transition-all duration-200 hover:border-stone-600"
+              className={`flex flex-col bg-stone-900/50 rounded-lg p-2.5 border border-stone-700/60 justify-between gap-2.5 transition-all duration-200 hover:border-stone-600 theme-${room}`}
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5">
