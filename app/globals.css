@@ -6,10 +6,191 @@
   --font-sans: var(--font-noto-sans-jp), var(--font-inter), system-ui, sans-serif;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+@theme {
   --font-sans: var(--font-noto-sans-jp), var(--font-inter), system-ui, sans-serif;
+  
+  /* 部屋ごとのCSS変数からTailwindカラーをマッピング */
+  --color-stone-950: var(--stone-950, #121310);
+  --color-stone-900: var(--stone-900, #1a1c18);
+  --color-stone-850: var(--stone-850, #21231e);
+  --color-stone-800: var(--stone-800, #292b24);
+  --color-stone-750: var(--stone-750, #31332b);
+  --color-stone-700: var(--stone-700, #3c3f35);
+  --color-stone-600: var(--stone-600, #4e5145);
+  --color-stone-500: var(--stone-500, #6b6f5f);
+  --color-stone-400: var(--stone-400, #8f9382);
+  --color-stone-300: var(--stone-300, #b5b9a8);
+  --color-stone-200: var(--stone-200, #d4d6cb);
+  --color-stone-100: var(--stone-100, #edeee9);
+
+  --color-amber-950: var(--amber-950, #24160d);
+  --color-amber-900: var(--amber-900, #3d2516);
+  --color-amber-800: var(--amber-800, #593822);
+  --color-amber-700: var(--amber-700, #7b4f31);
+  --color-amber-600: var(--amber-600, #9a6642);
+  --color-amber-500: var(--amber-500, #ba835d);
+  --color-amber-400: var(--amber-400, #d5a27f);
+  --color-amber-300: var(--amber-300, #ebd1b4);
+  --color-amber-200: var(--amber-200, #f5e6d6);
+
+  --color-green-950: var(--green-950, #0f1c12);
+  --color-green-900: var(--green-900, #182e1e);
+  --color-green-800: var(--green-800, #24422b);
+  --color-green-700: var(--green-700, #32583a);
+  --color-green-600: var(--green-600, #42724c);
+  --color-green-500: var(--green-500, #579264);
+  --color-green-400: var(--green-400, #7aa382);
+  --color-green-300: var(--green-300, #a2c2a9);
+  --color-green-200: var(--green-200, #cbe0cf);
+}
+
+/* ── 部屋ごとのアースカラー定義 (優しく落ち着いた自然色) ── */
+
+/* 1. メインルーム: フォレストオリーブ (Forest Olive - 森林の深い緑) */
+.theme-main {
+  --stone-950: #0f100e;
+  --stone-900: #171814;
+  --stone-850: #1f201b;
+  --stone-800: #262721;
+  --stone-750: #2e3029;
+  --stone-700: #373830;
+  --stone-600: #484a3e;
+  --stone-400: #888b77;
+  --stone-300: #b1b59f;
+  
+  --amber-950: #24160d;
+  --amber-900: #3d2516;
+  --amber-600: #9a6642;
+  --amber-400: #d5a27f;
+  
+  --green-800: #24422b;
+  --green-400: #7aa382;
+}
+
+/* 2. BO1: テラコッタブラウン (Clay Terracotta - 乾いた温かみのある赤土) */
+.theme-bo-1 {
+  --stone-950: #14100d;
+  --stone-900: #1c1815;
+  --stone-850: #25201c;
+  --stone-800: #2d2823;
+  --stone-750: #37302b;
+  --stone-700: #423b35;
+  --stone-600: #554c44;
+  --stone-400: #9c8e82;
+  --stone-300: #c6b9ad;
+  
+  --amber-950: #29120e;
+  --amber-900: #451f18;
+  --amber-600: #a75544;
+  --amber-400: #df9484;
+
+  --green-800: #423224;
+  --green-400: #a7886c;
+}
+
+/* 3. BO2: レイクブルー (Cloudy Lake Blue - 雲がかった静かな湖の青) */
+.theme-bo-2 {
+  --stone-950: #0d1012;
+  --stone-900: #14171a;
+  --stone-850: #1b1e22;
+  --stone-800: #22262b;
+  --stone-750: #2a2f35;
+  --stone-700: #333a41;
+  --stone-600: #434c56;
+  --stone-400: #818f9e;
+  --stone-300: #acb9c7;
+  
+  --amber-950: #0d1a24;
+  --amber-900: #172c3d;
+  --amber-600: #42759e;
+  --amber-400: #82b2d5;
+
+  --green-800: #1a3245;
+  --green-400: #6ca7d3;
+}
+
+/* 4. BO3: サンドオークル (Sand Ocher - 陽に照らされた優しい砂岩) */
+.theme-bo-3 {
+  --stone-950: #14130d;
+  --stone-900: #1c1b14;
+  --stone-850: #24231b;
+  --stone-800: #2c2b21;
+  --stone-750: #35342a;
+  --stone-700: #403e33;
+  --stone-600: #525042;
+  --stone-400: #979581;
+  --stone-300: #c1bfa8;
+  
+  --amber-950: #241d0d;
+  --amber-900: #3d3116;
+  --amber-600: #9a803f;
+  --amber-400: #d3be7f;
+
+  --green-800: #3d3116;
+  --green-400: #c1b07f;
+}
+
+/* 5. BO4: ミスティチャコール (Misty Charcoal - 霧がかった落ち着いた岩山) */
+.theme-bo-4 {
+  --stone-950: #101112;
+  --stone-900: #18191b;
+  --stone-850: #202123;
+  --stone-800: #282a2d;
+  --stone-750: #313337;
+  --stone-700: #3c3f43;
+  --stone-600: #4e5157;
+  --stone-400: #8d9197;
+  --stone-300: #b8bcc2;
+  
+  --amber-950: #1a1c1e;
+  --amber-900: #2c3035;
+  --amber-600: #6c757f;
+  --amber-400: #a7b1bc;
+
+  --green-800: #24282c;
+  --green-400: #84909c;
+}
+
+/* 6. BO5: オータムマロン (Autumn Chestnut - 艶やかな栗と秋の紅葉) */
+.theme-bo-5 {
+  --stone-950: #140e0e;
+  --stone-900: #1c1414;
+  --stone-850: #251b1b;
+  --stone-800: #2c2121;
+  --stone-750: #362a2a;
+  --stone-700: #413333;
+  --stone-600: #544242;
+  --stone-400: #9b8181;
+  --stone-300: #c1abab;
+  
+  --amber-950: #290e0e;
+  --amber-900: #451616;
+  --amber-600: #a73f3f;
+  --amber-400: #df7f7f;
+
+  --green-800: #452424;
+  --green-400: #df8484;
+}
+
+/* 7. BO6: モスセージ (Moss Sage - 穏やかな高原の草原) */
+.theme-bo-6 {
+  --stone-950: #0d120f;
+  --stone-900: #141a16;
+  --stone-850: #1b231e;
+  --stone-800: #212c25;
+  --stone-750: #2a372e;
+  --stone-700: #334238;
+  --stone-600: #425548;
+  --stone-400: #819b89;
+  --stone-300: #abc1b2;
+  
+  --amber-950: #0d2416;
+  --amber-900: #163d25;
+  --amber-600: #3f9e62;
+  --amber-400: #7fd69e;
+
+  --green-800: #163d25;
+  --green-400: #6ed692;
 }
 
 body {

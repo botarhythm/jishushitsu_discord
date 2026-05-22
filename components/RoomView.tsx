@@ -310,7 +310,7 @@ function RoomInner({
   }, [room, exportChatIfAny]);
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className={`flex h-screen overflow-hidden theme-${currentRoom}`}>
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
