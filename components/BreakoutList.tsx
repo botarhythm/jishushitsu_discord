@@ -15,11 +15,11 @@ const ROOM_COLORS: Record<RoomName, { main: string; border: string; borderHover:
     text: '#d5a27f',
   },
   'bo-1': {
-    main: '#a75544', // テラコッタブラウン (Clay Terracotta)
-    border: 'rgba(167, 85, 68, 0.2)',
-    borderHover: 'rgba(167, 85, 68, 0.5)',
-    bg: 'rgba(167, 85, 68, 0.04)',
-    text: '#df9484',
+    main: '#b36b44', // キャメルオレンジ (Camel Orange - 温かみのある明るいアースオレンジ)
+    border: 'rgba(179, 107, 68, 0.2)',
+    borderHover: 'rgba(179, 107, 68, 0.5)',
+    bg: 'rgba(179, 107, 68, 0.04)',
+    text: '#e8a882',
   },
   'bo-2': {
     main: '#42759e', // レイクブルー (Cloudy Lake Blue)
@@ -43,11 +43,11 @@ const ROOM_COLORS: Record<RoomName, { main: string; border: string; borderHover:
     text: '#a7b1bc',
   },
   'bo-5': {
-    main: '#a73f3f', // オータムマロン (Autumn Chestnut)
-    border: 'rgba(167, 63, 63, 0.2)',
-    borderHover: 'rgba(167, 63, 63, 0.5)',
-    bg: 'rgba(167, 63, 63, 0.04)',
-    text: '#df7f7f',
+    main: '#8f769a', // ミスティラベンダー (Misty Lavender - 穏やかで上品なくすんだ紫)
+    border: 'rgba(143, 118, 154, 0.2)',
+    borderHover: 'rgba(143, 118, 154, 0.5)',
+    bg: 'rgba(143, 118, 154, 0.04)',
+    text: '#cfaad4',
   },
   'bo-6': {
     main: '#3f9e62', // モスセージ (Moss Sage)
