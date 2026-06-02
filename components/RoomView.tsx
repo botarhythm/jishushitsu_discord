@@ -17,8 +17,7 @@ import { useSessionRecorder } from '@/hooks/useSessionRecorder';
 import { useRoomsStatus } from '@/hooks/useRoomsStatus';
 import { useEndSession } from '@/hooks/useEndSession';
 import { useAutoLogout } from '@/hooks/useAutoLogout';
-import { useLocalRecording } from '@/hooks/useLocalRecording';
-import { EndSessionButton } from './EndSessionButton';
+import { useLocalRecording, type RecordingQuality } from '@/hooks/useLocalRecording';
 import { EndSessionModal } from './EndSessionModal';
 import { RecordingIndicator } from './RecordingIndicator';
 import { RecordingToast } from './RecordingToast';
@@ -108,6 +107,7 @@ function RoomInner({
   }, []);
 
   // ── ローカル録画（全員対象。タブを録画して WebM 保存） ──
+  const [recordingQuality, setRecordingQuality] = useState<RecordingQuality>('streaming');
   const {
     isRecording: isLocalRecording,
     start: startLocalRecording,
@@ -125,9 +125,9 @@ function RoomInner({
     if (isLocalRecording) {
       stopLocalRecording();
     } else {
-      startLocalRecording();
+      startLocalRecording(recordingQuality);
     }
-  }, [isLocalRecording, startLocalRecording, stopLocalRecording]);
+  }, [isLocalRecording, startLocalRecording, stopLocalRecording, recordingQuality]);
 
   // initialRec に screen / both が指定されていれば入室時に 1 回だけ録画開始を試みる
   // (getDisplayMedia の権限ダイアログは出る — ブラウザのユーザジェスチャ要件は許可される)
@@ -136,10 +136,10 @@ function RoomInner({
     if (autoScreenAttempted.current) return;
     if (initialRec !== 'screen' && initialRec !== 'both') return;
     autoScreenAttempted.current = true;
-    startLocalRecording().catch(() => {
+    startLocalRecording(recordingQuality).catch(() => {
       // 拒否されても無視 — ボタンから手動開始できる
     });
-  }, [initialRec, startLocalRecording]);
+  }, [initialRec, startLocalRecording, recordingQuality]);
 
   // 退出処理の前に必ず録画を停止＆DLするためのラッパー
   const stopRecordingRef = useRef(stopLocalRecording);
@@ -374,9 +374,6 @@ function RoomInner({
                 : undefined
             }
           />
-          {isInstructor && !isBreakout && (
-            <EndSessionButton onClick={openEndModal} />
-          )}
         </div>
 
         {/* Breakout list (main room only) */}
@@ -393,6 +390,9 @@ function RoomInner({
           isLocalRecording={isLocalRecording}
           isAudioRecording={isRecording}
           showAudioRecordingButton={isInstructor && echoNoteConfigured}
+          onEndSession={isInstructor && !isBreakout ? openEndModal : undefined}
+          recordingQuality={recordingQuality}
+          onChangeRecordingQuality={setRecordingQuality}
           isChatOpen={chatOpen}
           chatUnreadCount={chatUnread}
           onToggleMic={toggleMic}

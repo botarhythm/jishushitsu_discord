@@ -1,5 +1,7 @@
 'use client';
 
+import type { RecordingQuality } from '@/hooks/useLocalRecording';
+
 interface ControlBarProps {
   isMicOn: boolean;
   isCameraOn: boolean;
@@ -10,6 +12,10 @@ interface ControlBarProps {
   isLocalRecording: boolean;
   isAudioRecording: boolean;
   showAudioRecordingButton: boolean;
+  /** 講師がメインルームに居る場合に表示するセッション終了ボタンのコールバック */
+  onEndSession?: () => void;
+  recordingQuality: RecordingQuality;
+  onChangeRecordingQuality: (q: RecordingQuality) => void;
   isChatOpen: boolean;
   chatUnreadCount: number;
   onToggleMic: () => void;
@@ -22,7 +28,7 @@ interface ControlBarProps {
   onOpenDeviceSettings: () => void;
   onReturnToMain: () => void;
   onEndBreakout: () => void;
-  /** 受講生用の退出ボタン (講師は EndSessionButton 経由なので未使用) */
+  /** 受講生用の退出ボタン */
   onLeave: () => void;
 }
 
@@ -36,6 +42,9 @@ export function ControlBar({
   isLocalRecording,
   isAudioRecording,
   showAudioRecordingButton,
+  onEndSession,
+  recordingQuality,
+  onChangeRecordingQuality,
   isChatOpen,
   chatUnreadCount,
   onToggleMic,
@@ -99,19 +108,33 @@ export function ControlBar({
         )}
       </button>
 
-      <button
-        onClick={onToggleLocalRecording}
-        className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
-          isLocalRecording
-            ? 'bg-amber-600 text-white shadow-lg shadow-amber-500/30 animate-pulse'
-            : 'bg-stone-700 text-stone-400 hover:bg-stone-600 hover:text-stone-300'
-        }`}
-        aria-label={isLocalRecording ? '録画を停止して保存' : 'ローカル録画を開始'}
-        aria-pressed={isLocalRecording}
-      >
-        <span className="text-lg">{isLocalRecording ? '⏹️' : '🎥'}</span>
-        <span>{isLocalRecording ? '録画停止' : '録画'}</span>
-      </button>
+      <div className="flex flex-col items-center gap-1">
+        <button
+          onClick={onToggleLocalRecording}
+          className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
+            isLocalRecording
+              ? 'bg-amber-600 text-white shadow-lg shadow-amber-500/30 animate-pulse'
+              : 'bg-stone-700 text-stone-400 hover:bg-stone-600 hover:text-stone-300'
+          }`}
+          aria-label={isLocalRecording ? '録画を停止して保存' : 'ローカル録画を開始'}
+          aria-pressed={isLocalRecording}
+        >
+          <span className="text-lg">{isLocalRecording ? '⏹️' : '🎥'}</span>
+          <span>{isLocalRecording ? '録画停止' : '録画'}</span>
+        </button>
+        <select
+          value={recordingQuality}
+          onChange={(e) => onChangeRecordingQuality(e.target.value as RecordingQuality)}
+          disabled={isLocalRecording}
+          className="text-[10px] bg-stone-700 text-stone-300 rounded px-1 py-0.5 border border-stone-600 disabled:opacity-50 disabled:cursor-not-allowed"
+          aria-label="録画品質"
+          title="録画開始前に品質を選択"
+        >
+          <option value="streaming">配信向け 720p</option>
+          <option value="standard">標準 1080p</option>
+          <option value="high">高画質 (大容量)</option>
+        </select>
+      </div>
 
       {showAudioRecordingButton && (
         <button
@@ -173,6 +196,17 @@ export function ControlBar({
         >
           <span className="text-lg">🚪</span>
           <span>退出</span>
+        </button>
+      )}
+
+      {isInstructor && !isBreakout && onEndSession && (
+        <button
+          onClick={onEndSession}
+          className="flex flex-col items-center gap-0.5 px-4 py-2 rounded-xl text-xs font-medium bg-red-600 text-white hover:bg-red-500 transition-colors"
+          aria-label="セッションを終了"
+        >
+          <span className="text-lg">⏹️</span>
+          <span>セッション終了</span>
         </button>
       )}
     </div>
