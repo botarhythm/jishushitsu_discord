@@ -4,6 +4,52 @@ import { useCallback, useRef, useState } from 'react';
 import type { Room, RemoteParticipant, RemoteTrack, RemoteTrackPublication } from 'livekit-client';
 import { RoomEvent, Track } from 'livekit-client';
 
+/**
+ * MediaRecorder の WebM 出力に SeekHead / Cues / Duration を注入して
+ * 編集ソフトで開ける「シーク可能な WebM」に変換する。
+ * ts-ebml は動的 import (録画停止時のみロード)。
+ */
+async function injectWebmSeekMetadata(blob: Blob): Promise<Blob> {
+  // ts-ebml は Node の Buffer グローバルに依存しているため、ブラウザでは事前に polyfill する。
+  if (typeof window !== 'undefined' && typeof (window as unknown as { Buffer?: unknown }).Buffer === 'undefined') {
+    const { Buffer } = await import('buffer');
+    (window as unknown as { Buffer: typeof Buffer }).Buffer = Buffer;
+  }
+  const { Decoder, tools, Reader } = await import('ts-ebml');
+  const decoder = new Decoder();
+  const reader = new Reader();
+  reader.logging = false;
+  const buf = await blob.arrayBuffer();
+  const elms = decoder.decode(buf);
+  elms.forEach((elm) => reader.read(elm));
+  reader.stop();
+  const refinedMetadataBuf = tools.makeMetadataSeekable(
+    reader.metadatas,
+    reader.duration,
+    reader.cues
+  );
+  const bodyBuf = buf.slice(reader.metadataSize);
+  return new Blob([refinedMetadataBuf, bodyBuf], { type: blob.type });
+}
+
+export type RecordingQuality = 'streaming' | 'standard' | 'high';
+
+interface QualityPreset {
+  width: number;
+  height: number;
+  frameRate: number;
+  videoBitsPerSecond: number;
+}
+
+const QUALITY_PRESETS: Record<RecordingQuality, QualityPreset | null> = {
+  // ストリーミング配信に最適 (720p / 24fps / ~1.5 Mbps)
+  streaming: { width: 1280, height: 720, frameRate: 24, videoBitsPerSecond: 1_500_000 },
+  // 標準 (1080p / 30fps / ~2.5 Mbps)
+  standard: { width: 1920, height: 1080, frameRate: 30, videoBitsPerSecond: 2_500_000 },
+  // ネイティブ解像度・高ビットレート (ファイルサイズ大)
+  high: null,
+};
+
 interface UseLocalRecordingOptions {
   filePrefix?: string;
   includeMicrophone?: boolean;
@@ -100,13 +146,22 @@ export function useLocalRecording({
       return null;
     }
     return new Promise<Blob | null>((resolve) => {
-      r.recorder.onstop = () => {
-        const blob = new Blob(r.chunks, { type: r.recorder.mimeType });
-        downloadBlob(blob);
+      r.recorder.onstop = async () => {
+        const rawBlob = new Blob(r.chunks, { type: r.recorder.mimeType });
+        // MediaRecorder の WebM は SeekHead / Cues / Duration が欠落しており
+        // 編集ソフトでタイムラインを構築できない (シーク不能)。
+        // ts-ebml でメタデータを注入し、シーク可能な WebM に変換してから保存。
+        const seekable = rawBlob.type.includes('webm')
+          ? await injectWebmSeekMetadata(rawBlob).catch((e) => {
+              console.warn('[useLocalRecording] シーク索引の付与に失敗。生のBlobを保存します。', e);
+              return rawBlob;
+            })
+          : rawBlob;
+        downloadBlob(seekable);
         cleanup();
         setIsRecording(false);
         setStartedAt(null);
-        resolve(blob);
+        resolve(seekable);
       };
       r.recorder.stop();
     });
@@ -114,16 +169,38 @@ export function useLocalRecording({
 
   stopRef.current = stop;
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (quality: RecordingQuality = 'streaming') => {
     setError(null);
     if (resourcesRef.current) return;
+
+    const preset = QUALITY_PRESETS[quality];
+
+    // 録画対象は「セッション中の自習室タブそのもの」。
+    // getDisplayMedia を呼んだ自タブは既定でピッカーから除外される (selfBrowserSurface=exclude)
+    // ため、ピッカーで選ばせる方式だと自習室タブを選べない。
+    // preferCurrentTab: true で自タブを直接キャプチャする (下の getDisplayMedia 参照)。
+    // displaySurface: 'browser' はタブ面であることの明示。
+    const videoConstraints: MediaTrackConstraints = preset
+      ? {
+          displaySurface: 'browser',
+          width: { ideal: preset.width },
+          height: { ideal: preset.height },
+          frameRate: { ideal: preset.frameRate, max: preset.frameRate },
+        }
+      : { displaySurface: 'browser', frameRate: { ideal: 30, max: 30 } };
 
     let displayStream: MediaStream;
     try {
       displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: 30, max: 30 } },
+        video: videoConstraints,
         audio: true,
-      });
+        // 非標準だが Chromium 系で有効。型定義に無いので as 経由で付与。
+        // preferCurrentTab: true → Chrome は「このタブを共有しますか?」確認のみを表示し、
+        // 自習室タブの描画内容だけ (ツールバー・タブ帯・メニュー・他タブを除く) を直接録る。
+        // 自タブを録るのが目的なので、selfBrowserSurface / surfaceSwitching /
+        // monitorTypeSurfaces は併記しない (preferCurrentTab と競合し無効化されるため)。
+        preferCurrentTab: true,
+      } as DisplayMediaStreamOptions);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (err instanceof DOMException && err.name === 'NotAllowedError') {
@@ -242,7 +319,9 @@ export function useLocalRecording({
 
     let recorder: MediaRecorder;
     try {
-      recorder = new MediaRecorder(finalStream, { mimeType });
+      const recorderOptions: MediaRecorderOptions = { mimeType };
+      if (preset) recorderOptions.videoBitsPerSecond = preset.videoBitsPerSecond;
+      recorder = new MediaRecorder(finalStream, recorderOptions);
     } catch (recErr) {
       const msg = recErr instanceof Error ? recErr.message : String(recErr);
       setError(`録画開始に失敗しました: ${msg}`);
