@@ -6,11 +6,6 @@ interface InviteModalProps {
   onClose: () => void;
 }
 
-interface ChannelStatus {
-  discord: boolean;
-  slack: boolean;
-}
-
 interface InviteTokenResponse {
   url: string;
   expiresAt: number;
@@ -20,22 +15,14 @@ interface InviteTokenResponse {
  * セッション中に講師が受講生を招待するためのモーダル。
  * - 招待リンクは `/api/invite-token` で都度発行 (1 回限り・約 2h で失効)
  * - 受講生は Discord 認証不要、リンク先で名前入力すれば入室できる
- * - メッセージを編集して、メール / Discord / Slack / コピー のいずれかで送信できる
+ * - メッセージを編集して、メール / コピー で任意の場所にシェアできる
  */
 export function InviteModal({ onClose }: InviteModalProps) {
   const [participantUrl, setParticipantUrl] = useState<string>('');
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [message, setMessage] = useState<string>('');
-  const [status, setStatus] = useState<ChannelStatus>({ discord: false, slack: false });
-  const [busy, setBusy] = useState<null | 'discord' | 'slack' | 'copy'>(null);
+  const [copying, setCopying] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
-
-  useEffect(() => {
-    fetch('/api/invite')
-      .then((r) => r.json())
-      .then((d: ChannelStatus) => setStatus(d))
-      .catch(() => setStatus({ discord: false, slack: false }));
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,29 +47,6 @@ export function InviteModal({ onClose }: InviteModalProps) {
     };
   }, []);
 
-  const sendVia = async (method: 'discord' | 'slack') => {
-    setBusy(method);
-    setFeedback(null);
-    try {
-      const res = await fetch('/api/invite', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ method, message }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      setFeedback({
-        ok: true,
-        text: `${method === 'discord' ? 'Discord' : 'Slack'} に送信しました`,
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setFeedback({ ok: false, text: msg });
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const sendViaMail = () => {
     const subject = encodeURIComponent('【デジタル原っぱ大学 自習室】参加のご案内');
     const body = encodeURIComponent(message);
@@ -90,14 +54,14 @@ export function InviteModal({ onClose }: InviteModalProps) {
   };
 
   const copyMessage = async () => {
-    setBusy('copy');
+    setCopying(true);
     try {
       await navigator.clipboard.writeText(message);
       setFeedback({ ok: true, text: 'クリップボードにコピーしました' });
     } catch {
       setFeedback({ ok: false, text: 'コピーに失敗しました' });
     } finally {
-      setBusy(null);
+      setCopying(false);
     }
   };
 
@@ -156,7 +120,7 @@ export function InviteModal({ onClose }: InviteModalProps) {
           />
         )}
 
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mt-4 grid grid-cols-2 gap-2">
           <ActionButton
             onClick={sendViaMail}
             icon="✉️"
@@ -164,27 +128,11 @@ export function InviteModal({ onClose }: InviteModalProps) {
             disabled={!participantUrl}
           />
           <ActionButton
-            onClick={() => sendVia('discord')}
-            icon="💬"
-            label="Discord"
-            disabled={!participantUrl || !status.discord || busy !== null}
-            busy={busy === 'discord'}
-            disabledHint={!status.discord ? '未設定' : undefined}
-          />
-          <ActionButton
-            onClick={() => sendVia('slack')}
-            icon="💼"
-            label="Slack"
-            disabled={!participantUrl || !status.slack || busy !== null}
-            busy={busy === 'slack'}
-            disabledHint={!status.slack ? '未設定' : undefined}
-          />
-          <ActionButton
             onClick={copyMessage}
             icon="📋"
             label="コピー"
-            busy={busy === 'copy'}
-            disabled={!participantUrl || busy !== null}
+            busy={copying}
+            disabled={!participantUrl || copying}
           />
         </div>
 
@@ -198,12 +146,9 @@ export function InviteModal({ onClose }: InviteModalProps) {
           </p>
         )}
 
-        {!status.discord && !status.slack && (
-          <p className="mt-3 text-[11px] text-stone-400">
-            Discord / Slack 連携は <code>DISCORD_WEBHOOK_URL</code> /{' '}
-            <code>SLACK_WEBHOOK_URL</code> を環境変数で設定すると有効化されます。
-          </p>
-        )}
+        <p className="mt-3 text-[11px] text-stone-400">
+          リンクをコピーして、Discord・メール・任意のチャットなど好きな場所に貼り付けて共有できます。
+        </p>
       </div>
     </div>
   );

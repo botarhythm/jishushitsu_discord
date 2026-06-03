@@ -42,7 +42,6 @@ jishushitsu/
 │       │   └── logout/route.ts                   # セッションCookie削除
 │       ├── token/route.ts                        # LiveKit token (session認証)
 │       ├── end-session/route.ts                  # 講師による全員終了
-│       ├── invite/route.ts                       # Discord/Slack Webhook 招待送信
 │       ├── echonote/{status,upload}/route.ts     # EchoNote 連携
 │       └── {mute,remove,move}-participant/route.ts
 ├── components/
@@ -157,13 +156,6 @@ npm run dev
 
 未設定の講師は録音→要約フローが無効化され (録音そのものを実行しない)、終了モーダルは「全員終了」「自分だけ退出」のみのシンプルな表示になります。
 
-#### 招待 Webhook (任意)
-
-| 変数名 | 説明 |
-|--------|------|
-| `DISCORD_WEBHOOK_URL` | 招待モーダルから Discord に送信する Webhook URL |
-| `SLACK_WEBHOOK_URL` | 同上 Slack 用 |
-
 ## 認証フロー
 
 1. ユーザーが `/` で「Discordでログイン」をクリック
@@ -195,7 +187,6 @@ Discord 認証を経由しない経路として `/api/invite-token` で発行す
 | ローカルで `unable to verify the first certificate` | PCのTLS検査製品 (Zscaler等) が原因。Vercel本番では発生しない。本番URLでテストするのが最も確実 |
 | ログイン後 `/` に戻され「対象サーバーに参加していません」 | Discord User の所属サーバーと `DISCORD_GUILD_ID` / `DISCORD_ADDITIONAL_GUILD_IDS` を確認 |
 | 講師UIにならない (受講生UIになる) | `DISCORD_INSTRUCTOR_USER_IDS` に当該ユーザの Discord User ID が含まれているか確認 |
-| 招待Webhookが届かない | `DISCORD_WEBHOOK_URL` / `SLACK_WEBHOOK_URL` の Webhook が有効か |
 | 録画ボタンを押しても何も起きない | ブラウザの画面共有許可ダイアログを許可していない。「このタブ」+「タブ音声を共有」推奨 |
 
 ## 関連ドキュメント
