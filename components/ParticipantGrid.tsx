@@ -63,26 +63,37 @@ export function ParticipantGrid({ focused, onFocus, instructorContext }: Partici
     );
   }
 
-  const focusedTile = focused ? tiles.find((t) => t.participant.identity === focused) : null;
+  // スポットライト決定 (Zoom 模倣):
+  //   1. ユーザが明示的にピン留めしたタイル (focused)
+  //   2. なければ画面共有を自動スポットライト
+  //   3. どちらも無ければ均等グリッド
+  const pinnedTile = focused ? tiles.find((t) => tileKey(t) === focused) ?? null : null;
+  const screenTile = tiles.find((t) => t.source === 'screen') ?? null;
+  const spotlight = pinnedTile ?? screenTile;
 
-  if (focusedTile) {
+  if (spotlight) {
+    const others = tiles.filter((t) => tileKey(t) !== tileKey(spotlight));
     return (
       <div className="h-full flex flex-col gap-2">
         <Tile
-          item={focusedTile}
+          item={spotlight}
           large
           onClick={() => onFocus(null)}
           instructorContext={instructorContext}
           extraTopRight={
-            <button
-              onClick={() => onFocus(null)}
-              className="bg-black/50 text-white text-xs px-2 py-1 rounded hover:bg-black/70"
-            >
-              グリッドに戻る
-            </button>
+            pinnedTile ? (
+              <button
+                onClick={() => onFocus(null)}
+                className="bg-black/50 text-white text-xs px-2 py-1 rounded hover:bg-black/70"
+              >
+                {screenTile ? '共有画面に戻る' : 'グリッドに戻る'}
+              </button>
+            ) : undefined
           }
         />
-        <ThumbnailRow tiles={tiles} onFocus={onFocus} />
+        {others.length > 0 && (
+          <ThumbnailRow tiles={others} focusedKey={focused} onFocus={onFocus} />
+        )}
       </div>
     );
   }
@@ -96,14 +107,19 @@ export function ParticipantGrid({ focused, onFocus, instructorContext }: Partici
     >
       {tiles.map((item) => (
         <Tile
-          key={`${item.participant.identity}-${item.source}`}
+          key={tileKey(item)}
           item={item}
-          onClick={() => onFocus(item.participant.identity)}
+          onClick={() => onFocus(tileKey(item))}
           instructorContext={instructorContext}
         />
       ))}
     </div>
   );
+}
+
+/** タイルの一意キー (同一参加者の camera/screen を区別) */
+function tileKey(t: TileItem): string {
+  return `${t.participant.identity}:${t.source}`;
 }
 
 function Tile({
@@ -188,20 +204,26 @@ function MicIndicator({ participant }: { participant: Participant }) {
 
 function ThumbnailRow({
   tiles,
+  focusedKey,
   onFocus,
 }: {
   tiles: TileItem[];
+  focusedKey: string | null;
   onFocus: (id: string) => void;
 }) {
   return (
     <div className="flex gap-2 overflow-x-auto h-24 flex-shrink-0">
       {tiles.map((item) => {
         const name = item.participant.name?.trim() || item.participant.identity;
+        const key = tileKey(item);
+        const isPinned = focusedKey === key;
         return (
           <div
-            key={`thumb-${item.participant.identity}-${item.source}`}
-            className="h-full aspect-video rounded overflow-hidden bg-stone-700 relative cursor-pointer flex-shrink-0"
-            onClick={() => onFocus(item.participant.identity)}
+            key={`thumb-${key}`}
+            className={`h-full aspect-video rounded overflow-hidden bg-stone-700 relative cursor-pointer flex-shrink-0 transition-all ${
+              isPinned ? 'ring-2 ring-amber-400' : 'hover:ring-2 hover:ring-amber-400/60'
+            }`}
+            onClick={() => onFocus(key)}
             title={name}
           >
             {item.trackRef ? (
@@ -211,6 +233,7 @@ function ThumbnailRow({
             )}
             <div className="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[10px] px-1 py-0.5 truncate text-center">
               {name}
+              {item.source === 'screen' && ' (画面)'}
             </div>
           </div>
         );
