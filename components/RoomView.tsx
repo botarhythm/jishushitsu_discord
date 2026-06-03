@@ -275,15 +275,6 @@ function RoomInner({
     }
   }, [studioMode, screenShareActive]);
 
-  // 講師は入室時に収録レイアウトをデフォルト表示する (一度だけ)。
-  // 通常モードへは収録バーの「収録モード終了」で切り替えられる。
-  const studioAutoStartedRef = useRef(false);
-  useEffect(() => {
-    if (studioAutoStartedRef.current || !isInstructor) return;
-    studioAutoStartedRef.current = true;
-    enterStudio();
-  }, [isInstructor, enterStudio]);
-
   // ── チャットUI / デバイス設定UI ──
   const [chatOpen, setChatOpen] = useState(false);
   const [chatUnread, setChatUnread] = useState(0);
