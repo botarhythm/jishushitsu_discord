@@ -60,7 +60,7 @@ export function ControlBar({
   onLeave,
 }: ControlBarProps) {
   return (
-    <div className="flex items-center justify-center gap-3 px-4 py-3 bg-stone-800 border-t border-stone-700">
+    <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 px-4 py-3 bg-stone-800 border-t border-stone-700">
       <ControlButton
         label={isMicOn ? 'マイクOFF' : 'マイクON'}
         active={isMicOn}

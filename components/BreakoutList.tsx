@@ -68,9 +68,9 @@ export function BreakoutList({ onJoin, roomsStatus }: BreakoutListProps) {
   const [hoveredButton, setHoveredButton] = useState<RoomName | null>(null);
 
   return (
-    <div className="px-4 py-3 bg-stone-850 border-t border-stone-700">
+    <div className="px-4 py-3 bg-stone-850 border-t border-stone-700 max-h-[38dvh] overflow-y-auto flex-shrink-0">
       <p className="text-xs font-semibold text-stone-400 mb-2 uppercase tracking-wider">ブレイクアウトルーム状況</p>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {BREAKOUT_ROOMS.map((room) => {
           const roomParticipants = roomsStatus?.[room] || [];
           const isHovered = hoveredRoom === room;

@@ -53,7 +53,7 @@ export default function RoomView(props: RoomViewProps) {
       connect={true}
       audio={true}
       video={false}
-      className="h-screen flex flex-col bg-stone-900"
+      className="h-dvh flex flex-col bg-stone-900"
       options={{ adaptiveStream: true, dynacast: true }}
     >
       <RoomAudioRenderer />
@@ -363,7 +363,7 @@ function RoomInner({
   // ── 収録モード表示（講師のみ）。通常レイアウトを丸ごと差し替える ──
   if (isInstructor && studioMode) {
     return (
-      <div className="relative h-screen w-screen overflow-hidden bg-black">
+      <div className="relative h-dvh w-screen overflow-hidden bg-black">
         <StudioStage
           layout={studioLayout}
           slotIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
@@ -415,7 +415,7 @@ function RoomInner({
   }
 
   return (
-    <div className={`flex h-screen overflow-hidden theme-${currentRoom}`}>
+    <div className={`flex h-dvh overflow-hidden theme-${currentRoom}`}>
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
@@ -466,7 +466,7 @@ function RoomInner({
         </div>
 
         {/* Participant grid */}
-        <div className="flex-1 overflow-auto p-3 relative">
+        <div className="flex-1 min-h-0 overflow-auto p-3 relative">
           <ParticipantGrid
             focused={focusedParticipant}
             onFocus={setFocusedParticipant}
