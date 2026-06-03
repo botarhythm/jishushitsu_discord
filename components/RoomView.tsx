@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   LiveKitRoom,
   RoomAudioRenderer,
@@ -26,6 +26,8 @@ import { InviteModal } from './InviteModal';
 import { ParticipantGrid } from './ParticipantGrid';
 import { BreakoutList } from './BreakoutList';
 import { ControlBar } from './ControlBar';
+import { StudioStage, type StudioLayout, STUDIO_LAYOUT_SLOTS } from './StudioStage';
+import { StudioBar } from './StudioBar';
 import { AutoLogoutModal } from './AutoLogoutModal';
 import { ChatPanel } from './ChatPanel';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
@@ -188,6 +190,55 @@ function RoomInner({
   // ── モバイル時のダッシュボードドロワー ──
   const [dashboardOpen, setDashboardOpen] = useState(false);
 
+  // ── 収録モード（講師ローカルのUIのみ切替。録画は自タブキャプチャなので同期不要） ──
+  const [studioMode, setStudioMode] = useState(false);
+  const [studioLayout, setStudioLayout] = useState<StudioLayout>('split');
+  const [studioSlots, setStudioSlots] = useState<(string | null)[]>([null, null]);
+  const [showNameplates, setShowNameplates] = useState(true);
+
+  const participantOptions = useMemo(
+    () =>
+      participants.map((p) => ({
+        identity: p.identity,
+        name: p.name?.trim() || p.identity,
+      })),
+    [participants]
+  );
+
+  const instructorIdentities = useMemo(
+    () =>
+      participants
+        .filter((p) => {
+          try {
+            return (JSON.parse(p.metadata ?? '{}') as ParticipantMetadata & { role?: string }).role === 'instructor';
+          } catch {
+            return false;
+          }
+        })
+        .map((p) => p.identity),
+    [participants]
+  );
+
+  const enterStudio = useCallback(() => {
+    // 空きスロットを「自分 → 他の講師」の順で自動補完。既存割当は尊重。
+    const selfId = localParticipant.identity;
+    const ordered = [selfId, ...instructorIdentities.filter((id) => id !== selfId)];
+    setStudioSlots((prev) => {
+      const next = [...prev];
+      for (let i = 0; i < 2; i++) if (!next[i]) next[i] = ordered[i] ?? null;
+      return next;
+    });
+    setStudioMode(true);
+  }, [instructorIdentities, localParticipant.identity]);
+
+  const changeStudioSlot = useCallback((index: number, identity: string | null) => {
+    setStudioSlots((prev) => {
+      const next = [...prev];
+      next[index] = identity;
+      return next;
+    });
+  }, []);
+
   // ── チャットUI / デバイス設定UI ──
   const [chatOpen, setChatOpen] = useState(false);
   const [chatUnread, setChatUnread] = useState(0);
@@ -308,6 +359,60 @@ function RoomInner({
         });
       });
   }, [room, exportChatIfAny]);
+
+  // ── 収録モード表示（講師のみ）。通常レイアウトを丸ごと差し替える ──
+  if (isInstructor && studioMode) {
+    return (
+      <div className="relative h-screen w-screen overflow-hidden bg-black">
+        <StudioStage
+          layout={studioLayout}
+          slotIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
+          showNameplates={showNameplates}
+        />
+        <StudioBar
+          isMicOn={isMicOn}
+          isCameraOn={isCameraOn}
+          isScreenSharing={isScreenSharing}
+          isLocalRecording={isLocalRecording}
+          recordingQuality={recordingQuality}
+          layout={studioLayout}
+          slotIdentities={studioSlots}
+          participantOptions={participantOptions}
+          showNameplates={showNameplates}
+          onToggleMic={toggleMic}
+          onToggleCamera={toggleCamera}
+          onToggleScreenShare={toggleScreenShare}
+          onToggleLocalRecording={toggleLocalRecording}
+          onChangeRecordingQuality={setRecordingQuality}
+          onChangeLayout={setStudioLayout}
+          onChangeSlot={changeStudioSlot}
+          onToggleNameplates={() => setShowNameplates((v) => !v)}
+          onExitStudio={() => setStudioMode(false)}
+          onEndSession={!isBreakout ? openEndModal : undefined}
+        />
+
+        {/* デバイス設定 / 終了モーダルは収録モードでも利用可能 */}
+        {deviceSettingsOpen && <DeviceSettingsModal onClose={closeDeviceSettings} />}
+        {endModalOpen && (
+          <EndSessionModal
+            isRecording={isRecording}
+            echoNoteConfigured={echoNoteConfigured}
+            uploading={uploading}
+            uploadProgress={uploadProgress}
+            uploadResult={uploadResult}
+            completedSummaries={completedRecordings.map((r) => ({
+              roomLabel: ROOM_LABELS[r.room],
+              durationSec: Math.floor(r.durationMs / 1000),
+            }))}
+            activeRoomLabel={currentRoomLabel ? ROOM_LABELS[currentRoomLabel] : undefined}
+            activeDurationSec={endModalDurationSec}
+            onChoose={handleEndChoice}
+            onClose={handleCloseEndModal}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className={`flex h-screen overflow-hidden theme-${currentRoom}`}>
@@ -434,6 +539,7 @@ function RoomInner({
           drawerOpen={dashboardOpen}
           onCloseDrawer={() => setDashboardOpen(false)}
           roomsStatus={roomsStatus}
+          onEnterStudio={enterStudio}
         />
       )}
 

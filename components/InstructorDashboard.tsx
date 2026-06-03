@@ -15,6 +15,8 @@ interface InstructorDashboardProps {
   /** モバイル時の閉じる動作 */
   onCloseDrawer?: () => void;
   roomsStatus?: RoomsStatusMap;
+  /** 収録モード（YouTube/Podcast 収録レイアウト）を開始する。メインルームのみ */
+  onEnterStudio?: () => void;
 }
 
 interface RaisedHandEntry {
@@ -31,6 +33,7 @@ export default function InstructorDashboard({
   drawerOpen = false,
   onCloseDrawer,
   roomsStatus,
+  onEnterStudio,
 }: InstructorDashboardProps) {
   const [isMoving, setIsMoving] = useState<string | null>(null);
   const [isMuting, setIsMuting] = useState<string | null>(null);
@@ -169,6 +172,24 @@ export default function InstructorDashboard({
         </div>
 
       <div className="flex-1 overflow-y-auto">
+        {/* 収録モード（YouTube/Podcast 用レイアウト） */}
+        {onEnterStudio && currentRoom === 'main' && (
+          <section className="p-3 border-b border-stone-700">
+            <h3 className="text-xs font-medium text-stone-400 uppercase tracking-wider mb-2">
+              🎬 収録モード
+            </h3>
+            <button
+              onClick={onEnterStudio}
+              className="w-full rounded-lg bg-rose-700/80 px-3 py-2 text-sm font-medium text-white hover:bg-rose-600 transition-colors"
+            >
+              収録レイアウトを開始
+            </button>
+            <p className="mt-1.5 text-[11px] leading-snug text-stone-500">
+              出演者を横並び表示にし、操作UIを自動格納します。YouTube/Podcast 収録向け。
+            </p>
+          </section>
+        )}
+
         {/* Raised hands section */}
         {raisedHandEntries.length > 0 && (
           <section className="p-3 border-b border-stone-700">
