@@ -9,7 +9,10 @@ import {
   useLocalParticipant,
   useDataChannel,
   useChat,
+  useTracks,
+  isTrackReference,
 } from '@livekit/components-react';
+import { Track } from 'livekit-client';
 import { downloadChatHistory } from '@/lib/chat-export';
 import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS } from '@/lib/types';
 import InstructorDashboard from './InstructorDashboard';
@@ -75,6 +78,10 @@ function RoomInner({
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
   const participants = useParticipants();
+
+  // ルーム内に画面共有が存在するか (収録モードの自動レイアウト切替に使用)
+  const screenShareTracks = useTracks([Track.Source.ScreenShare], { onlySubscribed: false });
+  const screenShareActive = screenShareTracks.some((t) => isTrackReference(t));
   const { roomsStatus } = useRoomsStatus();
   const [isMicOn, setIsMicOn] = useState(true);
   const [isCameraOn, setIsCameraOn] = useState(false);
@@ -252,6 +259,21 @@ function RoomInner({
       startLocalRecording(recordingQuality, studioStageRef.current);
     }
   }, [isLocalRecording, startLocalRecording, stopLocalRecording, recordingQuality]);
+
+  // 収録モード中に画面共有が始まったら自動で「画面共有メイン」に切替、
+  // 終了したら元のレイアウトへ戻す (Zoom 風)。手動でレイアウトを変えればそれが優先される。
+  const preShareLayoutRef = useRef<StudioLayout>('split');
+  useEffect(() => {
+    if (!studioMode) return;
+    if (screenShareActive) {
+      setStudioLayout((prev) => {
+        if (prev !== 'screen-main') preShareLayoutRef.current = prev;
+        return 'screen-main';
+      });
+    } else {
+      setStudioLayout(preShareLayoutRef.current);
+    }
+  }, [studioMode, screenShareActive]);
 
   // ── チャットUI / デバイス設定UI ──
   const [chatOpen, setChatOpen] = useState(false);
