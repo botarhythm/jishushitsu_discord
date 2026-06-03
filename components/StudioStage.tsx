@@ -32,6 +32,8 @@ interface StudioStageProps {
   slotIdentities: (string | null)[];
   /** ネームプレート(lower-third)を表示するか */
   showNameplates: boolean;
+  /** 16:9 ステージ要素への ref。Region Capture で録画をこの矩形にクロップするために使用 */
+  stageRef?: React.Ref<HTMLDivElement>;
 }
 
 /**
@@ -41,7 +43,7 @@ interface StudioStageProps {
  *   ビューポート比が 16:9 でなくても、録画フレームは YouTube 最適比率に収まる。
  * - 録画はホストの自タブをキャプチャするため、このステージはホストの画面だけ切り替えればよい。
  */
-export function StudioStage({ layout, slotIdentities, showNameplates }: StudioStageProps) {
+export function StudioStage({ layout, slotIdentities, showNameplates, stageRef }: StudioStageProps) {
   const tracks = useTracks([Track.Source.Camera, Track.Source.ScreenShare], {
     onlySubscribed: false,
   });
@@ -73,10 +75,12 @@ export function StudioStage({ layout, slotIdentities, showNameplates }: StudioSt
 
   return (
     <div className="flex h-full w-full items-center justify-center overflow-hidden bg-black">
-      {/* 16:9 レターボックスステージ。max-width を vh 基準にして縦がはみ出さないよう調整 */}
+      {/* 16:9 レターボックスステージ。max-width を vh 基準にして縦がはみ出さないよう調整。
+          stageRef は Region Capture のクロップ対象 (この矩形=16:9 が録画範囲になる)。 */}
       <div
+        ref={stageRef}
         className="relative aspect-video w-full"
-        style={{ maxWidth: 'calc(100vh * 16 / 9)', maxHeight: '100%' }}
+        style={{ maxWidth: 'calc(100dvh * 16 / 9)', maxHeight: '100%' }}
       >
         {layout === 'split' && (
           <div className="absolute inset-0 grid grid-cols-2 gap-px bg-stone-950">

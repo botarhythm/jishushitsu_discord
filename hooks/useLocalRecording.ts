@@ -169,7 +169,11 @@ export function useLocalRecording({
 
   stopRef.current = stop;
 
-  const start = useCallback(async (quality: RecordingQuality = 'streaming') => {
+  const start = useCallback(async (
+    quality: RecordingQuality = 'streaming',
+    /** Region Capture でクロップする対象要素 (収録ステージ等)。指定すると録画を要素の矩形=16:9に固定 */
+    cropTarget?: HTMLElement | null,
+  ) => {
     setError(null);
     if (resourcesRef.current) return;
 
@@ -209,6 +213,28 @@ export function useLocalRecording({
         setError(msg);
       }
       return;
+    }
+
+    // Region Capture: 自タブキャプチャを指定要素の矩形にクロップする (Chromium 系)。
+    // 収録ステージ (16:9) を渡すと、ウィンドウサイズに関わらず録画を厳密な 16:9 に固定できる。
+    if (cropTarget) {
+      const CropTargetCtor = (globalThis as unknown as {
+        CropTarget?: { fromElement(e: Element): Promise<unknown> };
+      }).CropTarget;
+      const videoTrack = displayStream.getVideoTracks()[0] as
+        | (MediaStreamTrack & { cropTo?: (t: unknown) => Promise<void> })
+        | undefined;
+      if (CropTargetCtor && videoTrack?.cropTo) {
+        try {
+          const ct = await CropTargetCtor.fromElement(cropTarget);
+          await videoTrack.cropTo(ct);
+        } catch (e) {
+          console.warn(
+            '[useLocalRecording] Region Capture (cropTo) に失敗。タブ全体のまま録画します。',
+            e
+          );
+        }
+      }
     }
 
     let micStream: MediaStream | null = null;

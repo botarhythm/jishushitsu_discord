@@ -198,6 +198,8 @@ function RoomInner({
   const [studioLayout, setStudioLayout] = useState<StudioLayout>('split');
   const [studioSlots, setStudioSlots] = useState<(string | null)[]>([null, null]);
   const [showNameplates, setShowNameplates] = useState(true);
+  // Region Capture のクロップ対象 (収録ステージ 16:9)。録画をこの矩形に固定する。
+  const studioStageRef = useRef<HTMLDivElement>(null);
 
   const participantOptions = useMemo(
     () =>
@@ -241,6 +243,15 @@ function RoomInner({
       return next;
     });
   }, []);
+
+  // 収録モードの録画は 16:9 ステージ要素を Region Capture でクロップして開始する。
+  const toggleStudioRecording = useCallback(() => {
+    if (isLocalRecording) {
+      stopLocalRecording();
+    } else {
+      startLocalRecording(recordingQuality, studioStageRef.current);
+    }
+  }, [isLocalRecording, startLocalRecording, stopLocalRecording, recordingQuality]);
 
   // ── チャットUI / デバイス設定UI ──
   const [chatOpen, setChatOpen] = useState(false);
@@ -371,6 +382,7 @@ function RoomInner({
           layout={studioLayout}
           slotIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
           showNameplates={showNameplates}
+          stageRef={studioStageRef}
         />
         <StudioBar
           isMicOn={isMicOn}
@@ -385,7 +397,7 @@ function RoomInner({
           onToggleMic={toggleMic}
           onToggleCamera={toggleCamera}
           onToggleScreenShare={toggleScreenShare}
-          onToggleLocalRecording={toggleLocalRecording}
+          onToggleLocalRecording={toggleStudioRecording}
           onChangeRecordingQuality={setRecordingQuality}
           onChangeLayout={setStudioLayout}
           onChangeSlot={changeStudioSlot}
