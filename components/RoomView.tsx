@@ -251,14 +251,47 @@ function RoomInner({
     });
   }, []);
 
-  // 収録モードの録画は 16:9 ステージ要素を Region Capture でクロップして開始する。
-  const toggleStudioRecording = useCallback(() => {
+  // 収録モードに入った経緯が「ダッシュボードの録画ボタン」かどうか。
+  // true の場合、録画停止でダッシュボード(通常画面)へ自動的に戻す。
+  const studioViaRecordRef = useRef(false);
+
+  // ダッシュボード(通常画面)の録画ボタン: 収録レイアウト(16:9)へ切替えてからクロップ録画開始。
+  // getDisplayMedia はユーザジェスチャ内で同期的に呼ぶ必要があるため、enterStudio() 直後に
+  // 同期呼び出しし、crop 対象はステージのマウント完了後 (getDisplayMedia 解決後) に関数で評価する。
+  const startStudioRecording = useCallback(() => {
+    studioViaRecordRef.current = true;
+    enterStudio();
+    startLocalRecording(recordingQuality, () => studioStageRef.current);
+  }, [enterStudio, startLocalRecording, recordingQuality]);
+
+  // ダッシュボードの録画ボタンのトグル (講師用)。
+  const handleDashboardRecord = useCallback(() => {
     if (isLocalRecording) {
       stopLocalRecording();
     } else {
-      startLocalRecording(recordingQuality, studioStageRef.current);
+      startStudioRecording();
+    }
+  }, [isLocalRecording, stopLocalRecording, startStudioRecording]);
+
+  // 収録バーの録画トグル。録画ボタン起点で入った収録モードは、停止でダッシュボードへ戻す。
+  const toggleStudioRecording = useCallback(() => {
+    if (isLocalRecording) {
+      stopLocalRecording();
+      if (studioViaRecordRef.current) {
+        studioViaRecordRef.current = false;
+        setStudioMode(false);
+      }
+    } else {
+      startLocalRecording(recordingQuality, () => studioStageRef.current);
     }
   }, [isLocalRecording, startLocalRecording, stopLocalRecording, recordingQuality]);
+
+  // 収録モード終了。録画中なら先に停止してから戻す (クロップ対象消失による空録画を防ぐ)。
+  const exitStudio = useCallback(() => {
+    if (isLocalRecording) stopLocalRecording();
+    studioViaRecordRef.current = false;
+    setStudioMode(false);
+  }, [isLocalRecording, stopLocalRecording]);
 
   // 収録モード中に画面共有が始まったら自動で「画面共有メイン」に切替、
   // 終了したら元のレイアウトへ戻す (Zoom 風)。手動でレイアウトを変えればそれが優先される。
@@ -424,7 +457,7 @@ function RoomInner({
           onChangeLayout={setStudioLayout}
           onChangeSlot={changeStudioSlot}
           onToggleNameplates={() => setShowNameplates((v) => !v)}
-          onExitStudio={() => setStudioMode(false)}
+          onExitStudio={exitStudio}
           onEndSession={!isBreakout ? openEndModal : undefined}
         />
 
@@ -543,7 +576,7 @@ function RoomInner({
           onToggleCamera={toggleCamera}
           onToggleScreenShare={toggleScreenShare}
           onToggleRaiseHand={toggleRaiseHand}
-          onToggleLocalRecording={toggleLocalRecording}
+          onToggleLocalRecording={isInstructor ? handleDashboardRecord : toggleLocalRecording}
           onToggleAudioRecording={toggleAudioRecording}
           onToggleChat={toggleChat}
           onOpenDeviceSettings={openDeviceSettings}

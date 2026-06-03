@@ -171,8 +171,11 @@ export function useLocalRecording({
 
   const start = useCallback(async (
     quality: RecordingQuality = 'streaming',
-    /** Region Capture でクロップする対象要素 (収録ステージ等)。指定すると録画を要素の矩形=16:9に固定 */
-    cropTarget?: HTMLElement | null,
+    /**
+     * Region Capture でクロップする対象要素 (収録ステージ等)。指定すると録画を要素の矩形=16:9に固定。
+     * 関数を渡すと getDisplayMedia 解決後に評価する (録画開始と同時にステージをマウントする場合に対応)。
+     */
+    cropTarget?: HTMLElement | null | (() => HTMLElement | null),
   ) => {
     setError(null);
     if (resourcesRef.current) return;
@@ -217,7 +220,9 @@ export function useLocalRecording({
 
     // Region Capture: 自タブキャプチャを指定要素の矩形にクロップする (Chromium 系)。
     // 収録ステージ (16:9) を渡すと、ウィンドウサイズに関わらず録画を厳密な 16:9 に固定できる。
-    if (cropTarget) {
+    // 関数で渡された場合は getDisplayMedia 解決後の今の時点で評価 (ステージのマウント完了後)。
+    const cropEl = typeof cropTarget === 'function' ? cropTarget() : cropTarget;
+    if (cropEl) {
       const CropTargetCtor = (globalThis as unknown as {
         CropTarget?: { fromElement(e: Element): Promise<unknown> };
       }).CropTarget;
@@ -226,7 +231,7 @@ export function useLocalRecording({
         | undefined;
       if (CropTargetCtor && videoTrack?.cropTo) {
         try {
-          const ct = await CropTargetCtor.fromElement(cropTarget);
+          const ct = await CropTargetCtor.fromElement(cropEl);
           await videoTrack.cropTo(ct);
         } catch (e) {
           console.warn(
