@@ -39,6 +39,8 @@ interface RoomViewProps {
   livekitUrl: string;
   participantName: string;
   role: UserRole;
+  /** 招待リンク参加のゲストか (true ならブレイクアウト一覧を非表示) */
+  isGuest?: boolean;
   currentRoom: RoomName;
   /** 入室直後に自動 ON にする録音/録画 (招待トークン由来) */
   initialRec?: InitialRec;
@@ -65,6 +67,7 @@ export default function RoomView(props: RoomViewProps) {
 function RoomInner({
   participantName,
   role,
+  isGuest = false,
   currentRoom,
   initialRec = 'off',
   onRoomChange,
@@ -481,8 +484,10 @@ function RoomInner({
           />
         </div>
 
-        {/* Breakout list (main room only) */}
-        {!isBreakout && <BreakoutList onJoin={onRoomChange} roomsStatus={roomsStatus} />}
+        {/* Breakout list (main room only / ゲストには非表示) */}
+        {!isBreakout && !isGuest && (
+          <BreakoutList onJoin={onRoomChange} roomsStatus={roomsStatus} />
+        )}
 
         {/* Control bar */}
         <ControlBar

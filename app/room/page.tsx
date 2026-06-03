@@ -12,6 +12,8 @@ interface RoomSession {
   livekitUrl: string;
   participantName: string;
   role: UserRole;
+  /** 招待リンク参加のゲストかどうか (Discord 認証ユーザーは false) */
+  isGuest: boolean;
   currentRoom: RoomName;
   initialRec: InitialRec;
 }
@@ -35,6 +37,7 @@ async function fetchLiveKitToken(roomName: RoomName): Promise<RoomSession | 'una
     livekitUrl: data.livekitUrl,
     participantName: data.participantName,
     role: data.role,
+    isGuest: data.kind === 'guest',
     currentRoom: roomName,
     initialRec,
   };
@@ -113,6 +116,7 @@ export default function RoomPage() {
       livekitUrl={session.livekitUrl}
       participantName={session.participantName}
       role={session.role}
+      isGuest={session.isGuest}
       currentRoom={session.currentRoom}
       initialRec={session.initialRec}
       onRoomChange={handleRoomChange}

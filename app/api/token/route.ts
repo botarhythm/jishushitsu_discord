@@ -61,6 +61,7 @@ export async function POST(request: NextRequest) {
     livekitUrl,
     participantName: displayName,
     role: session.role,
+    kind: session.kind ?? 'discord',
     avatarUrl: session.avatarUrl,
     initialRec: session.initialRec ?? 'off',
   });
