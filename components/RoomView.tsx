@@ -12,7 +12,7 @@ import {
   useTracks,
   isTrackReference,
 } from '@livekit/components-react';
-import { Track } from 'livekit-client';
+import { Track, RoomEvent } from 'livekit-client';
 import { downloadChatHistory } from '@/lib/chat-export';
 import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS } from '@/lib/types';
 import InstructorDashboard from './InstructorDashboard';
@@ -208,6 +208,13 @@ function RoomInner({
   // Region Capture のクロップ対象 (収録ステージ 16:9)。録画をこの矩形に固定する。
   const studioStageRef = useRef<HTMLDivElement>(null);
 
+  // ホストから配信される収録コンポジション (受信側=非ホスト参加者が強制表示する)。
+  const [remoteStudio, setRemoteStudio] = useState<{
+    layout: StudioLayout;
+    slots: (string | null)[];
+    showNameplates: boolean;
+  } | null>(null);
+
   const participantOptions = useMemo(
     () =>
       participants.map((p) => ({
@@ -308,6 +315,31 @@ function RoomInner({
     }
   }, [studioMode, screenShareActive]);
 
+  // ホストは収録モードの設定 (有効/レイアウト/出演者割当/名前表示) を全参加者へ配信し、
+  // 全員の表示を強制同期する。設定変更時に送信し、後から入室した参加者にも再送する。
+  useEffect(() => {
+    if (!isInstructor) return;
+    const publish = () => {
+      const payload = JSON.stringify({
+        type: 'studio-state',
+        payload: {
+          active: studioMode,
+          layout: studioLayout,
+          slots: studioSlots,
+          showNameplates,
+        },
+      });
+      room.localParticipant
+        .publishData(new TextEncoder().encode(payload), { reliable: true })
+        .catch(() => {});
+    };
+    publish();
+    room.on(RoomEvent.ParticipantConnected, publish);
+    return () => {
+      room.off(RoomEvent.ParticipantConnected, publish);
+    };
+  }, [isInstructor, studioMode, studioLayout, studioSlots, showNameplates, room]);
+
   // ── チャットUI / デバイス設定UI ──
   const [chatOpen, setChatOpen] = useState(false);
   const [chatUnread, setChatUnread] = useState(0);
@@ -346,6 +378,17 @@ function RoomInner({
       const data = JSON.parse(new TextDecoder().decode(msg.payload));
       if (data.type === 'move-to-room') {
         onRoomChange(data.payload.targetRoom as RoomName);
+      } else if (data.type === 'studio-state') {
+        // ホストの収録コンポジションを全参加者に強制適用 (自分がホスト中の studio は別途優先)
+        if (data.payload?.active) {
+          setRemoteStudio({
+            layout: data.payload.layout as StudioLayout,
+            slots: data.payload.slots as (string | null)[],
+            showNameplates: !!data.payload.showNameplates,
+          });
+        } else {
+          setRemoteStudio(null);
+        }
       } else if (data.type === 'end-session') {
         if (!isInstructor) {
           alert('講師がセッションを終了しました。退出します。');
@@ -535,24 +578,35 @@ function RoomInner({
           </div>
         </div>
 
-        {/* Participant grid */}
+        {/* メインビュー: ホストが配信中はその収録コンポジションを全参加者に強制表示 */}
         <div className="flex-1 min-h-0 overflow-auto p-3 relative">
-          <ParticipantGrid
-            focused={focusedParticipant}
-            onFocus={setFocusedParticipant}
-            instructorContext={
-              isInstructor
-                ? {
-                    currentRoom,
-                    selfIdentity: localParticipant.identity,
-                  }
-                : undefined
-            }
-          />
+          {remoteStudio ? (
+            <StudioStage
+              layout={remoteStudio.layout}
+              slotIdentities={remoteStudio.slots.slice(
+                0,
+                STUDIO_LAYOUT_SLOTS[remoteStudio.layout]
+              )}
+              showNameplates={remoteStudio.showNameplates}
+            />
+          ) : (
+            <ParticipantGrid
+              focused={focusedParticipant}
+              onFocus={setFocusedParticipant}
+              instructorContext={
+                isInstructor
+                  ? {
+                      currentRoom,
+                      selfIdentity: localParticipant.identity,
+                    }
+                  : undefined
+              }
+            />
+          )}
         </div>
 
-        {/* Breakout list (main room only / ゲストには非表示) */}
-        {!isBreakout && !isGuest && (
+        {/* Breakout list (main room only / ゲスト・配信視聴中は非表示) */}
+        {!isBreakout && !isGuest && !remoteStudio && (
           <BreakoutList onJoin={onRoomChange} roomsStatus={roomsStatus} />
         )}
 
