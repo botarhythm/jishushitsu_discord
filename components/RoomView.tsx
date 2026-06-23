@@ -459,18 +459,28 @@ function RoomInner({
     setRaisedHand(newState);
   }, [localParticipant, raisedHand]);
 
-  // 講師が対象参加者のマイクをON/OFFする（データチャンネル経由のソフトミュート）。
-  // サーバー強制ミュートと違い、ON指示で参加者本人のマイクを再開できるため講師側から解除も可能。
+  // 講師が対象参加者のマイクをON/OFFする（data-channel ソフトミュート）。
+  // クライアント側 publishData は講師ブラウザで届かないことがあるため、移動機能と
+  // 同じくサーバー側 sendData 経由（/api/set-participant-mic）で配信する。
+  // サーバー強制ミュートと違い、ON指示で参加者本人のマイクを再開できる。
   const setParticipantMic = useCallback(
     async (participantIdentity: string, enabled: boolean) => {
-      const encoder = new TextEncoder();
-      const message = JSON.stringify({ type: 'set-mic', payload: { enabled } });
-      await room.localParticipant.publishData(encoder.encode(message), {
-        reliable: true,
-        destinationIdentities: [participantIdentity],
-      });
+      try {
+        const res = await fetch('/api/set-participant-mic', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ participantIdentity, roomName: currentRoom, enabled }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(`マイク操作に失敗しました: ${err.error ?? res.status}`);
+        }
+      } catch (e) {
+        console.error('set-participant-mic failed:', e);
+        alert('マイク操作に失敗しました。もう一度お試しください。');
+      }
     },
-    [room]
+    [currentRoom]
   );
 
   const returnToMain = useCallback(() => {
