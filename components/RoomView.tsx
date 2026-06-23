@@ -54,6 +54,7 @@ interface RoomViewProps {
 export default function RoomView(props: RoomViewProps) {
   return (
     <LiveKitRoom
+      key={props.currentRoom}
       token={props.token}
       serverUrl={props.livekitUrl}
       connect={true}
@@ -487,15 +488,6 @@ function RoomInner({
     onRoomChange('main');
   }, [onRoomChange]);
 
-  const handleEndBreakout = useCallback(async () => {
-    const encoder = new TextEncoder();
-    const message = JSON.stringify({ type: 'move-to-room', payload: { targetRoom: 'main' } });
-    await room.localParticipant.publishData(encoder.encode(message), {
-      reliable: true,
-    });
-    onRoomChange('main');
-  }, [room, onRoomChange]);
-
   // 受講生用「退出」: 録画停止 → チャット履歴 DL → LiveKit 切断 → session Cookie 削除
   const handleStudentLeave = useCallback(() => {
     if (!window.confirm('自習室から退出します。よろしいですか?')) return;
@@ -675,7 +667,6 @@ function RoomInner({
           onToggleChat={toggleChat}
           onOpenDeviceSettings={openDeviceSettings}
           onReturnToMain={returnToMain}
-          onEndBreakout={handleEndBreakout}
           onLeave={handleStudentLeave}
         />
       </div>
@@ -701,7 +692,6 @@ function RoomInner({
           participants={participants}
           currentRoom={currentRoom}
           instructorName={participantName}
-          onMoveParticipant={onRoomChange}
           drawerOpen={dashboardOpen}
           onCloseDrawer={() => setDashboardOpen(false)}
           roomsStatus={roomsStatus}

@@ -9,7 +9,6 @@ interface InstructorDashboardProps {
   participants: Participant[];
   currentRoom: RoomName;
   instructorName: string;
-  onMoveParticipant: (room: RoomName) => void;
   /** モバイル時のドロワー開閉状態（PCでは無視） */
   drawerOpen?: boolean;
   /** モバイル時の閉じる動作 */
@@ -31,7 +30,6 @@ export default function InstructorDashboard({
   participants,
   currentRoom,
   instructorName,
-  onMoveParticipant,
   drawerOpen = false,
   onCloseDrawer,
   roomsStatus,
@@ -88,9 +86,6 @@ export default function InstructorDashboard({
           alert(`移動に失敗しました: ${err.error}`);
           return;
         }
-
-        // Move instructor to the same BO
-        onMoveParticipant(targetRoom);
       } catch (err) {
         console.error('Move failed:', err);
         alert('移動に失敗しました。もう一度お試しください。');
@@ -98,7 +93,7 @@ export default function InstructorDashboard({
         setIsMoving(null);
       }
     },
-    [currentRoom, isMoving, onMoveParticipant]
+    [currentRoom, isMoving]
   );
 
   return (

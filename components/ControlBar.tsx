@@ -27,7 +27,6 @@ interface ControlBarProps {
   onToggleChat: () => void;
   onOpenDeviceSettings: () => void;
   onReturnToMain: () => void;
-  onEndBreakout: () => void;
   /** 受講生用の退出ボタン */
   onLeave: () => void;
 }
@@ -56,7 +55,6 @@ export function ControlBar({
   onToggleChat,
   onOpenDeviceSettings,
   onReturnToMain,
-  onEndBreakout,
   onLeave,
 }: ControlBarProps) {
   return (
@@ -175,16 +173,6 @@ export function ControlBar({
         >
           <span className="text-lg">🚪</span>
           <span>メインに戻る</span>
-        </button>
-      )}
-
-      {isInstructor && isBreakout && (
-        <button
-          onClick={onEndBreakout}
-          className="flex flex-col items-center gap-0.5 px-4 py-2 rounded-xl text-xs font-medium bg-red-600 text-white hover:bg-red-500 transition-colors"
-        >
-          <span className="text-lg">⏹️</span>
-          <span>終了してメインへ</span>
         </button>
       )}
 
