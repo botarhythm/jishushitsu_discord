@@ -635,8 +635,8 @@ function RoomInner({
           )}
         </div>
 
-        {/* Breakout list (main room only / ゲスト・配信視聴中は非表示) */}
-        {!isBreakout && !isGuest && !remoteStudio && (
+        {/* Breakout list (受講生のみ / メインルーム時。講師は右の講師ダッシュボードと重複するため非表示) */}
+        {!isBreakout && !isGuest && !remoteStudio && !isInstructor && (
           <BreakoutList onJoin={onRoomChange} roomsStatus={roomsStatus} />
         )}
 
