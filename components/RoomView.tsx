@@ -14,9 +14,10 @@ import {
 } from '@livekit/components-react';
 import { Track, RoomEvent } from 'livekit-client';
 import { downloadChatHistory } from '@/lib/chat-export';
-import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS } from '@/lib/types';
+import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS, mergeParticipantMetadata } from '@/lib/types';
 import InstructorDashboard from './InstructorDashboard';
 import { useSessionRecorder } from '@/hooks/useSessionRecorder';
+import { useChunkUpload } from '@/hooks/useChunkUpload';
 import { useRoomsStatus } from '@/hooks/useRoomsStatus';
 import { useEndSession } from '@/hooks/useEndSession';
 import { useAutoLogout } from '@/hooks/useAutoLogout';
@@ -57,7 +58,7 @@ export default function RoomView(props: RoomViewProps) {
       serverUrl={props.livekitUrl}
       connect={true}
       audio={true}
-      video={false}
+      video={true}
       className="h-dvh flex flex-col bg-stone-900"
       options={{ adaptiveStream: true, dynacast: true }}
     >
@@ -84,7 +85,7 @@ function RoomInner({
   const screenShareActive = screenShareTracks.some((t) => isTrackReference(t));
   const { roomsStatus } = useRoomsStatus();
   const [isMicOn, setIsMicOn] = useState(true);
-  const [isCameraOn, setIsCameraOn] = useState(false);
+  const [isCameraOn, setIsCameraOn] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [raisedHand, setRaisedHand] = useState(false);
   const [focusedParticipant, setFocusedParticipant] = useState<string | null>(null);
@@ -107,13 +108,19 @@ function RoomInner({
     isInstructor && (initialRec === 'audio' || initialRec === 'both')
   );
   const recordingEnabled = isInstructor && audioRecordingOn;
+  // チャンク逐次アップロードのオーケストレーション（30分ごと／ルーム移動／終了時に送信）
+  const chunkUpload = useChunkUpload({ echoNoteConfigured });
   const {
     isRecording,
     currentRoomLabel,
     startedAt: recordingStartedAt,
     completedRecordings,
-    finalizeAll,
-  } = useSessionRecorder({ enabled: recordingEnabled, currentRoom });
+    finalize,
+  } = useSessionRecorder({
+    enabled: recordingEnabled,
+    currentRoom,
+    onChunkReady: chunkUpload.handleChunkReady,
+  });
   const toggleAudioRecording = useCallback(() => {
     setAudioRecordingOn((v) => !v);
   }, []);
@@ -366,7 +373,10 @@ function RoomInner({
   } = useEndSession({
     currentRoom,
     echoNoteConfigured,
-    finalizeAll,
+    finalize,
+    chunkUpload,
+    isRecording,
+    completedCount: completedRecordings.length,
     recordingStartedAt,
     stopLocalRecording,
     onBeforeLeave: exportChatIfAny,
@@ -378,6 +388,11 @@ function RoomInner({
       const data = JSON.parse(new TextDecoder().decode(msg.payload));
       if (data.type === 'move-to-room') {
         onRoomChange(data.payload.targetRoom as RoomName);
+      } else if (data.type === 'set-mic') {
+        // 講師からのマイク制御指示。本人操作と同じソフトミュートなので、後から再度ONにできる。
+        const enabled = !!(data.payload && data.payload.enabled);
+        localParticipant.setMicrophoneEnabled(enabled).catch(() => {});
+        setIsMicOn(enabled);
       } else if (data.type === 'studio-state') {
         // ホストの収録コンポジションを全参加者に強制適用 (自分がホスト中の studio は別途優先)
         if (data.payload?.active) {
@@ -435,13 +450,28 @@ function RoomInner({
 
   const toggleRaiseHand = useCallback(async () => {
     const newState = !raisedHand;
-    const metadata: ParticipantMetadata = {
+    // 既存 metadata（role / currentRoom / discordId）を保持したまま挙手状態のみ更新する
+    const metadata = mergeParticipantMetadata(localParticipant.metadata, {
       raisedHand: newState,
       raisedAt: newState ? new Date().toISOString() : null,
-    };
-    await localParticipant.setMetadata(JSON.stringify(metadata));
+    });
+    await localParticipant.setMetadata(metadata);
     setRaisedHand(newState);
   }, [localParticipant, raisedHand]);
+
+  // 講師が対象参加者のマイクをON/OFFする（データチャンネル経由のソフトミュート）。
+  // サーバー強制ミュートと違い、ON指示で参加者本人のマイクを再開できるため講師側から解除も可能。
+  const setParticipantMic = useCallback(
+    async (participantIdentity: string, enabled: boolean) => {
+      const encoder = new TextEncoder();
+      const message = JSON.stringify({ type: 'set-mic', payload: { enabled } });
+      await room.localParticipant.publishData(encoder.encode(message), {
+        reliable: true,
+        destinationIdentities: [participantIdentity],
+      });
+    },
+    [room]
+  );
 
   const returnToMain = useCallback(() => {
     onRoomChange('main');
@@ -666,6 +696,7 @@ function RoomInner({
           onCloseDrawer={() => setDashboardOpen(false)}
           roomsStatus={roomsStatus}
           onEnterStudio={enterStudio}
+          onSetParticipantMic={setParticipantMic}
         />
       )}
 

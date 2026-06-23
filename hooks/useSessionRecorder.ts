@@ -18,152 +18,247 @@ export interface RoomRecording {
   mimeType: string;
   durationMs: number;
   startedAt: number;
+  /** 同一ルーム内のチャンクをまとめる ID（ルームが変わると新しい ID） */
+  sessionGroupId: string;
+  /** グループ内のチャンク順序（0始まり） */
+  chunkIndex: number;
+  /** このチャンクで該当グループの送信が完了するか */
+  isFinal: boolean;
 }
 
 interface UseSessionRecorderOptions {
   /** 録音を有効にするか（講師のみ true 想定） */
   enabled: boolean;
-  /** 現在いるルーム（変わったら新しいファイルとして録音し直す） */
+  /** 現在いるルーム（変わったら新しいグループとして録音し直す） */
   currentRoom: RoomName;
+  /** チャンクが確定するたびに呼ばれる（即時アップロード用） */
+  onChunkReady?: (chunk: RoomRecording) => void;
 }
 
+/** 30分ごとにチャンクをローテーションする */
+const CHUNK_DURATION_MS = 30 * 60 * 1000;
+
 /**
- * 自習室の音声を **ルームごとに別ファイル** として録音する hook。
+ * 自習室の音声を録音する hook（チャンク方式）。
  *
- * 動作:
- *   - enabled === true で AudioContext + MediaRecorder を起動
- *   - currentRoom が変わるとそのタイミングで現在の録音を確定保存し、
- *     新しいルーム用の録音を開始する
- *   - finalizeAll() で「現在進行中の録音」もクローズし、配列を返す
+ * 特徴:
+ *   - ルームごとに sessionGroupId を発行（メイン / 各BOで別グループ）
+ *   - 同一ルーム内では 30分ごとにチャンク確定 → 即 onChunkReady で通知（アップロード可能）
+ *   - 各チャンクは webm/opus などの完結したオーディオファイル
+ *   - ルーム移動 or セッション終了で最終チャンクを isFinal=true で emit
  *
- * 結果として、メインルームとブレイクアウトの会話が独立した録音ファイルになり、
- * EchoNote 側で別セッションとして要約される。
+ * メリット:
+ *   - 30分単位でアップロードされるためブラウザクラッシュ時の損失が最大30分
+ *   - メモリ消費も常に小さく保たれる（200分セッションでも 10〜15MB 以下）
  */
-export function useSessionRecorder({ enabled, currentRoom }: UseSessionRecorderOptions) {
+export function useSessionRecorder({
+  enabled,
+  currentRoom,
+  onChunkReady,
+}: UseSessionRecorderOptions) {
   const room = useRoomContext();
   const recorderRef = useRef<SessionAudioRecorder | null>(null);
-  const recorderRoomRef = useRef<RoomName | null>(null);
-  const recorderStartedAtRef = useRef<number | null>(null);
+  const startedAtRef = useRef<number | null>(null);
+  const groupIdRef = useRef<string | null>(null);
+  const chunkIndexRef = useRef(0);
+
   const [isRecording, setIsRecording] = useState(false);
   const [currentRoomLabel, setCurrentRoomLabel] = useState<RoomName | null>(null);
+  // この録音セグメント（ルーム単位）の開始時刻。録音インジケータの経過表示に使う。
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [completedRecordings, setCompletedRecordings] = useState<RoomRecording[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // onChunkReady を ref で保持（依存配列に入れると effect が頻繁に再実行されるため）
+  const onChunkReadyRef = useRef(onChunkReady);
+  useEffect(() => {
+    onChunkReadyRef.current = onChunkReady;
+  }, [onChunkReady]);
 
   useEffect(() => {
     if (!enabled || !room) return;
 
     let cancelled = false;
-    const audioRecorder = new SessionAudioRecorder();
-    const startedAt = Date.now();
+    let rotationTimer: ReturnType<typeof setInterval> | null = null;
+
     const thisRoom = currentRoom;
 
-    const subscribeToExisting = () => {
-      const localPublication = room.localParticipant.getTrackPublication(
+    // 新しいグループを開始
+    const groupId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    groupIdRef.current = groupId;
+    chunkIndexRef.current = 0;
+
+    /** 現在の参加者の音声トラックを録音先にすべて接続 */
+    const subscribeAllToRecorder = (recorder: SessionAudioRecorder) => {
+      const localPub = room.localParticipant.getTrackPublication(
         Track.Source.Microphone
       ) as LocalTrackPublication | undefined;
-      if (localPublication?.track?.mediaStreamTrack) {
-        audioRecorder.addTrack(
-          `local-${localPublication.trackSid}`,
-          localPublication.track.mediaStreamTrack
-        );
+      if (localPub?.track?.mediaStreamTrack) {
+        recorder.addTrack(`local-${localPub.trackSid}`, localPub.track.mediaStreamTrack);
       }
       room.remoteParticipants.forEach((p) => {
         p.audioTrackPublications.forEach((pub) => {
           if (pub.track?.mediaStreamTrack) {
-            audioRecorder.addTrack(`remote-${pub.trackSid}`, pub.track.mediaStreamTrack);
+            recorder.addTrack(`remote-${pub.trackSid}`, pub.track.mediaStreamTrack);
           }
         });
       });
     };
 
+    // 新しい参加者・トラックが入ってきたら録音先に追加
     const handleTrackSubscribed = (
       track: RemoteTrack,
       publication: RemoteTrackPublication
     ) => {
       if (track.kind === Track.Kind.Audio && track.mediaStreamTrack) {
-        audioRecorder.addTrack(`remote-${publication.trackSid}`, track.mediaStreamTrack);
+        recorderRef.current?.addTrack(`remote-${publication.trackSid}`, track.mediaStreamTrack);
       }
     };
-
     const handleTrackUnsubscribed = (
       _track: RemoteTrack,
       publication: RemoteTrackPublication
     ) => {
-      audioRecorder.removeTrack(`remote-${publication.trackSid}`);
+      recorderRef.current?.removeTrack(`remote-${publication.trackSid}`);
     };
-
     const handleLocalTrackPublished = (publication: LocalTrackPublication) => {
       if (
         publication.track?.kind === Track.Kind.Audio &&
         publication.track.mediaStreamTrack
       ) {
-        audioRecorder.addTrack(
-          `local-${publication.trackSid}`,
-          publication.track.mediaStreamTrack
-        );
+        recorderRef.current?.addTrack(`local-${publication.trackSid}`, publication.track.mediaStreamTrack);
       }
     };
 
-    recorderRef.current = audioRecorder;
-    recorderRoomRef.current = thisRoom;
-    recorderStartedAtRef.current = startedAt;
+    room.on(RoomEvent.TrackSubscribed, handleTrackSubscribed);
+    room.on(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
+    room.on(RoomEvent.LocalTrackPublished, handleLocalTrackPublished);
 
-    (async () => {
+    /** 確定したチャンクを完了一覧に追加し、onChunkReady で通知する */
+    const emitChunk = (
+      blob: Blob,
+      mimeType: string,
+      durationMs: number,
+      startedAt: number,
+      chunkIndex: number,
+      isFinal: boolean
+    ) => {
+      if (durationMs < 1000) return; // 1秒未満は誤検知として捨てる
+      const chunk: RoomRecording = {
+        room: thisRoom,
+        blob,
+        mimeType,
+        durationMs,
+        startedAt,
+        sessionGroupId: groupId,
+        chunkIndex,
+        isFinal,
+      };
+      if (!cancelled) {
+        setCompletedRecordings((prev) => [...prev, chunk]);
+      }
+      try {
+        onChunkReadyRef.current?.(chunk);
+      } catch (err) {
+        console.error('[recorder] onChunkReady callback error:', err);
+      }
+    };
+
+    /** 新しい SessionAudioRecorder を起動して、録音開始 */
+    const startNewRecorder = async (): Promise<SessionAudioRecorder | null> => {
+      const audioRecorder = new SessionAudioRecorder();
       try {
         await audioRecorder.start();
         if (cancelled) {
           audioRecorder.abort();
-          return;
+          return null;
         }
-        subscribeToExisting();
-        room.on(RoomEvent.TrackSubscribed, handleTrackSubscribed);
-        room.on(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
-        room.on(RoomEvent.LocalTrackPublished, handleLocalTrackPublished);
+        recorderRef.current = audioRecorder;
+        startedAtRef.current = Date.now();
+        subscribeAllToRecorder(audioRecorder);
         setIsRecording(true);
         setCurrentRoomLabel(thisRoom);
-        setStartedAt(startedAt);
+        return audioRecorder;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error('[recorder] start failed:', err);
         setError(`録音を開始できませんでした: ${msg}`);
+        return null;
       }
+    };
+
+    /** ローテーション：現在のチャンクを確定 → 新チャンクで録音継続 */
+    const rotate = async () => {
+      if (cancelled) return;
+      const oldRecorder = recorderRef.current;
+      const oldStartedAt = startedAtRef.current;
+      const oldChunkIndex = chunkIndexRef.current;
+      if (!oldRecorder || !oldStartedAt) return;
+
+      // 次チャンク用にindex先行更新
+      chunkIndexRef.current += 1;
+      // 新レコーダーを先に立ち上げる（録音の中断時間を最小化）
+      await startNewRecorder();
+      // 旧レコーダーを確定
+      try {
+        const result = await oldRecorder.stopAndFinalize();
+        emitChunk(
+          result.blob,
+          result.mimeType,
+          result.durationMs,
+          oldStartedAt,
+          oldChunkIndex,
+          /* isFinal */ false
+        );
+      } catch (err) {
+        console.error('[recorder] rotation finalize failed:', err);
+      }
+    };
+
+    // 起動シーケンス
+    (async () => {
+      const r = await startNewRecorder();
+      if (!r || cancelled) return;
+      // セグメント開始時刻を記録（effect body ではなく async 内なので set-state-in-effect を回避）
+      setStartedAt(startedAtRef.current);
+      rotationTimer = setInterval(rotate, CHUNK_DURATION_MS);
     })();
 
     return () => {
       cancelled = true;
+      if (rotationTimer) clearInterval(rotationTimer);
       room.off(RoomEvent.TrackSubscribed, handleTrackSubscribed);
       room.off(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
       room.off(RoomEvent.LocalTrackPublished, handleLocalTrackPublished);
 
-      // 現在の録音を確定して配列に追加（fire-and-forget）。
-      // 1秒未満は誤検知（ルーム切替の瞬間など）として捨てる。
-      if (audioRecorder.isRecording) {
-        audioRecorder
+      // 現在のチャンクを最終チャンクとして確定（fire-and-forget）
+      const recorder = recorderRef.current;
+      const startedAt = startedAtRef.current;
+      const chunkIndex = chunkIndexRef.current;
+
+      if (recorder?.isRecording && startedAt) {
+        recorder
           .stopAndFinalize()
           .then((result) => {
-            if (result.durationMs >= 1000) {
-              setCompletedRecordings((prev) => [
-                ...prev,
-                {
-                  room: thisRoom,
-                  blob: result.blob,
-                  mimeType: result.mimeType,
-                  durationMs: result.durationMs,
-                  startedAt,
-                },
-              ]);
-            }
+            emitChunk(
+              result.blob,
+              result.mimeType,
+              result.durationMs,
+              startedAt,
+              chunkIndex,
+              /* isFinal */ true
+            );
           })
-          .catch((err) => console.error('[recorder] finalize on transition failed:', err));
+          .catch((err) => console.error('[recorder] cleanup finalize failed:', err));
       } else {
-        audioRecorder.abort();
+        recorder?.abort();
       }
 
-      if (recorderRef.current === audioRecorder) {
+      if (recorderRef.current === recorder) {
         recorderRef.current = null;
-        recorderRoomRef.current = null;
-        recorderStartedAtRef.current = null;
+        startedAtRef.current = null;
       }
       setIsRecording(false);
       setCurrentRoomLabel(null);
@@ -184,40 +279,52 @@ export function useSessionRecorder({ enabled, currentRoom }: UseSessionRecorderO
   }, [isRecording, completedRecordings.length]);
 
   /**
-   * 進行中の録音をクローズし、これまでに蓄積された全録音の配列を返す。
+   * 進行中の録音を確定してクローズし、最終チャンクを isFinal=true で emit する。
+   * 戻り値はこの呼び出しまでに完了した全チャンク（既に emit 済み）。
    */
-  const finalizeAll = useCallback(async (): Promise<RoomRecording[]> => {
+  const finalize = useCallback(async (): Promise<RoomRecording[]> => {
     const recorder = recorderRef.current;
-    const recorderRoom = recorderRoomRef.current;
-    const startedAt = recorderStartedAtRef.current;
+    const startedAt = startedAtRef.current;
+    const chunkIndex = chunkIndexRef.current;
+    const groupId = groupIdRef.current;
     const accumulated = [...completedRecordings];
 
-    if (recorder && recorder.isRecording && recorderRoom && startedAt) {
+    if (recorder?.isRecording && startedAt && groupId) {
       try {
         const result = await recorder.stopAndFinalize();
         if (result.durationMs >= 1000) {
-          accumulated.push({
-            room: recorderRoom,
-            blob: result.blob,
-            mimeType: result.mimeType,
-            durationMs: result.durationMs,
-            startedAt,
-          });
+          // currentRoomLabel から room を取得（state は最新のはず）
+          const currentRoom = currentRoomLabel;
+          if (currentRoom) {
+            const chunk: RoomRecording = {
+              room: currentRoom,
+              blob: result.blob,
+              mimeType: result.mimeType,
+              durationMs: result.durationMs,
+              startedAt,
+              sessionGroupId: groupId,
+              chunkIndex,
+              isFinal: true,
+            };
+            accumulated.push(chunk);
+            setCompletedRecordings((prev) => [...prev, chunk]);
+            try {
+              onChunkReadyRef.current?.(chunk);
+            } catch (err) {
+              console.error('[recorder] onChunkReady callback error:', err);
+            }
+          }
         }
       } catch (err) {
-        console.error('[recorder] finalizeAll failed:', err);
+        console.error('[recorder] finalize failed:', err);
       } finally {
         recorderRef.current = null;
-        recorderRoomRef.current = null;
-        recorderStartedAtRef.current = null;
+        startedAtRef.current = null;
         setIsRecording(false);
-        setCurrentRoomLabel(null);
-        setStartedAt(null);
       }
     }
-    setCompletedRecordings([]);
     return accumulated;
-  }, [completedRecordings]);
+  }, [completedRecordings, currentRoomLabel]);
 
   return {
     isRecording,
@@ -225,6 +332,8 @@ export function useSessionRecorder({ enabled, currentRoom }: UseSessionRecorderO
     startedAt,
     completedRecordings,
     error,
-    finalizeAll,
+    finalize,
+    /** 後方互換: 既存コードが finalizeAll を呼んでいる箇所への対応 */
+    finalizeAll: finalize,
   };
 }

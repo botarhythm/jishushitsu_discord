@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Participant, Track } from 'livekit-client';
+import { Participant } from 'livekit-client';
 import { RoomName, ParticipantMetadata, ROOM_LABELS, BREAKOUT_ROOMS } from '@/lib/types';
 import { RoomsStatusMap } from '@/hooks/useRoomsStatus';
 
@@ -17,6 +17,8 @@ interface InstructorDashboardProps {
   roomsStatus?: RoomsStatusMap;
   /** 収録モード（YouTube/Podcast 収録レイアウト）を開始する。メインルームのみ */
   onEnterStudio?: () => void;
+  /** 対象参加者のマイクをON/OFFする（data-channelソフトミュート） */
+  onSetParticipantMic: (participantIdentity: string, enabled: boolean) => void;
 }
 
 interface RaisedHandEntry {
@@ -34,9 +36,9 @@ export default function InstructorDashboard({
   onCloseDrawer,
   roomsStatus,
   onEnterStudio,
+  onSetParticipantMic,
 }: InstructorDashboardProps) {
   const [isMoving, setIsMoving] = useState<string | null>(null);
-  const [isMuting, setIsMuting] = useState<string | null>(null);
 
   const raisedHandEntries: RaisedHandEntry[] = participants
     .filter((p) => {
@@ -61,42 +63,6 @@ export default function InstructorDashboard({
       return true;
     }
   });
-
-  const toggleMute = useCallback(
-    async (participant: Participant) => {
-      if (isMuting) return;
-      const audioPub = participant.getTrackPublication(Track.Source.Microphone);
-      const trackSid = audioPub?.trackSid;
-      if (!trackSid) {
-        alert('この参加者はマイクを公開していません');
-        return;
-      }
-      const shouldMute = !audioPub.isMuted;
-      setIsMuting(participant.identity);
-      try {
-        const res = await fetch('/api/mute-participant', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            roomName: currentRoom,
-            participantIdentity: participant.identity,
-            trackSid,
-            muted: shouldMute,
-          }),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          alert(`操作に失敗しました: ${err.error ?? res.status}`);
-        }
-      } catch (err) {
-        console.error('Mute failed:', err);
-        alert('操作に失敗しました。もう一度お試しください。');
-      } finally {
-        setIsMuting(null);
-      }
-    },
-    [currentRoom, isMuting]
-  );
 
   const moveParticipantToRoom = useCallback(
     async (participantIdentity: string, participantName: string, targetRoom: RoomName) => {
@@ -230,9 +196,7 @@ export default function InstructorDashboard({
                 if (participant.metadata) meta = JSON.parse(participant.metadata);
               } catch {}
 
-              const audioPub = participant.getTrackPublication(Track.Source.Microphone);
-              const hasMicTrack = !!audioPub?.trackSid;
-              const isMicMuted = !audioPub || audioPub.isMuted;
+              const isMicOn = participant.isMicrophoneEnabled;
 
               return (
                 <li key={participant.identity} className="rounded-lg bg-stone-700/50 p-2">
@@ -243,23 +207,16 @@ export default function InstructorDashboard({
                     </span>
                     <div className="flex items-center gap-1.5">
                       <button
-                        onClick={() => toggleMute(participant)}
-                        disabled={!hasMicTrack || isMuting === participant.identity}
-                        className={`text-xs px-1.5 py-0.5 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                          isMicMuted
-                            ? 'bg-stone-600 text-stone-300 hover:bg-stone-500'
-                            : 'bg-green-700/50 text-green-200 hover:bg-green-700/70'
+                        onClick={() => onSetParticipantMic(participant.identity, !isMicOn)}
+                        className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
+                          isMicOn
+                            ? 'bg-green-700/50 text-green-200 hover:bg-green-700/70'
+                            : 'bg-stone-600 text-stone-300 hover:bg-stone-500'
                         }`}
-                        title={
-                          !hasMicTrack
-                            ? 'マイク未公開'
-                            : isMicMuted
-                              ? 'マイクを解除'
-                              : 'マイクをミュート'
-                        }
-                        aria-label={isMicMuted ? 'マイクを解除' : 'マイクをミュート'}
+                        title={isMicOn ? 'マイクをOFFにする' : 'マイクをONにする'}
+                        aria-label={isMicOn ? 'マイクをOFFにする' : 'マイクをONにする'}
                       >
-                        {isMicMuted ? '🔇' : '🎤'}
+                        {isMicOn ? '🎤' : '🔇'}
                       </button>
                       <span
                         className={`w-2 h-2 rounded-full ${

@@ -6,48 +6,25 @@ import type { RoomName } from '@/lib/types';
 import type { RoomRecording } from '@/hooks/useSessionRecorder';
 import type { EndSessionChoice } from '@/components/EndSessionModal';
 
-const ROOM_FILENAME_LABELS: Record<RoomName, string> = {
-  main: 'メイン',
-  'bo-1': 'BO1',
-  'bo-2': 'BO2',
-  'bo-3': 'BO3',
-  'bo-4': 'BO4',
-  'bo-5': 'BO5',
-  'bo-6': 'BO6',
-};
-
-async function uploadRecordingToEchoNote(
-  recording: RoomRecording,
-  yyyymmdd: string
-): Promise<{ viewUrl?: string }> {
-  const ext = recording.mimeType.includes('webm')
-    ? 'webm'
-    : recording.mimeType.includes('ogg')
-      ? 'ogg'
-      : 'mp4';
-  const roomLabel = ROOM_FILENAME_LABELS[recording.room] || recording.room;
-  const fname = `${yyyymmdd}_自習室_${roomLabel}.${ext}`;
-
-  const form = new FormData();
-  form.append('file', new File([recording.blob], fname, { type: recording.mimeType }));
-  form.append('clientName', '自習室');
-  form.append('memo', roomLabel);
-  form.append('sessionDate', yyyymmdd);
-
-  const res = await fetch('/api/echonote/upload', { method: 'POST', body: form });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return { viewUrl: data.viewUrl };
-}
-
 export type UploadResult =
   | { success: true; viewUrl?: string; discarded?: boolean }
   | { success: false; error: string };
 
+interface ChunkUploadApi {
+  waitAndRetry: () => Promise<{ failed: number; viewUrl?: string }>;
+}
+
 interface UseEndSessionOptions {
   currentRoom: RoomName;
   echoNoteConfigured: boolean;
-  finalizeAll: () => Promise<RoomRecording[]>;
+  /** 進行中チャンクを確定し、最終チャンクを emit する（onChunkReady 経由で逐次アップロードされる） */
+  finalize: () => Promise<RoomRecording[]>;
+  /** チャンク逐次アップロードのオーケストレーション */
+  chunkUpload: ChunkUploadApi;
+  /** 録音中か（最終チャンクの有無判定に使用） */
+  isRecording: boolean;
+  /** これまでに確定済みのチャンク数 */
+  completedCount: number;
   /** 録音開始時刻(epoch ms)。モーダルを開いた瞬間の経過秒スナップショットに使う。 */
   recordingStartedAt: number | null;
   /** ローカル録画(getDisplayMedia)を停止しBlobをDLする。退出系操作の直前に呼ばれる。 */
@@ -59,7 +36,10 @@ interface UseEndSessionOptions {
 export function useEndSession({
   currentRoom,
   echoNoteConfigured,
-  finalizeAll,
+  finalize,
+  chunkUpload,
+  isRecording,
+  completedCount,
   recordingStartedAt,
   stopLocalRecording,
   onBeforeLeave,
@@ -101,12 +81,12 @@ export function useEndSession({
         return;
       }
 
-      // end-all-discard: 全員退出 + 録音破棄
+      // end-all-discard: 全員退出 + 録音破棄（アップロードしない）
       if (choice === 'end-all-discard') {
         setUploading(true);
         setUploadProgress('セッションを終了しています…');
         try {
-          await finalizeAll();
+          await finalize();
           fetch('/api/end-session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -122,21 +102,25 @@ export function useEndSession({
         return;
       }
 
-      // end-all-with-summary
+      // end-all-with-summary（チャンク式：チャンクは録音中に逐次アップロード済み）
       setUploading(true);
       setUploadProgress(
-        echoNoteConfigured ? '録音を停止しています…' : 'セッションを終了しています…'
+        echoNoteConfigured ? '録音を停止し、最終チャンクを送信中…' : 'セッションを終了しています…'
       );
       try {
-        const recordings = await finalizeAll();
+        const totalChunks = completedCount + (isRecording ? 1 : 0);
+        // 1. 最終チャンクを emit（onChunkReady でアップロード開始）
+        await finalize();
 
+        // 2. 全員退出シグナル送信（アップロード継続中に並行）
         fetch('/api/end-session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ roomName: currentRoom }),
         }).catch((err) => console.error('[end-session] error:', err));
 
-        if (recordings.length === 0) {
+        // 3. 録音なしなら早期return
+        if (totalChunks === 0) {
           setUploadResult({ success: true });
           return;
         }
@@ -148,38 +132,17 @@ export function useEndSession({
           return;
         }
 
-        const today = new Date();
-        const yyyymmdd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+        // 4. in-flight 完了待ち＋失敗分リトライ
+        setUploadProgress(`${totalChunks}件のチャンクをEchoNoteへ送信中…`);
+        const { failed, viewUrl } = await chunkUpload.waitAndRetry();
 
-        const totalMB = recordings.reduce((sum, r) => sum + r.blob.size / 1024 / 1024, 0);
-        setUploadProgress(
-          `${recordings.length}件の録音をEchoNoteへ送信中... (合計 ${totalMB.toFixed(1)}MB)`
-        );
-
-        const results = await Promise.allSettled(
-          recordings.map((r) => uploadRecordingToEchoNote(r, yyyymmdd))
-        );
-
-        const successes = results.filter((r) => r.status === 'fulfilled');
-        const failures = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
-
-        if (successes.length === 0) {
-          throw new Error(
-            failures[0]?.reason instanceof Error
-              ? failures[0].reason.message
-              : String(failures[0]?.reason || '送信失敗')
-          );
-        }
-
-        const lastSuccess = successes[successes.length - 1] as PromiseFulfilledResult<{
-          viewUrl?: string;
-        }>;
-        setUploadResult({
-          success: true,
-          viewUrl: lastSuccess.value.viewUrl,
-        });
-        if (failures.length > 0) {
-          console.warn(`[end-session] ${failures.length}件のアップロードが失敗しました`, failures);
+        if (failed > 0) {
+          setUploadResult({
+            success: false,
+            error: `${failed}件のチャンクが送信できませんでした。再度「もう一度送信する」をお試しください。`,
+          });
+        } else {
+          setUploadResult({ success: true, viewUrl });
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -189,7 +152,17 @@ export function useEndSession({
         setUploading(false);
       }
     },
-    [room, finalizeAll, currentRoom, echoNoteConfigured, stopLocalRecording, onBeforeLeave]
+    [
+      room,
+      finalize,
+      chunkUpload,
+      currentRoom,
+      echoNoteConfigured,
+      isRecording,
+      completedCount,
+      stopLocalRecording,
+      onBeforeLeave,
+    ]
   );
 
   const handleCloseEndModal = useCallback(() => {

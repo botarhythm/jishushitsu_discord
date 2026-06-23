@@ -41,6 +41,9 @@ export async function POST(request: NextRequest) {
     name: displayName,
     metadata: JSON.stringify({
       role: session.role,
+      currentRoom: roomName,
+      raisedHand: false,
+      raisedAt: null,
       discordId: session.discordId,
       kind: session.kind ?? 'discord',
     }),
@@ -51,6 +54,8 @@ export async function POST(request: NextRequest) {
     room: roomName,
     canPublish: true,
     canSubscribe: true,
+    // 受講生も挙手で自分の metadata を更新するため必須
+    canUpdateOwnMetadata: true,
     ...(session.role === 'instructor' && { roomAdmin: true }),
   });
 
