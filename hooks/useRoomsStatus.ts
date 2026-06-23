@@ -23,7 +23,7 @@ export function useRoomsStatus() {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/rooms-status');
+      const res = await fetch('/api/rooms-status', { cache: 'no-store' });
       if (!res.ok) throw new Error('Failed to fetch rooms status');
       const data = await res.json();
       

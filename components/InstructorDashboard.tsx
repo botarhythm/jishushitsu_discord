@@ -9,6 +9,7 @@ interface InstructorDashboardProps {
   participants: Participant[];
   currentRoom: RoomName;
   instructorName: string;
+  selfIdentity: string;
   /** モバイル時のドロワー開閉状態（PCでは無視） */
   drawerOpen?: boolean;
   /** モバイル時の閉じる動作 */
@@ -17,7 +18,9 @@ interface InstructorDashboardProps {
   /** 収録モード（YouTube/Podcast 収録レイアウト）を開始する。メインルームのみ */
   onEnterStudio?: () => void;
   /** 講師自身が表示中のルームを切り替える */
-  onMoveInstructor: (room: RoomName) => void;
+  onMoveInstructor: (room: RoomName) => void | Promise<void>;
+  /** BO在室状況を即時再取得する */
+  onRoomsStatusRefresh?: () => void | Promise<void>;
   /** 対象参加者のマイクをON/OFFする（data-channelソフトミュート） */
   onSetParticipantMic: (participantIdentity: string, enabled: boolean) => void;
 }
@@ -32,11 +35,13 @@ export default function InstructorDashboard({
   participants,
   currentRoom,
   instructorName,
+  selfIdentity,
   drawerOpen = false,
   onCloseDrawer,
   roomsStatus,
   onEnterStudio,
   onMoveInstructor,
+  onRoomsStatusRefresh,
   onSetParticipantMic,
 }: InstructorDashboardProps) {
   const [isMoving, setIsMoving] = useState<string | null>(null);
@@ -65,6 +70,13 @@ export default function InstructorDashboard({
     }
   });
 
+  const refreshRoomsStatusSoon = useCallback(() => {
+    void onRoomsStatusRefresh?.();
+    window.setTimeout(() => {
+      void onRoomsStatusRefresh?.();
+    }, 1000);
+  }, [onRoomsStatusRefresh]);
+
   const moveInstructorToRoom = useCallback(
     (targetRoom: RoomName) => {
       if (targetRoom === currentRoom) return;
@@ -75,7 +87,12 @@ export default function InstructorDashboard({
   );
 
   const moveParticipantToRoom = useCallback(
-    async (participantIdentity: string, participantName: string, targetRoom: RoomName) => {
+    async (
+      participantIdentity: string,
+      participantName: string,
+      targetRoom: RoomName,
+      sourceRoom: RoomName = currentRoom
+    ) => {
       if (isMoving) return;
 
       setIsMoving(participantIdentity);
@@ -88,7 +105,7 @@ export default function InstructorDashboard({
           body: JSON.stringify({
             participantIdentity,
             targetRoomName: targetRoom,
-            currentRoomName: currentRoom,
+            currentRoomName: sourceRoom,
             participantName,
           }),
         });
@@ -98,6 +115,8 @@ export default function InstructorDashboard({
           alert(`移動に失敗しました: ${err.error}`);
           return;
         }
+
+        refreshRoomsStatusSoon();
       } catch (err) {
         console.error('Move failed:', err);
         alert('移動に失敗しました。もう一度お試しください。');
@@ -105,7 +124,98 @@ export default function InstructorDashboard({
         setIsMoving(null);
       }
     },
-    [currentRoom, isMoving]
+    [currentRoom, isMoving, refreshRoomsStatusSoon]
+  );
+
+  const removeParticipant = useCallback(
+    async (participantIdentity: string, participantName: string, sourceRoom: RoomName = currentRoom) => {
+      if (isMoving) return;
+      if (!confirm(`${participantName}さんを退出させますか？`)) return;
+
+      setIsMoving(participantIdentity);
+
+      try {
+        const res = await fetch('/api/remove-participant', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            roomName: sourceRoom,
+            participantIdentity,
+          }),
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(`退出処理に失敗しました: ${err.error ?? res.status}`);
+          return;
+        }
+
+        refreshRoomsStatusSoon();
+      } catch (err) {
+        console.error('Remove participant failed:', err);
+        alert('退出処理に失敗しました。もう一度お試しください。');
+      } finally {
+        setIsMoving(null);
+      }
+    },
+    [currentRoom, isMoving, refreshRoomsStatusSoon]
+  );
+
+  const summonAllToMain = useCallback(async () => {
+    if (isMoving) return;
+
+    const breakoutParticipants = BREAKOUT_ROOMS.flatMap((room) =>
+      (roomsStatus?.[room] || []).map((participant) => ({ ...participant, room }))
+    );
+
+    if (breakoutParticipants.length === 0) return;
+    if (!confirm(`BO内の${breakoutParticipants.length}名をメインルームへ招集しますか？`)) return;
+
+    setIsMoving('__summon_all__');
+
+    try {
+      const results = await Promise.allSettled(
+        breakoutParticipants.map((participant) => {
+          if (participant.identity === selfIdentity) {
+            return onMoveInstructor('main');
+          }
+
+          return fetch('/api/move-participant', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              participantIdentity: participant.identity,
+              targetRoomName: 'main',
+              currentRoomName: participant.room,
+              participantName: participant.name,
+            }),
+          }).then(async (res) => {
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              throw new Error(err.error ?? `${res.status}`);
+            }
+          });
+        })
+      );
+
+      const failedCount = results.filter((result) => result.status === 'rejected').length;
+      if (failedCount > 0) {
+        alert(`${failedCount}名の招集に失敗しました。BO状況を確認してください。`);
+      }
+
+      refreshRoomsStatusSoon();
+    } catch (err) {
+      console.error('Summon all failed:', err);
+      alert('全員招集に失敗しました。もう一度お試しください。');
+    } finally {
+      setIsMoving(null);
+    }
+  }, [isMoving, onMoveInstructor, refreshRoomsStatusSoon, roomsStatus, selfIdentity]
+  );
+
+  const breakoutParticipantCount = BREAKOUT_ROOMS.reduce(
+    (count, room) => count + (roomsStatus?.[room]?.length || 0),
+    0
   );
 
   return (
@@ -202,6 +312,16 @@ export default function InstructorDashboard({
               );
             })}
           </div>
+          <button
+            onClick={summonAllToMain}
+            disabled={breakoutParticipantCount === 0 || !!isMoving}
+            className="mt-2 w-full rounded-lg bg-amber-700/80 px-3 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+          >
+            全員をメインへ招集
+            {breakoutParticipantCount > 0 && (
+              <span className="ml-1 text-xs text-amber-100/80">({breakoutParticipantCount}名)</span>
+            )}
+          </button>
         </section>
 
         {/* Raised hands section */}
@@ -245,12 +365,13 @@ export default function InstructorDashboard({
               } catch {}
 
               const isMicOn = participant.isMicrophoneEnabled;
+              const participantName = participant.name ?? participant.identity;
 
               return (
                 <li key={participant.identity} className="rounded-lg bg-stone-700/50 p-2">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-sm text-stone-200 font-medium">
-                      {participant.name ?? participant.identity}
+                      {participantName}
                       {meta?.raisedHand && ' ✋'}
                     </span>
                     <div className="flex items-center gap-1.5">
@@ -276,15 +397,15 @@ export default function InstructorDashboard({
                       />
                     </div>
                   </div>
-                  {currentRoom === 'main' && (
-                    <div className="flex gap-1 flex-wrap">
-                      {BREAKOUT_ROOMS.map((room) => (
+                  <div className="flex gap-1 flex-wrap">
+                    {currentRoom === 'main' ? (
+                      BREAKOUT_ROOMS.map((room) => (
                         <button
                           key={room}
                           onClick={() =>
                             moveParticipantToRoom(
                               participant.identity,
-                              participant.name ?? participant.identity,
+                              participantName,
                               room
                             )
                           }
@@ -293,9 +414,26 @@ export default function InstructorDashboard({
                         >
                           {room.toUpperCase()}へ
                         </button>
-                      ))}
-                    </div>
-                  )}
+                      ))
+                    ) : (
+                      <button
+                        onClick={() =>
+                          moveParticipantToRoom(participant.identity, participantName, 'main')
+                        }
+                        disabled={!!isMoving}
+                        className="text-xs px-2 py-1 rounded bg-stone-100 text-stone-900 hover:bg-white disabled:opacity-50 transition-colors"
+                      >
+                        メインへ
+                      </button>
+                    )}
+                    <button
+                      onClick={() => removeParticipant(participant.identity, participantName)}
+                      disabled={!!isMoving}
+                      className="text-xs px-2 py-1 rounded bg-red-700/80 text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
+                    >
+                      退出
+                    </button>
+                  </div>
                 </li>
               );
             })}
@@ -340,23 +478,43 @@ export default function InstructorDashboard({
                   {roomParticipants.length > 0 && (
                     <div className="flex flex-col gap-1 pl-1.5 border-l border-stone-700/60 mt-0.5">
                       {roomParticipants.map((p) => (
-                        <div key={p.identity} className="flex items-center justify-between text-[11px]">
-                          <span
-                            className={
+                        <div key={p.identity} className="flex flex-col gap-1 rounded bg-stone-800/40 p-1">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span
+                              className={
+                                p.role === 'instructor'
+                                  ? 'text-amber-400 font-medium'
+                                  : 'text-stone-300'
+                              }
+                            >
+                              {p.name}
+                            </span>
+                            <span className={`text-[9px] px-1.5 py-0.2 rounded scale-90 origin-right ${
                               p.role === 'instructor'
-                                ? 'text-amber-400 font-medium'
-                                : 'text-stone-300'
-                            }
-                          >
-                            {p.name}
-                          </span>
-                          <span className={`text-[9px] px-1.5 py-0.2 rounded scale-90 origin-right ${
-                            p.role === 'instructor'
-                              ? 'bg-amber-950/40 text-amber-400 border border-amber-800/30'
-                              : 'bg-stone-800 text-stone-400 border border-stone-750'
-                          }`}>
-                            {p.role === 'instructor' ? '講師' : '受講生'}
-                          </span>
+                                ? 'bg-amber-950/40 text-amber-400 border border-amber-800/30'
+                                : 'bg-stone-800 text-stone-400 border border-stone-750'
+                            }`}>
+                              {p.role === 'instructor' ? '講師' : '受講生'}
+                            </span>
+                          </div>
+                          {p.identity !== selfIdentity && (
+                            <div className="flex justify-end gap-1">
+                              <button
+                                onClick={() => moveParticipantToRoom(p.identity, p.name, 'main', room)}
+                                disabled={!!isMoving}
+                                className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium text-stone-900 hover:bg-white disabled:opacity-50 transition-colors"
+                              >
+                                メインへ
+                              </button>
+                              <button
+                                onClick={() => removeParticipant(p.identity, p.name, room)}
+                                disabled={!!isMoving}
+                                className="rounded bg-red-700/80 px-1.5 py-0.5 text-[10px] font-medium text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
+                              >
+                                退出
+                              </button>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>

@@ -3,7 +3,10 @@ import { RoomServiceClient } from 'livekit-server-sdk';
 import { requireSession } from '@/lib/auth-guard';
 import { RoomName, BREAKOUT_ROOMS } from '@/lib/types';
 
-export async function GET(request: NextRequest) {
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+export async function GET(_request: NextRequest) {
   // セッションがあるユーザー（受講生・講師）のみ許可
   const auth = await requireSession();
   if (!auth.ok) return auth.response;
@@ -25,11 +28,13 @@ export async function GET(request: NextRequest) {
         try {
           const participants = await roomService.listParticipants(roomName);
           
-          const users = participants.map((p) => {
+          const users = participants.flatMap((p) => {
             let role = 'student';
+            let metadataRoom: unknown;
             try {
               if (p.metadata) {
                 const meta = JSON.parse(p.metadata);
+                metadataRoom = meta.currentRoom;
                 if (meta.role === 'instructor') {
                   role = 'instructor';
                 }
@@ -37,11 +42,16 @@ export async function GET(request: NextRequest) {
             } catch {
               // メタデータがパースできない場合はデフォルト値
             }
-            return {
+
+            if (typeof metadataRoom === 'string' && metadataRoom !== roomName) {
+              return [];
+            }
+
+            return [{
               identity: p.identity,
               name: p.name || p.identity,
               role,
-            };
+            }];
           });
 
           return {
@@ -58,7 +68,10 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    return NextResponse.json({ rooms: roomStatuses });
+    return NextResponse.json(
+      { rooms: roomStatuses },
+      { headers: { 'Cache-Control': 'no-store, max-age=0' } }
+    );
   } catch (error) {
     console.error('Fetch room status error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

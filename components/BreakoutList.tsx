@@ -59,7 +59,7 @@ const ROOM_COLORS: Record<RoomName, { main: string; border: string; borderHover:
 };
 
 interface BreakoutListProps {
-  onJoin: (room: RoomName) => void;
+  onJoin: (room: RoomName) => void | Promise<void>;
   roomsStatus?: RoomsStatusMap;
 }
 

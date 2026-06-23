@@ -91,6 +91,7 @@ export default function RoomPage() {
       );
     } catch (err) {
       console.error('Room change failed:', err);
+      throw err;
     }
   };
 

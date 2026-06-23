@@ -48,7 +48,7 @@ interface RoomViewProps {
   currentRoom: RoomName;
   /** 入室直後に自動 ON にする録音/録画 (招待トークン由来) */
   initialRec?: InitialRec;
-  onRoomChange: (room: RoomName) => void;
+  onRoomChange: (room: RoomName) => void | Promise<void>;
 }
 
 export default function RoomView(props: RoomViewProps) {
@@ -84,7 +84,7 @@ function RoomInner({
   // ルーム内に画面共有が存在するか (収録モードの自動レイアウト切替に使用)
   const screenShareTracks = useTracks([Track.Source.ScreenShare], { onlySubscribed: false });
   const screenShareActive = screenShareTracks.some((t) => isTrackReference(t));
-  const { roomsStatus } = useRoomsStatus();
+  const { roomsStatus, refetch: refetchRoomsStatus } = useRoomsStatus();
   const [isMicOn, setIsMicOn] = useState(true);
   const [isCameraOn, setIsCameraOn] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
@@ -92,6 +92,30 @@ function RoomInner({
   const [focusedParticipant, setFocusedParticipant] = useState<string | null>(null);
   const isInstructor = role === 'instructor';
   const isBreakout = currentRoom !== 'main';
+
+  useEffect(() => {
+    if (!isInstructor) return;
+
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const refreshRoomsStatus = () => {
+      void refetchRoomsStatus();
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => {
+        void refetchRoomsStatus();
+      }, 800);
+    };
+
+    room.on(RoomEvent.ParticipantConnected, refreshRoomsStatus);
+    room.on(RoomEvent.ParticipantDisconnected, refreshRoomsStatus);
+    room.on(RoomEvent.ParticipantMetadataChanged, refreshRoomsStatus);
+
+    return () => {
+      if (retryTimer) clearTimeout(retryTimer);
+      room.off(RoomEvent.ParticipantConnected, refreshRoomsStatus);
+      room.off(RoomEvent.ParticipantDisconnected, refreshRoomsStatus);
+      room.off(RoomEvent.ParticipantMetadataChanged, refreshRoomsStatus);
+    };
+  }, [isInstructor, refetchRoomsStatus, room]);
 
   // ── EchoNote 設定確認 (アップロード先 API が利用可能か) ──
   const [echoNoteConfigured, setEchoNoteConfigured] = useState(false);
@@ -383,12 +407,42 @@ function RoomInner({
     onBeforeLeave: exportChatIfAny,
   });
 
+  const changeRoom = useCallback(
+    async (targetRoom: RoomName) => {
+      if (targetRoom === currentRoom) return;
+
+      const previousMetadata = localParticipant.metadata;
+
+      try {
+        const metadata = mergeParticipantMetadata(localParticipant.metadata, {
+          currentRoom: targetRoom,
+          raisedHand: false,
+          raisedAt: null,
+        });
+        await localParticipant.setMetadata(metadata);
+        setRaisedHand(false);
+      } catch (err) {
+        console.error('Room metadata update failed:', err);
+      }
+
+      try {
+        await onRoomChange(targetRoom);
+      } catch (err) {
+        console.error('Room change failed:', err);
+        if (previousMetadata !== undefined) {
+          localParticipant.setMetadata(previousMetadata).catch(() => {});
+        }
+      }
+    },
+    [currentRoom, localParticipant, onRoomChange]
+  );
+
   // Handle incoming data channel messages (room move commands & end-session)
   useDataChannel((msg) => {
     try {
       const data = JSON.parse(new TextDecoder().decode(msg.payload));
       if (data.type === 'move-to-room') {
-        onRoomChange(data.payload.targetRoom as RoomName);
+        void changeRoom(data.payload.targetRoom as RoomName);
       } else if (data.type === 'set-mic') {
         // 講師からのマイク制御指示。本人操作と同じソフトミュートなので、後から再度ONにできる。
         const enabled = !!(data.payload && data.payload.enabled);
@@ -485,8 +539,8 @@ function RoomInner({
   );
 
   const returnToMain = useCallback(() => {
-    onRoomChange('main');
-  }, [onRoomChange]);
+    void changeRoom('main');
+  }, [changeRoom]);
 
   // 受講生用「退出」: 録画停止 → チャット履歴 DL → LiveKit 切断 → session Cookie 削除
   const handleStudentLeave = useCallback(() => {
@@ -639,7 +693,7 @@ function RoomInner({
 
         {/* Breakout list (受講生のみ / メインルーム時。講師は右の講師ダッシュボードと重複するため非表示) */}
         {!isBreakout && !isGuest && !remoteStudio && !isInstructor && (
-          <BreakoutList onJoin={onRoomChange} roomsStatus={roomsStatus} />
+          <BreakoutList onJoin={changeRoom} roomsStatus={roomsStatus} />
         )}
 
         {/* Control bar */}
@@ -692,11 +746,13 @@ function RoomInner({
           participants={participants}
           currentRoom={currentRoom}
           instructorName={participantName}
+          selfIdentity={localParticipant.identity}
           drawerOpen={dashboardOpen}
           onCloseDrawer={() => setDashboardOpen(false)}
           roomsStatus={roomsStatus}
           onEnterStudio={enterStudio}
-          onMoveInstructor={onRoomChange}
+          onMoveInstructor={changeRoom}
+          onRoomsStatusRefresh={refetchRoomsStatus}
           onSetParticipantMic={setParticipantMic}
         />
       )}
