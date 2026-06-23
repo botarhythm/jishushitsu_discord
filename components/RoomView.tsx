@@ -696,6 +696,7 @@ function RoomInner({
           onCloseDrawer={() => setDashboardOpen(false)}
           roomsStatus={roomsStatus}
           onEnterStudio={enterStudio}
+          onMoveInstructor={onRoomChange}
           onSetParticipantMic={setParticipantMic}
         />
       )}

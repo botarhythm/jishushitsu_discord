@@ -16,6 +16,8 @@ interface InstructorDashboardProps {
   roomsStatus?: RoomsStatusMap;
   /** 収録モード（YouTube/Podcast 収録レイアウト）を開始する。メインルームのみ */
   onEnterStudio?: () => void;
+  /** 講師自身が表示中のルームを切り替える */
+  onMoveInstructor: (room: RoomName) => void;
   /** 対象参加者のマイクをON/OFFする（data-channelソフトミュート） */
   onSetParticipantMic: (participantIdentity: string, enabled: boolean) => void;
 }
@@ -34,6 +36,7 @@ export default function InstructorDashboard({
   onCloseDrawer,
   roomsStatus,
   onEnterStudio,
+  onMoveInstructor,
   onSetParticipantMic,
 }: InstructorDashboardProps) {
   const [isMoving, setIsMoving] = useState<string | null>(null);
@@ -61,6 +64,15 @@ export default function InstructorDashboard({
       return true;
     }
   });
+
+  const moveInstructorToRoom = useCallback(
+    (targetRoom: RoomName) => {
+      if (targetRoom === currentRoom) return;
+      onMoveInstructor(targetRoom);
+      onCloseDrawer?.();
+    },
+    [currentRoom, onCloseDrawer, onMoveInstructor]
+  );
 
   const moveParticipantToRoom = useCallback(
     async (participantIdentity: string, participantName: string, targetRoom: RoomName) => {
@@ -150,6 +162,47 @@ export default function InstructorDashboard({
             </p>
           </section>
         )}
+
+        {/* Instructor self movement */}
+        <section className="p-3 border-b border-stone-700">
+          <h3 className="text-xs font-medium text-stone-400 uppercase tracking-wider mb-2">
+            講師の移動
+          </h3>
+          <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+            <span className="text-stone-500">現在</span>
+            <span className="min-w-0 truncate font-medium text-stone-200">
+              {ROOM_LABELS[currentRoom]}
+            </span>
+          </div>
+          {currentRoom !== 'main' && (
+            <button
+              onClick={() => moveInstructorToRoom('main')}
+              className="mb-2 w-full rounded-lg bg-stone-100 px-3 py-2 text-sm font-medium text-stone-900 hover:bg-white transition-colors"
+            >
+              メインへ戻る
+            </button>
+          )}
+          <div className="grid grid-cols-2 gap-1.5">
+            {BREAKOUT_ROOMS.map((room) => {
+              const isCurrent = currentRoom === room;
+              return (
+                <button
+                  key={room}
+                  onClick={() => moveInstructorToRoom(room)}
+                  disabled={isCurrent}
+                  className={`rounded px-2 py-1.5 text-xs font-medium transition-colors ${
+                    isCurrent
+                      ? 'bg-green-800/50 text-green-200 cursor-default'
+                      : 'bg-stone-700 text-stone-200 hover:bg-stone-600'
+                  }`}
+                  aria-current={isCurrent ? 'true' : undefined}
+                >
+                  {ROOM_LABELS[room].replace('ブレイクアウト ', 'BO')}
+                </button>
+              );
+            })}
+          </div>
+        </section>
 
         {/* Raised hands section */}
         {raisedHandEntries.length > 0 && (
@@ -272,7 +325,7 @@ export default function InstructorDashboard({
                       {ROOM_LABELS[room]}
                     </span>
                     <div className="flex items-center gap-1.5">
-                      {isActive && <span className="text-[10px] text-green-400">● 滞中</span>}
+                      {isActive && <span className="text-[10px] text-green-400">● 入室中</span>}
                       {roomParticipants.length > 0 ? (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-400 font-medium">
                           {roomParticipants.length}名

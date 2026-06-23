@@ -4,6 +4,7 @@
 
 - Instructor dashboard BO buttons move only the selected participant.
 - Instructors stay in the main room after sending a participant to a BO room.
+- The right instructor dashboard also has "講師の移動" self-move controls; these move only the current instructor between BO rooms and the main room.
 - Participants can return to the main room voluntarily with the control bar "メインに戻る" button.
 - There is no instructor-side "終了してメインへ" action that returns everyone from a BO room.
 - `components/RoomView.tsx` keys `LiveKitRoom` by `currentRoom` so room changes remount the LiveKit connection.
