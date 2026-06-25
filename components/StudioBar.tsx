@@ -23,6 +23,7 @@ interface StudioBarProps {
   slotIdentities: (string | null)[];
   participantOptions: StudioParticipantOption[];
   showNameplates: boolean;
+  showAudience: boolean;
   onToggleMic: () => void;
   onToggleCamera: () => void;
   onToggleScreenShare: () => void;
@@ -31,6 +32,7 @@ interface StudioBarProps {
   onChangeLayout: (l: StudioLayout) => void;
   onChangeSlot: (index: number, identity: string | null) => void;
   onToggleNameplates: () => void;
+  onToggleAudience: () => void;
   onExitStudio: () => void;
   onEndSession?: () => void;
 }
@@ -52,6 +54,7 @@ export function StudioBar(props: StudioBarProps) {
     slotIdentities,
     participantOptions,
     showNameplates,
+    showAudience,
     onToggleMic,
     onToggleCamera,
     onToggleScreenShare,
@@ -60,6 +63,7 @@ export function StudioBar(props: StudioBarProps) {
     onChangeLayout,
     onChangeSlot,
     onToggleNameplates,
+    onToggleAudience,
     onExitStudio,
     onEndSession,
   } = props;
@@ -157,27 +161,36 @@ export function StudioBar(props: StudioBarProps) {
           ))}
         </select>
 
-        {/* 出演者スロット割当 */}
-        {Array.from({ length: slotCount }).map((_, i) => (
-          <select
-            key={i}
-            value={slotIdentities[i] ?? ''}
-            onChange={(e) => onChangeSlot(i, e.target.value || null)}
-            className="max-w-[8rem] rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200"
-            aria-label={`出演者${i + 1}`}
-            title={`出演者${i + 1}`}
-          >
-            <option value="">枠{i + 1}: 未割当</option>
-            {participantOptions.map((p) => (
-              <option key={p.identity} value={p.identity}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        ))}
+        {/* 出演者スロット割当（speaker レイアウトは主役/サブのラベル表示） */}
+        {Array.from({ length: slotCount }).map((_, i) => {
+          const slotName =
+            layout === 'speaker'
+              ? (['主役(ゲスト)', 'サブ1', 'サブ2'][i] ?? `枠${i + 1}`)
+              : `出演者${i + 1}`;
+          return (
+            <select
+              key={i}
+              value={slotIdentities[i] ?? ''}
+              onChange={(e) => onChangeSlot(i, e.target.value || null)}
+              className="max-w-[9rem] rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200"
+              aria-label={slotName}
+              title={slotName}
+            >
+              <option value="">{slotName}: 未割当</option>
+              {participantOptions.map((p) => (
+                <option key={p.identity} value={p.identity}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          );
+        })}
 
         <BarButton active={showNameplates} label="名前表示" onClick={onToggleNameplates}>
           🏷️
+        </BarButton>
+        <BarButton active={showAudience} label="視聴者を下段に表示" onClick={onToggleAudience}>
+          👥
         </BarButton>
 
         <Divider />
