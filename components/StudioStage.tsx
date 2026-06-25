@@ -11,12 +11,13 @@ import type { TrackReference } from '@livekit/components-react';
 import { Track, Participant } from 'livekit-client';
 
 /** 収録レイアウトのプリセット */
-export type StudioLayout = 'split' | 'screen-main' | 'solo';
+export type StudioLayout = 'split' | 'screen-main' | 'solo' | 'speaker';
 
 export const STUDIO_LAYOUT_LABELS: Record<StudioLayout, string> = {
   split: '横並び2分割',
   'screen-main': '画面共有メイン+小窓',
   solo: 'ソロ1名',
+  speaker: '主役+サブ2名',
 };
 
 /** レイアウトごとに必要な出演者スロット数 */
@@ -24,6 +25,7 @@ export const STUDIO_LAYOUT_SLOTS: Record<StudioLayout, number> = {
   split: 2,
   'screen-main': 2,
   solo: 1,
+  speaker: 3,
 };
 
 interface StudioStageProps {
@@ -135,7 +137,89 @@ export function StudioStage({ layout, slotIdentities, showNameplates, stageRef }
             </div>
           </div>
         )}
+
+        {layout === 'speaker' && (
+          <div className="absolute inset-0 flex gap-px bg-stone-950">
+            {/* 主役 (ゲストスピーカー) を大きくメイン表示 */}
+            <div className="relative min-w-0 flex-1">
+              <Slot
+                participant={byIdentity.get(slotIdentities[0] ?? '') ?? null}
+                trackRef={camRef(slotIdentities[0] ?? null)}
+                showNameplate={showNameplates}
+                cover
+              />
+            </div>
+            {/* サブ2名 (講師など) を右に縦積み */}
+            <div className="flex w-[28%] min-w-[10rem] max-w-[22rem] flex-col gap-px">
+              {[1, 2].map((i) => (
+                <div key={i} className="relative min-h-0 flex-1">
+                  <Slot
+                    participant={byIdentity.get(slotIdentities[i] ?? '') ?? null}
+                    trackRef={camRef(slotIdentities[i] ?? null)}
+                    showNameplate={showNameplates}
+                    cover
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 視聴者サムネ列（収録/講演ステージの下段）。
+ *
+ * 出演者 (excludeIdentities) 以外の参加者カメラを小さく横並び表示する。
+ * ステージ (16:9, Region Capture のクロップ対象) の外に置かれるため、
+ * 表示はされるが録画フレームには含まれない。
+ */
+export function AudienceStrip({ excludeIdentities }: { excludeIdentities: (string | null)[] }) {
+  const tracks = useTracks([Track.Source.Camera], { onlySubscribed: false });
+  const participants = useParticipants();
+  const exclude = useMemo(
+    () => new Set(excludeIdentities.filter(Boolean) as string[]),
+    [excludeIdentities]
+  );
+  const audience = participants.filter((p) => !exclude.has(p.identity));
+
+  const camRef = (identity: string): TrackReference | null => {
+    const t = tracks.find(
+      (tr) =>
+        isTrackReference(tr) &&
+        tr.participant.identity === identity &&
+        tr.source === Track.Source.Camera
+    );
+    return t && isTrackReference(t) ? t : null;
+  };
+
+  if (audience.length === 0) return null;
+
+  return (
+    <div className="flex h-24 shrink-0 items-center gap-2 overflow-x-auto bg-stone-950/95 px-3 py-2">
+      {audience.map((p) => {
+        const ref = camRef(p.identity);
+        const name = p.name?.trim() || p.identity;
+        return (
+          <div
+            key={p.identity}
+            className="relative aspect-video h-full shrink-0 overflow-hidden rounded-md border border-stone-700/70 bg-stone-900"
+          >
+            {ref ? (
+              <VideoTrack trackRef={ref} className="h-full w-full object-cover" />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center px-1 text-center text-[10px] text-stone-500">
+                {name}
+              </div>
+            )}
+            <span className="absolute inset-x-0 bottom-0 truncate bg-black/50 px-1 py-0.5 text-[9px] text-white">
+              {name}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }

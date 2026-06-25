@@ -30,7 +30,7 @@ import { InviteModal } from './InviteModal';
 import { ParticipantGrid } from './ParticipantGrid';
 import { BreakoutList } from './BreakoutList';
 import { ControlBar } from './ControlBar';
-import { StudioStage, type StudioLayout, STUDIO_LAYOUT_SLOTS } from './StudioStage';
+import { StudioStage, AudienceStrip, type StudioLayout, STUDIO_LAYOUT_SLOTS } from './StudioStage';
 import { StudioBar } from './StudioBar';
 import { AutoLogoutModal } from './AutoLogoutModal';
 import { ChatPanel } from './ChatPanel';
@@ -235,8 +235,10 @@ function RoomInner({
   // ── 収録モード（講師ローカルのUIのみ切替。録画は自タブキャプチャなので同期不要） ──
   const [studioMode, setStudioMode] = useState(false);
   const [studioLayout, setStudioLayout] = useState<StudioLayout>('split');
-  const [studioSlots, setStudioSlots] = useState<(string | null)[]>([null, null]);
+  const [studioSlots, setStudioSlots] = useState<(string | null)[]>([null, null, null]);
   const [showNameplates, setShowNameplates] = useState(true);
+  // 下段に視聴者サムネを表示するか (表示のみ。録画ステージの外なので録画には含まれない)
+  const [showAudience, setShowAudience] = useState(false);
   // Region Capture のクロップ対象 (収録ステージ 16:9)。録画をこの矩形に固定する。
   const studioStageRef = useRef<HTMLDivElement>(null);
 
@@ -245,6 +247,7 @@ function RoomInner({
     layout: StudioLayout;
     slots: (string | null)[];
     showNameplates: boolean;
+    showAudience: boolean;
   } | null>(null);
 
   const participantOptions = useMemo(
@@ -347,30 +350,37 @@ function RoomInner({
     }
   }, [studioMode, screenShareActive]);
 
-  // ホストは収録モードの設定 (有効/レイアウト/出演者割当/名前表示) を全参加者へ配信し、
-  // 全員の表示を強制同期する。設定変更時に送信し、後から入室した参加者にも再送する。
+  // ホストは収録/講演モードの設定 (有効/レイアウト/出演者割当/名前表示/視聴者表示) を
+  // 全参加者へ配信し、全員の表示を強制同期 (ロック) する。
+  // クライアント側 publishData は講師ブラウザの publisher データチャネル経由で届かない
+  // ことがあるため、マイク制御・移動と同じくサーバー側 sendData (/api/broadcast-studio)
+  // 経由で配信する。設定変更時に送信し、後から入室した参加者にも再送する。
+  const hasBroadcastedStudioRef = useRef(false);
   useEffect(() => {
     if (!isInstructor) return;
+    // まだ一度も収録/講演モードを起動していない初期状態では配信しない
+    if (!studioMode && !hasBroadcastedStudioRef.current) return;
+    hasBroadcastedStudioRef.current = true;
     const publish = () => {
-      const payload = JSON.stringify({
-        type: 'studio-state',
-        payload: {
+      fetch('/api/broadcast-studio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomName: currentRoom,
           active: studioMode,
           layout: studioLayout,
           slots: studioSlots,
           showNameplates,
-        },
-      });
-      room.localParticipant
-        .publishData(new TextEncoder().encode(payload), { reliable: true })
-        .catch(() => {});
+          showAudience,
+        }),
+      }).catch(() => {});
     };
     publish();
     room.on(RoomEvent.ParticipantConnected, publish);
     return () => {
       room.off(RoomEvent.ParticipantConnected, publish);
     };
-  }, [isInstructor, studioMode, studioLayout, studioSlots, showNameplates, room]);
+  }, [isInstructor, studioMode, studioLayout, studioSlots, showNameplates, showAudience, currentRoom, room]);
 
   // ── チャットUI / デバイス設定UI ──
   const [chatOpen, setChatOpen] = useState(false);
@@ -455,6 +465,7 @@ function RoomInner({
             layout: data.payload.layout as StudioLayout,
             slots: data.payload.slots as (string | null)[],
             showNameplates: !!data.payload.showNameplates,
+            showAudience: !!data.payload.showAudience,
           });
         } else {
           setRemoteStudio(null);
@@ -562,12 +573,22 @@ function RoomInner({
   if (isInstructor && studioMode) {
     return (
       <div className="relative h-dvh w-screen overflow-hidden bg-black">
-        <StudioStage
-          layout={studioLayout}
-          slotIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
-          showNameplates={showNameplates}
-          stageRef={studioStageRef}
-        />
+        <div className="flex h-full w-full flex-col">
+          <div className="min-h-0 flex-1">
+            <StudioStage
+              layout={studioLayout}
+              slotIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
+              showNameplates={showNameplates}
+              stageRef={studioStageRef}
+            />
+          </div>
+          {/* 視聴者サムネは録画ステージ (16:9) の外。表示されるが録画には含まれない。 */}
+          {showAudience && (
+            <AudienceStrip
+              excludeIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
+            />
+          )}
+        </div>
         <StudioBar
           isMicOn={isMicOn}
           isCameraOn={isCameraOn}
@@ -578,6 +599,7 @@ function RoomInner({
           slotIdentities={studioSlots}
           participantOptions={participantOptions}
           showNameplates={showNameplates}
+          showAudience={showAudience}
           onToggleMic={toggleMic}
           onToggleCamera={toggleCamera}
           onToggleScreenShare={toggleScreenShare}
@@ -586,6 +608,7 @@ function RoomInner({
           onChangeLayout={setStudioLayout}
           onChangeSlot={changeStudioSlot}
           onToggleNameplates={() => setShowNameplates((v) => !v)}
+          onToggleAudience={() => setShowAudience((v) => !v)}
           onExitStudio={exitStudio}
           onEndSession={!isBreakout ? openEndModal : undefined}
         />
@@ -667,14 +690,26 @@ function RoomInner({
         {/* メインビュー: ホストが配信中はその収録コンポジションを全参加者に強制表示 */}
         <div className="flex-1 min-h-0 overflow-auto p-3 relative">
           {remoteStudio ? (
-            <StudioStage
-              layout={remoteStudio.layout}
-              slotIdentities={remoteStudio.slots.slice(
-                0,
-                STUDIO_LAYOUT_SLOTS[remoteStudio.layout]
+            <div className="flex h-full w-full flex-col">
+              <div className="min-h-0 flex-1">
+                <StudioStage
+                  layout={remoteStudio.layout}
+                  slotIdentities={remoteStudio.slots.slice(
+                    0,
+                    STUDIO_LAYOUT_SLOTS[remoteStudio.layout]
+                  )}
+                  showNameplates={remoteStudio.showNameplates}
+                />
+              </div>
+              {remoteStudio.showAudience && (
+                <AudienceStrip
+                  excludeIdentities={remoteStudio.slots.slice(
+                    0,
+                    STUDIO_LAYOUT_SLOTS[remoteStudio.layout]
+                  )}
+                />
               )}
-              showNameplates={remoteStudio.showNameplates}
-            />
+            </div>
           ) : (
             <ParticipantGrid
               focused={focusedParticipant}
