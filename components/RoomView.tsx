@@ -614,12 +614,14 @@ function RoomInner({
           onChangeSlot={changeStudioSlot}
           onToggleNameplates={() => setShowNameplates((v) => !v)}
           onToggleAudience={() => setShowAudience((v) => !v)}
+          onOpenInvite={!isBreakout ? openInvite : undefined}
           onExitStudio={exitStudio}
           onEndSession={!isBreakout ? openEndModal : undefined}
         />
 
-        {/* デバイス設定 / 終了モーダルは収録モードでも利用可能 */}
+        {/* デバイス設定 / 招待 / 終了モーダルは収録モードでも利用可能 */}
         {deviceSettingsOpen && <DeviceSettingsModal onClose={closeDeviceSettings} />}
+        {inviteOpen && <InviteModal onClose={closeInvite} />}
         {endModalOpen && (
           <EndSessionModal
             isRecording={isRecording}

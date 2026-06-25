@@ -33,6 +33,8 @@ interface StudioBarProps {
   onChangeSlot: (index: number, identity: string | null) => void;
   onToggleNameplates: () => void;
   onToggleAudience: () => void;
+  /** 収録モード中に受講生招待モーダルを開く（メインルームのホストのみ） */
+  onOpenInvite?: () => void;
   onExitStudio: () => void;
   onEndSession?: () => void;
 }
@@ -64,6 +66,7 @@ export function StudioBar(props: StudioBarProps) {
     onChangeSlot,
     onToggleNameplates,
     onToggleAudience,
+    onOpenInvite,
     onExitStudio,
     onEndSession,
   } = props;
@@ -192,6 +195,16 @@ export function StudioBar(props: StudioBarProps) {
         <BarButton active={showAudience} label="視聴者を下段に表示" onClick={onToggleAudience}>
           👥
         </BarButton>
+
+        {onOpenInvite && (
+          <>
+            <Divider />
+            {/* 収録モード中でも受講生を招待できる（通常モードのヘッダー招待と同じモーダル） */}
+            <BarButton label="受講生を招待" onClick={onOpenInvite}>
+              ✉️
+            </BarButton>
+          </>
+        )}
 
         <Divider />
 
