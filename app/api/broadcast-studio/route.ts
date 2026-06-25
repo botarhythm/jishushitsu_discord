@@ -13,6 +13,8 @@ interface BroadcastStudioRequest {
   showNameplates: boolean;
   /** 下段に視聴者サムネを表示するか（録画には含めない、表示のみ） */
   showAudience: boolean;
+  /** 配信元（ホスト）の identity。サーバー sendData は送信元にも届くため、受信側で自分の配信を無視するのに使う */
+  senderIdentity?: string;
 }
 
 /**
@@ -29,7 +31,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body: BroadcastStudioRequest = await request.json();
-    const { roomName, active, layout, slots, showNameplates, showAudience } = body;
+    const { roomName, active, layout, slots, showNameplates, showAudience, senderIdentity } = body;
 
     if (!roomName) {
       return NextResponse.json({ error: 'roomName が必要です' }, { status: 400 });
@@ -53,6 +55,7 @@ export async function POST(request: NextRequest) {
         slots,
         showNameplates: !!showNameplates,
         showAudience: !!showAudience,
+        from: senderIdentity ?? null,
       },
     });
 

@@ -372,6 +372,7 @@ function RoomInner({
           slots: studioSlots,
           showNameplates,
           showAudience,
+          senderIdentity: localParticipant.identity,
         }),
       }).catch(() => {});
     };
@@ -380,7 +381,7 @@ function RoomInner({
     return () => {
       room.off(RoomEvent.ParticipantConnected, publish);
     };
-  }, [isInstructor, studioMode, studioLayout, studioSlots, showNameplates, showAudience, currentRoom, room]);
+  }, [isInstructor, studioMode, studioLayout, studioSlots, showNameplates, showAudience, currentRoom, room, localParticipant]);
 
   // ── チャットUI / デバイス設定UI ──
   const [chatOpen, setChatOpen] = useState(false);
@@ -459,8 +460,12 @@ function RoomInner({
         localParticipant.setMicrophoneEnabled(enabled).catch(() => {});
         setIsMicOn(enabled);
       } else if (data.type === 'studio-state') {
-        // ホストの収録コンポジションを全参加者に強制適用 (自分がホスト中の studio は別途優先)
-        if (data.payload?.active) {
+        // ホストの収録コンポジションを全参加者に強制適用 (自分がホスト中の studio は別途優先)。
+        // サーバー sendData は送信元(ホスト)にも届くため、自分が配信したものは無視する
+        // (適用すると収録モード終了時に一瞬ホストへ自分のコンポジションが残って描画される)。
+        if (data.payload?.from && data.payload.from === localParticipant.identity) {
+          // 自分の配信: ローカルの studioMode で管理しているため適用不要
+        } else if (data.payload?.active) {
           setRemoteStudio({
             layout: data.payload.layout as StudioLayout,
             slots: data.payload.slots as (string | null)[],
