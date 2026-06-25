@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { RoomServiceClient, DataPacket_Kind } from 'livekit-server-sdk';
+import { RoomServiceClient } from 'livekit-server-sdk';
 import { requireInstructor } from '@/lib/auth-guard';
 
 interface BroadcastStudioRequest {
@@ -13,17 +13,18 @@ interface BroadcastStudioRequest {
   showNameplates: boolean;
   /** 下段に視聴者サムネを表示するか（録画には含めない、表示のみ） */
   showAudience: boolean;
-  /** 配信元（ホスト）の identity。サーバー sendData は送信元にも届くため、受信側で自分の配信を無視するのに使う */
+  /** 設定したホストの identity。受信側で自分の設定を無視する（ホストは studioMode で制御）のに使う */
   senderIdentity?: string;
 }
 
 /**
  * 講師（ホスト）の収録/講演コンポジションをルーム内の全参加者へ強制配信する。
  *
- * クライアント側 `localParticipant.publishData` は講師ブラウザの publisher
- * データチャネル経由で届かないことがあるため（マイク制御・移動と同様）、
- * サーバー側 `roomService.sendData` で `studio-state` を配信する（実績のある経路）。
- * destinationIdentities を省略してルーム全体へブロードキャストする。
+ * 状態は LiveKit の **room metadata** に保存する。
+ * データチャネル（sendData/publishData）の一発プッシュは、送信時に受信パスが未確立の
+ * 後から入室した参加者を取りこぼし、再送もされない（次の設定変更まで届かない）。
+ * room metadata なら参加者は接続時に現在値を必ず取得でき、変更は RoomMetadataChanged で
+ * 全員へ再配布されるため、後入室・再接続でも確実に同期する。
  */
 export async function POST(request: NextRequest) {
   const auth = await requireInstructor();
@@ -47,22 +48,22 @@ export async function POST(request: NextRequest) {
 
     const roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
 
-    const message = JSON.stringify({
-      type: 'studio-state',
-      payload: {
-        active: !!active,
-        layout,
-        slots,
-        showNameplates: !!showNameplates,
-        showAudience: !!showAudience,
-        from: senderIdentity ?? null,
-      },
+    // studio 状態を room metadata に保存。collision 回避のため `studio` キーでラップする。
+    // 非アクティブ（解除）時は studio:null を書き、受信側でロックを解除させる。
+    const metadata = JSON.stringify({
+      studio: active
+        ? {
+            active: true,
+            layout,
+            slots,
+            showNameplates: !!showNameplates,
+            showAudience: !!showAudience,
+            host: senderIdentity ?? null,
+          }
+        : null,
     });
 
-    const data = new TextEncoder().encode(message);
-
-    // destinationIdentities 省略 = ルーム内の全参加者へブロードキャスト
-    await roomService.sendData(roomName, data, DataPacket_Kind.RELIABLE);
+    await roomService.updateRoomMetadata(roomName, metadata);
 
     return NextResponse.json({ success: true });
   } catch (error) {

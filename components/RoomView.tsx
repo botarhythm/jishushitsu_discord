@@ -352,36 +352,71 @@ function RoomInner({
 
   // ホストは収録/講演モードの設定 (有効/レイアウト/出演者割当/名前表示/視聴者表示) を
   // 全参加者へ配信し、全員の表示を強制同期 (ロック) する。
-  // クライアント側 publishData は講師ブラウザの publisher データチャネル経由で届かない
-  // ことがあるため、マイク制御・移動と同じくサーバー側 sendData (/api/broadcast-studio)
-  // 経由で配信する。設定変更時に送信し、後から入室した参加者にも再送する。
+  // 状態はサーバー側で LiveKit の room metadata に保存する (/api/broadcast-studio)。
+  // データチャネルの一発プッシュは後から入室した参加者を取りこぼすが、room metadata なら
+  // 後入室・再接続でも接続時に確実に取得できる。よってここでは設定変更時に1回送るだけでよい
+  // (後入室者への再送=ParticipantConnected フックは不要)。
   const hasBroadcastedStudioRef = useRef(false);
   useEffect(() => {
     if (!isInstructor) return;
     // まだ一度も収録/講演モードを起動していない初期状態では配信しない
     if (!studioMode && !hasBroadcastedStudioRef.current) return;
     hasBroadcastedStudioRef.current = true;
-    const publish = () => {
-      fetch('/api/broadcast-studio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomName: currentRoom,
-          active: studioMode,
-          layout: studioLayout,
-          slots: studioSlots,
-          showNameplates,
-          showAudience,
-          senderIdentity: localParticipant.identity,
-        }),
-      }).catch(() => {});
+    fetch('/api/broadcast-studio', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        roomName: currentRoom,
+        active: studioMode,
+        layout: studioLayout,
+        slots: studioSlots,
+        showNameplates,
+        showAudience,
+        senderIdentity: localParticipant.identity,
+      }),
+    }).catch(() => {});
+  }, [isInstructor, studioMode, studioLayout, studioSlots, showNameplates, showAudience, currentRoom, localParticipant]);
+
+  // 全参加者は room metadata から studio 状態を反映する (後入室・再接続でも確実に同期)。
+  // 自分がホストとして設定中の studio は適用しない (ローカルの studioMode で制御するため)。
+  useEffect(() => {
+    type StudioMeta = {
+      active?: boolean;
+      layout?: StudioLayout;
+      slots?: (string | null)[];
+      showNameplates?: boolean;
+      showAudience?: boolean;
+      host?: string | null;
     };
-    publish();
-    room.on(RoomEvent.ParticipantConnected, publish);
+    const applyStudio = () => {
+      let studio: StudioMeta | null = null;
+      try {
+        const parsed = room.metadata
+          ? (JSON.parse(room.metadata) as { studio?: StudioMeta | null })
+          : null;
+        studio = parsed?.studio ?? null;
+      } catch {
+        studio = null;
+      }
+      if (studio?.active && studio.host !== localParticipant.identity) {
+        setRemoteStudio({
+          layout: (studio.layout ?? 'split') as StudioLayout,
+          slots: studio.slots ?? [],
+          showNameplates: !!studio.showNameplates,
+          showAudience: !!studio.showAudience,
+        });
+      } else {
+        setRemoteStudio(null);
+      }
+    };
+    applyStudio();
+    room.on(RoomEvent.RoomMetadataChanged, applyStudio);
+    room.on(RoomEvent.Connected, applyStudio);
     return () => {
-      room.off(RoomEvent.ParticipantConnected, publish);
+      room.off(RoomEvent.RoomMetadataChanged, applyStudio);
+      room.off(RoomEvent.Connected, applyStudio);
     };
-  }, [isInstructor, studioMode, studioLayout, studioSlots, showNameplates, showAudience, currentRoom, room, localParticipant]);
+  }, [room, localParticipant]);
 
   // ── チャットUI / デバイス設定UI ──
   const [chatOpen, setChatOpen] = useState(false);
@@ -459,22 +494,6 @@ function RoomInner({
         const enabled = !!(data.payload && data.payload.enabled);
         localParticipant.setMicrophoneEnabled(enabled).catch(() => {});
         setIsMicOn(enabled);
-      } else if (data.type === 'studio-state') {
-        // ホストの収録コンポジションを全参加者に強制適用 (自分がホスト中の studio は別途優先)。
-        // サーバー sendData は送信元(ホスト)にも届くため、自分が配信したものは無視する
-        // (適用すると収録モード終了時に一瞬ホストへ自分のコンポジションが残って描画される)。
-        if (data.payload?.from && data.payload.from === localParticipant.identity) {
-          // 自分の配信: ローカルの studioMode で管理しているため適用不要
-        } else if (data.payload?.active) {
-          setRemoteStudio({
-            layout: data.payload.layout as StudioLayout,
-            slots: data.payload.slots as (string | null)[],
-            showNameplates: !!data.payload.showNameplates,
-            showAudience: !!data.payload.showAudience,
-          });
-        } else {
-          setRemoteStudio(null);
-        }
       } else if (data.type === 'end-session') {
         if (!isInstructor) {
           alert('講師がセッションを終了しました。退出します。');
