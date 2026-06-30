@@ -24,6 +24,11 @@ interface StudioBarProps {
   participantOptions: StudioParticipantOption[];
   showNameplates: boolean;
   showAudience: boolean;
+  /** 左のチャットパネルが開いているか */
+  chatOpen: boolean;
+  /** チャット未読数 (最小化中に増加) */
+  chatUnreadCount: number;
+  onToggleChat: () => void;
   onToggleMic: () => void;
   onToggleCamera: () => void;
   onToggleScreenShare: () => void;
@@ -57,6 +62,9 @@ export function StudioBar(props: StudioBarProps) {
     participantOptions,
     showNameplates,
     showAudience,
+    chatOpen,
+    chatUnreadCount,
+    onToggleChat,
     onToggleMic,
     onToggleCamera,
     onToggleScreenShare,
@@ -112,6 +120,20 @@ export function StudioBar(props: StudioBarProps) {
       }}
     >
       <div className="flex max-w-full items-center gap-2 overflow-x-auto rounded-2xl border border-stone-700/70 bg-stone-900/85 px-3 py-2 shadow-2xl backdrop-blur-md">
+        {/* チャット表示切替 (左パネル。収録には映らない) */}
+        <div className="relative">
+          <BarButton active={chatOpen} label={chatOpen ? 'チャットを最小化' : 'チャットを表示'} onClick={onToggleChat}>
+            💬
+          </BarButton>
+          {!chatOpen && chatUnreadCount > 0 && (
+            <span className="absolute -right-1 -top-1 flex min-w-[1.1rem] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+              {chatUnreadCount > 99 ? '99+' : chatUnreadCount}
+            </span>
+          )}
+        </div>
+
+        <Divider />
+
         {/* メディア制御 */}
         <BarButton active={isMicOn} label={isMicOn ? 'マイクON' : 'マイクOFF'} onClick={onToggleMic}>
           {isMicOn ? '🎤' : '🔇'}
