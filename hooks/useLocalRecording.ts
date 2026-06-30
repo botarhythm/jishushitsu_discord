@@ -55,6 +55,12 @@ interface UseLocalRecordingOptions {
   includeMicrophone?: boolean;
   /** LiveKit Room。渡すとリモート参加者の音声を mix する */
   room?: Room | null;
+  /**
+   * cropTarget を渡したのに Region Capture が有効化できなかった (非対応 or 失敗) 瞬間に呼ばれる。
+   * タブ全体が録画されるため、呼び出し側はクロップ矩形外に表示している
+   * 「録画に映ってはいけない」UI (例: 収録モードのチャットパネル) を直ちに閉じること。
+   */
+  onRegionCaptureUnavailable?: () => void;
 }
 
 interface RemoteAudioNode {
@@ -86,10 +92,20 @@ export function useLocalRecording({
   filePrefix = '自習室',
   includeMicrophone = true,
   room = null,
+  onRegionCaptureUnavailable,
 }: UseLocalRecordingOptions = {}) {
   const [isRecording, setIsRecording] = useState(false);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * cropTarget を渡して録画開始したとき、Region Capture (cropTo) が実際に有効化できたか。
+   * - true: クロップ成功。指定要素の矩形外 (例: 収録モードのチャットパネル) は録画に映らない。
+   * - false: cropTarget を渡したが API 非対応 or cropTo 失敗。タブ全体が録画され、
+   *   矩形外の要素も映り込む。呼び出し側はこのとき矩形外に「映ってはいけない」UI
+   *   (チャット等) を表示したままにしないよう警告・強制非表示する必要がある。
+   * - null: cropTarget を渡していない (制約なし、または録画未開始)。
+   */
+  const [regionCaptureActive, setRegionCaptureActive] = useState<boolean | null>(null);
 
   const resourcesRef = useRef<RecordingResources | null>(null);
   const stopRef = useRef<() => Promise<Blob | null>>(() => Promise.resolve(null));
@@ -178,6 +194,7 @@ export function useLocalRecording({
     cropTarget?: HTMLElement | null | (() => HTMLElement | null),
   ) => {
     setError(null);
+    setRegionCaptureActive(null);
     if (resourcesRef.current) return;
 
     const preset = QUALITY_PRESETS[quality];
@@ -233,12 +250,19 @@ export function useLocalRecording({
         try {
           const ct = await CropTargetCtor.fromElement(cropEl);
           await videoTrack.cropTo(ct);
+          setRegionCaptureActive(true);
         } catch (e) {
           console.warn(
             '[useLocalRecording] Region Capture (cropTo) に失敗。タブ全体のまま録画します。',
             e
           );
+          setRegionCaptureActive(false);
+          onRegionCaptureUnavailable?.();
         }
+      } else {
+        // CropTarget / cropTo 非対応ブラウザ (Chromium 系以外)。タブ全体のまま録画される。
+        setRegionCaptureActive(false);
+        onRegionCaptureUnavailable?.();
       }
     }
 
@@ -386,7 +410,7 @@ export function useLocalRecording({
     recorder.start(1000);
     setStartedAt(Date.now());
     setIsRecording(true);
-  }, [includeMicrophone, room]);
+  }, [includeMicrophone, room, onRegionCaptureUnavailable]);
 
-  return { isRecording, startedAt, error, start, stop };
+  return { isRecording, startedAt, error, regionCaptureActive, start, stop };
 }
