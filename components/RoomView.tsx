@@ -34,6 +34,7 @@ import { StudioStage, AudienceStrip, type StudioLayout, STUDIO_LAYOUT_SLOTS } fr
 import { StudioBar } from './StudioBar';
 import { AutoLogoutModal } from './AutoLogoutModal';
 import { ChatPanel } from './ChatPanel';
+import { StudioChatPanel } from './StudioChatPanel';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
 
 type InitialRec = 'off' | 'audio' | 'screen' | 'both';
@@ -150,6 +151,11 @@ function RoomInner({
     setAudioRecordingOn((v) => !v);
   }, []);
 
+  // チャットパネルの開閉。収録モードでは Region Capture が無効化された瞬間に
+  // 強制的に閉じる必要があるため (録画タブ全体に映り込んでしまう)、録画フックより先に宣言する。
+  const [chatOpen, setChatOpen] = useState(false);
+  const closeChatOnRegionCaptureUnavailable = useCallback(() => setChatOpen(false), []);
+
   // ── ローカル録画（全員対象。タブを録画して WebM 保存） ──
   const [recordingQuality, setRecordingQuality] = useState<RecordingQuality>('streaming');
   const {
@@ -157,7 +163,15 @@ function RoomInner({
     start: startLocalRecording,
     stop: stopLocalRecording,
     error: localRecordingError,
-  } = useLocalRecording({ room });
+    regionCaptureActive,
+  } = useLocalRecording({
+    room,
+    // Region Capture (チャットをステージ矩形外に逃がして録画から除外する仕組み) が
+    // 非対応/失敗のブラウザでは、録画はタブ全体になりチャットパネルも映り込んでしまう。
+    // その瞬間に強制的にチャットを閉じる。
+    onRegionCaptureUnavailable: closeChatOnRegionCaptureUnavailable,
+  });
+  const chatHiddenFromRecording = !isLocalRecording || regionCaptureActive !== false;
 
   useEffect(() => {
     if (localRecordingError) {
@@ -419,7 +433,6 @@ function RoomInner({
   }, [room, localParticipant]);
 
   // ── チャットUI / デバイス設定UI ──
-  const [chatOpen, setChatOpen] = useState(false);
   const [chatUnread, setChatUnread] = useState(0);
   const [deviceSettingsOpen, setDeviceSettingsOpen] = useState(false);
   const toggleChat = useCallback(() => setChatOpen((v) => !v), []);
@@ -597,23 +610,40 @@ function RoomInner({
   if (isInstructor && studioMode) {
     return (
       <div className="relative h-dvh w-screen overflow-hidden bg-black">
-        <div className="flex h-full w-full flex-col">
-          <div className="min-h-0 flex-1">
-            <StudioStage
-              layout={studioLayout}
-              slotIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
-              showNameplates={showNameplates}
-              stageRef={studioStageRef}
-            />
+        <div className="flex h-full w-full">
+          {/* 左: チャット (収録中も参加者の発言を確認できる)。ステージの flex 兄弟として
+              配置するため Region Capture のクロップ矩形に重ならない = 録画には映らない。 */}
+          <StudioChatPanel
+            open={chatOpen}
+            onClose={() => setChatOpen(false)}
+            onUnreadChange={setChatUnread}
+            chatMessages={chat.chatMessages}
+            send={chat.send}
+            isSending={chat.isSending}
+          />
+          {/* 右: 収録ステージ */}
+          <div className="flex h-full min-w-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1">
+              <StudioStage
+                layout={studioLayout}
+                slotIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
+                showNameplates={showNameplates}
+                stageRef={studioStageRef}
+              />
+            </div>
+            {/* 視聴者サムネは録画ステージ (16:9) の外。表示されるが録画には含まれない。 */}
+            {showAudience && (
+              <AudienceStrip
+                excludeIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
+              />
+            )}
           </div>
-          {/* 視聴者サムネは録画ステージ (16:9) の外。表示されるが録画には含まれない。 */}
-          {showAudience && (
-            <AudienceStrip
-              excludeIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
-            />
-          )}
         </div>
         <StudioBar
+          chatOpen={chatOpen}
+          chatUnreadCount={chatUnread}
+          onToggleChat={toggleChat}
+          chatDisabled={!chatHiddenFromRecording}
           isMicOn={isMicOn}
           isCameraOn={isCameraOn}
           isScreenSharing={isScreenSharing}
