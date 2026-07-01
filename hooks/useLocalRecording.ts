@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Room, RemoteParticipant, RemoteTrack, RemoteTrackPublication } from 'livekit-client';
 import { RoomEvent, Track } from 'livekit-client';
+import { describeDisplayMediaFailure, isDisplayMediaSupported } from '@/lib/media-device-error';
 
 /**
  * MediaRecorder の WebM 出力に SeekHead / Cues / Duration を注入して
@@ -97,6 +98,14 @@ export function useLocalRecording({
   const [isRecording, setIsRecording] = useState(false);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // navigator はサーバーでは存在しないため、SSR/ハイドレーション不整合を避けて
+  // 楽観的に true から始め、マウント後 (クライアントのみ) に実際の対応状況へ補正する。
+  const [isSupported, setIsSupported] = useState(true);
+  useEffect(() => {
+    // setState を microtask に逃がし、effect body 内での同期 setState を回避
+    // (MobileHostWarning 等と同じパターン)。
+    queueMicrotask(() => setIsSupported(isDisplayMediaSupported()));
+  }, []);
   /**
    * cropTarget を渡して録画開始したとき、Region Capture (cropTo) が実際に有効化できたか。
    * - true: クロップ成功。指定要素の矩形外 (例: 収録モードのチャットパネル) は録画に映らない。
@@ -197,6 +206,14 @@ export function useLocalRecording({
     setRegionCaptureActive(null);
     if (resourcesRef.current) return;
 
+    // iOS Safari (iPhoneの全ブラウザがWebKitベースで同様) は getDisplayMedia 自体が
+    // 存在しない。呼び出せば TypeError になり、生の英語メッセージがそのまま error state に
+    // 入ってしまうため、先に feature-detect して分かりやすい日本語メッセージを返す。
+    if (!isDisplayMediaSupported()) {
+      setError('お使いの端末・ブラウザは画面録画に対応していません。パソコンのChrome・Edgeなどでお試しください。');
+      return;
+    }
+
     const preset = QUALITY_PRESETS[quality];
 
     // 録画対象は「セッション中の自習室タブそのもの」。
@@ -226,11 +243,10 @@ export function useLocalRecording({
         preferCurrentTab: true,
       } as DisplayMediaStreamOptions);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
       if (err instanceof DOMException && err.name === 'NotAllowedError') {
-        // silent
+        // silent (ピッカーをキャンセルしただけ)
       } else {
-        setError(msg);
+        setError(describeDisplayMediaFailure(err));
       }
       return;
     }
@@ -412,5 +428,13 @@ export function useLocalRecording({
     setIsRecording(true);
   }, [includeMicrophone, room, onRegionCaptureUnavailable]);
 
-  return { isRecording, startedAt, error, regionCaptureActive, start, stop };
+  return {
+    isRecording,
+    startedAt,
+    error,
+    regionCaptureActive,
+    isSupported,
+    start,
+    stop,
+  };
 }

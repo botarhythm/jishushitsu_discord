@@ -10,6 +10,8 @@ interface ControlBarProps {
   isInstructor: boolean;
   isBreakout: boolean;
   isLocalRecording: boolean;
+  /** true の間は録画ボタンを無効化する (iPhone等 getDisplayMedia 非対応環境向け) */
+  recordingUnsupported?: boolean;
   isAudioRecording: boolean;
   showAudioRecordingButton: boolean;
   /** 講師がメインルームに居る場合に表示するセッション終了ボタンのコールバック */
@@ -39,6 +41,7 @@ export function ControlBar({
   isInstructor,
   isBreakout,
   isLocalRecording,
+  recordingUnsupported = false,
   isAudioRecording,
   showAudioRecordingButton,
   onEndSession,
@@ -109,12 +112,22 @@ export function ControlBar({
       <div className="flex flex-col items-center gap-1">
         <button
           onClick={onToggleLocalRecording}
+          disabled={recordingUnsupported}
           className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
-            isLocalRecording
-              ? 'bg-amber-600 text-white shadow-lg shadow-amber-500/30 animate-pulse'
-              : 'bg-stone-700 text-stone-400 hover:bg-stone-600 hover:text-stone-300'
+            recordingUnsupported
+              ? 'cursor-not-allowed bg-stone-800/50 text-stone-600'
+              : isLocalRecording
+                ? 'bg-amber-600 text-white shadow-lg shadow-amber-500/30 animate-pulse'
+                : 'bg-stone-700 text-stone-400 hover:bg-stone-600 hover:text-stone-300'
           }`}
-          aria-label={isLocalRecording ? '録画を停止して保存' : 'ローカル録画を開始'}
+          aria-label={
+            recordingUnsupported
+              ? 'お使いの端末・ブラウザは録画に対応していません'
+              : isLocalRecording
+                ? '録画を停止して保存'
+                : 'ローカル録画を開始'
+          }
+          title={recordingUnsupported ? 'お使いの端末・ブラウザは録画に対応していません' : undefined}
           aria-pressed={isLocalRecording}
         >
           <span className="text-lg">{isLocalRecording ? '⏹️' : '🎥'}</span>
