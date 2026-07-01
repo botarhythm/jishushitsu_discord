@@ -14,6 +14,7 @@ import {
 } from '@livekit/components-react';
 import { Track, RoomEvent } from 'livekit-client';
 import { downloadChatHistory } from '@/lib/chat-export';
+import { describeMediaDeviceFailure } from '@/lib/media-device-error';
 import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS, mergeParticipantMetadata } from '@/lib/types';
 import InstructorDashboard from './InstructorDashboard';
 import { useSessionRecorder } from '@/hooks/useSessionRecorder';
@@ -26,6 +27,9 @@ import { EndSessionModal } from './EndSessionModal';
 import { RecordingIndicator } from './RecordingIndicator';
 import { RecordingToast } from './RecordingToast';
 import { MobileHostWarning } from './MobileHostWarning';
+import { DeviceErrorBanner } from './DeviceErrorBanner';
+import { InAppBrowserWarning } from './InAppBrowserWarning';
+import { StartAudioBanner } from './StartAudioBanner';
 import { InviteModal } from './InviteModal';
 import { ParticipantGrid } from './ParticipantGrid';
 import { BreakoutList } from './BreakoutList';
@@ -93,6 +97,37 @@ function RoomInner({
   const [focusedParticipant, setFocusedParticipant] = useState<string | null>(null);
   const isInstructor = role === 'instructor';
   const isBreakout = currentRoom !== 'main';
+
+  // ── カメラ/マイク取得失敗の可視化 ──
+  // 入室時の自動publish (video/audio=true) も setCameraEnabled/setMicrophoneEnabled による
+  // 手動トグルも、getUserMedia失敗時は内部で RoomEvent.MediaDevicesError を発火する。
+  // これを拾わないとエラーが完全にサイレントになり「ボタンを押しても反応がない」ように見える
+  // (実際は権限拒否・LINE等のアプリ内蔵ブラウザでの制限・デバイス使用中などが起きている)。
+  const [deviceError, setDeviceError] = useState<string | null>(null);
+  useEffect(() => {
+    const handleMediaDevicesError = () => {
+      const cameraErr = localParticipant.lastCameraError;
+      const micErr = localParticipant.lastMicrophoneError;
+      // カメラ/マイクが同時に失敗する (LINE等のアプリ内蔵ブラウザで両方とも権限を
+      // 仲介できないケースで典型的) 場合、片方だけを優先して表示すると
+      // もう片方の失敗理由が握りつぶされてしまうため、両方あれば両方表示する。
+      if (cameraErr && micErr) {
+        setDeviceError(
+          `${describeMediaDeviceFailure(cameraErr, 'カメラ')}\n${describeMediaDeviceFailure(micErr, 'マイク')}`
+        );
+      } else if (cameraErr) {
+        setDeviceError(describeMediaDeviceFailure(cameraErr, 'カメラ'));
+      } else if (micErr) {
+        setDeviceError(describeMediaDeviceFailure(micErr, 'マイク'));
+      } else {
+        setDeviceError(describeMediaDeviceFailure(undefined, 'カメラ/マイク'));
+      }
+    };
+    room.on(RoomEvent.MediaDevicesError, handleMediaDevicesError);
+    return () => {
+      room.off(RoomEvent.MediaDevicesError, handleMediaDevicesError);
+    };
+  }, [room, localParticipant]);
 
   useEffect(() => {
     if (!isInstructor) return;
@@ -164,6 +199,7 @@ function RoomInner({
     stop: stopLocalRecording,
     error: localRecordingError,
     regionCaptureActive,
+    isSupported: isLocalRecordingSupported,
   } = useLocalRecording({
     room,
     // Region Capture (チャットをステージ矩形外に逃がして録画から除外する仕組み) が
@@ -176,6 +212,11 @@ function RoomInner({
   useEffect(() => {
     if (localRecordingError) {
       console.error('[useLocalRecording] error:', localRecordingError);
+      // iOS Safari (getDisplayMedia 非対応) 等でも DeviceErrorBanner と同じ経路で
+      // ユーザーに見える形にする。以前はここが console.error だけで、録画ボタンを
+      // 押しても画面上は無反応に見えるバグになっていた。setState を microtask に
+      // 逃がし、effect body 内での同期 setState を回避する。
+      queueMicrotask(() => setDeviceError(localRecordingError));
     }
   }, [localRecordingError]);
 
@@ -529,13 +570,23 @@ function RoomInner({
   });
 
   const toggleMic = useCallback(async () => {
-    await localParticipant.setMicrophoneEnabled(!isMicOn);
-    setIsMicOn(!isMicOn);
+    try {
+      await localParticipant.setMicrophoneEnabled(!isMicOn);
+      setIsMicOn(!isMicOn);
+    } catch (e) {
+      // UI 表示は RoomEvent.MediaDevicesError ハンドラ側で行う。ここでは
+      // 未処理の Promise rejection にしない (ボタン押下時に何も起きないよう見せない) ためだけに捕捉する。
+      console.warn('[toggleMic] setMicrophoneEnabled failed', e);
+    }
   }, [localParticipant, isMicOn]);
 
   const toggleCamera = useCallback(async () => {
-    await localParticipant.setCameraEnabled(!isCameraOn);
-    setIsCameraOn(!isCameraOn);
+    try {
+      await localParticipant.setCameraEnabled(!isCameraOn);
+      setIsCameraOn(!isCameraOn);
+    } catch (e) {
+      console.warn('[toggleCamera] setCameraEnabled failed', e);
+    }
   }, [localParticipant, isCameraOn]);
 
   const toggleScreenShare = useCallback(async () => {
@@ -610,6 +661,11 @@ function RoomInner({
   if (isInstructor && studioMode) {
     return (
       <div className="relative h-dvh w-screen overflow-hidden bg-black">
+        <InAppBrowserWarning />
+        <StartAudioBanner />
+        {deviceError && (
+          <DeviceErrorBanner message={deviceError} onDismiss={() => setDeviceError(null)} />
+        )}
         <div className="flex h-full w-full">
           {/* 左: チャット (収録中も参加者の発言を確認できる)。ステージの flex 兄弟として
               配置するため Region Capture のクロップ矩形に重ならない = 録画には映らない。 */}
@@ -648,6 +704,7 @@ function RoomInner({
           isCameraOn={isCameraOn}
           isScreenSharing={isScreenSharing}
           isLocalRecording={isLocalRecording}
+          recordingUnsupported={!isLocalRecordingSupported}
           recordingQuality={recordingQuality}
           layout={studioLayout}
           slotIdentities={studioSlots}
@@ -796,6 +853,7 @@ function RoomInner({
           isInstructor={isInstructor}
           isBreakout={isBreakout}
           isLocalRecording={isLocalRecording}
+          recordingUnsupported={!isLocalRecordingSupported}
           isAudioRecording={isRecording}
           showAudioRecordingButton={isInstructor && echoNoteConfigured}
           onEndSession={isInstructor && !isBreakout ? openEndModal : undefined}
@@ -850,6 +908,17 @@ function RoomInner({
 
       {/* モバイルホスト向け警告（モバイル時のみ自動表示） */}
       <MobileHostWarning isInstructor={isInstructor} />
+
+      {/* アプリ内蔵ブラウザ (LINE/Instagram等) 警告。カメラ/マイクが使えないことがある */}
+      <InAppBrowserWarning />
+
+      {/* iOS Safari 等の自動再生ブロックで他参加者の音声が聞こえない場合のタップ解除ボタン */}
+      <StartAudioBanner />
+
+      {/* カメラ/マイク取得失敗の警告 */}
+      {deviceError && (
+        <DeviceErrorBanner message={deviceError} onDismiss={() => setDeviceError(null)} />
+      )}
 
       {/* 録音/録画ステータストースト (全員) */}
       <RecordingToast audioOn={isRecording} screenOn={isLocalRecording} />

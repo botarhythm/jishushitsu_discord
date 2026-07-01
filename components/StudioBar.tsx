@@ -18,6 +18,8 @@ interface StudioBarProps {
   isCameraOn: boolean;
   isScreenSharing: boolean;
   isLocalRecording: boolean;
+  /** true の間は録画ボタンを無効化する (iPhone等 getDisplayMedia 非対応環境向け) */
+  recordingUnsupported?: boolean;
   recordingQuality: RecordingQuality;
   layout: StudioLayout;
   slotIdentities: (string | null)[];
@@ -58,6 +60,7 @@ export function StudioBar(props: StudioBarProps) {
     isCameraOn,
     isScreenSharing,
     isLocalRecording,
+    recordingUnsupported = false,
     recordingQuality,
     layout,
     slotIdentities,
@@ -163,11 +166,18 @@ export function StudioBar(props: StudioBarProps) {
 
         <Divider />
 
-        {/* 録画 */}
+        {/* 録画。iPhone等 getDisplayMedia 非対応環境では無効化しツールチップで理由を伝える */}
         <BarButton
           active={isLocalRecording}
           danger={isLocalRecording}
-          label={isLocalRecording ? '録画停止' : '録画開始'}
+          disabled={recordingUnsupported}
+          label={
+            recordingUnsupported
+              ? 'お使いの端末・ブラウザは録画に対応していません'
+              : isLocalRecording
+                ? '録画停止'
+                : '録画開始'
+          }
           onClick={onToggleLocalRecording}
         >
           {isLocalRecording ? '⏹️' : '🎥'}

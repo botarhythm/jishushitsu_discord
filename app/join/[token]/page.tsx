@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { InAppBrowserWarning } from '@/components/InAppBrowserWarning';
 
 export default function JoinPage() {
   const params = useParams<{ token: string }>();
@@ -39,6 +40,7 @@ export default function JoinPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-stone-50 via-green-50 to-amber-50 flex items-center justify-center px-4 py-8">
+      <InAppBrowserWarning />
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <h1 className="text-3xl md:text-4xl font-bold text-stone-900 font-noto-sans-jp mb-2">
