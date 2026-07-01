@@ -40,6 +40,7 @@ import { AutoLogoutModal } from './AutoLogoutModal';
 import { ChatPanel } from './ChatPanel';
 import { StudioChatPanel } from './StudioChatPanel';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
+import { PreJoinScreen } from './PreJoinScreen';
 
 type InitialRec = 'off' | 'audio' | 'screen' | 'both';
 
@@ -57,19 +58,41 @@ interface RoomViewProps {
 }
 
 export default function RoomView(props: RoomViewProps) {
+  // 入室前のワンタップ画面 (PreJoin)。「参加する」のタップで:
+  //  1. 音声の自動再生ロックを解除する (これが無いとマイク/カメラOFF参加で音声が聞こえない)
+  //  2. マイク/カメラの初期ON/OFFを確定する
+  // joined は RoomView 直下 (currentRoom で再マウントされない層) に持つため、ブレイクアウト
+  // 移動 (currentRoom 変更) では PreJoin は再表示されず、初回入室時だけ表示される。
+  const [joined, setJoined] = useState(false);
+  const [initialMicOn, setInitialMicOn] = useState(true);
+  const [initialCameraOn, setInitialCameraOn] = useState(true);
+
+  if (!joined) {
+    return (
+      <PreJoinScreen
+        participantName={props.participantName}
+        onJoin={({ micOn, cameraOn }) => {
+          setInitialMicOn(micOn);
+          setInitialCameraOn(cameraOn);
+          setJoined(true);
+        }}
+      />
+    );
+  }
+
   return (
     <LiveKitRoom
       key={props.currentRoom}
       token={props.token}
       serverUrl={props.livekitUrl}
       connect={true}
-      audio={true}
-      video={true}
+      audio={initialMicOn}
+      video={initialCameraOn}
       className="h-dvh flex flex-col bg-stone-900"
       options={{ adaptiveStream: true, dynacast: true }}
     >
       <RoomAudioRenderer />
-      <RoomInner {...props} />
+      <RoomInner {...props} initialMicOn={initialMicOn} initialCameraOn={initialCameraOn} />
     </LiveKitRoom>
   );
 }
@@ -80,8 +103,10 @@ function RoomInner({
   isGuest = false,
   currentRoom,
   initialRec = 'off',
+  initialMicOn = true,
+  initialCameraOn = true,
   onRoomChange,
-}: RoomViewProps) {
+}: RoomViewProps & { initialMicOn?: boolean; initialCameraOn?: boolean }) {
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
   const participants = useParticipants();
@@ -90,8 +115,8 @@ function RoomInner({
   const screenShareTracks = useTracks([Track.Source.ScreenShare], { onlySubscribed: false });
   const screenShareActive = screenShareTracks.some((t) => isTrackReference(t));
   const { roomsStatus, refetch: refetchRoomsStatus } = useRoomsStatus();
-  const [isMicOn, setIsMicOn] = useState(true);
-  const [isCameraOn, setIsCameraOn] = useState(true);
+  const [isMicOn, setIsMicOn] = useState(initialMicOn);
+  const [isCameraOn, setIsCameraOn] = useState(initialCameraOn);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [raisedHand, setRaisedHand] = useState(false);
   const [focusedParticipant, setFocusedParticipant] = useState<string | null>(null);
