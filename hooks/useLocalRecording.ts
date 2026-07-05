@@ -307,14 +307,72 @@ export function useLocalRecording({
         }
       }
 
-      // ローカルマイク
+      // ローカルマイク（自分の声）
+      //
+      // 自分の声はタブ音声にもリモートトラックにも含まれない（自分の声は自タブで再生
+      // されないし、LiveKit のリモート購読対象でもない）。よってここで足さないと
+      // 「収録に自分の声だけ入らない」状態になる。
+      //
+      // 以前は getUserMedia({audio:true}) で OS 既定のマイクを勝手に開いていたが、
+      // アプリ内 (DeviceSettingsModal) で別のマイクを選んでいる場合、既定デバイスは
+      // 別物・無効・ミュートのことがあり、その場合は無音 = 自分の声が録れない不具合になる。
+      // そこで LiveKit にローカルマイクが publish 済みなら、その MediaStreamTrack
+      // （= ユーザーが実際に選択し、他参加者が聞いているのと同一の音声）を優先して使う。
+      // room が無い・マイク未publish のときのみ getUserMedia にフォールバックする。
+      let detachLocalMicListener: () => void = () => {};
       if (includeMicrophone) {
-        try {
-          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          const micSrc = audioContext.createMediaStreamSource(micStream);
-          micSrc.connect(audioDestination);
-        } catch (micErr) {
-          console.warn('[useLocalRecording] マイク取得失敗:', micErr);
+        let localMicNode: { track: MediaStreamTrack; source: MediaStreamAudioSourceNode } | null = null;
+
+        // LiveKit のローカルマイクトラックを録音先に接続する。
+        // デバイス切替やミュート解除で republish されると mediaStreamTrack が差し替わるため、
+        // 呼び直して張り替えられるようにしてある。接続できたら true。
+        const connectLocalMic = (): boolean => {
+          if (!room || !audioContext || !audioDestination) return false;
+          const pub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+          const mst = pub?.track?.mediaStreamTrack;
+          if (!mst) return false;
+          if (localMicNode?.track === mst) return true; // 既に同じトラックを接続済み
+          if (localMicNode) {
+            try {
+              localMicNode.source.disconnect();
+            } catch {
+              // ignore
+            }
+            localMicNode = null;
+          }
+          try {
+            const source = audioContext.createMediaStreamSource(new MediaStream([mst]));
+            source.connect(audioDestination);
+            localMicNode = { track: mst, source };
+            return true;
+          } catch (e) {
+            console.warn('[useLocalRecording] ローカルマイク接続失敗', e);
+            return false;
+          }
+        };
+
+        if (room) {
+          // 録画開始時点でまだマイクが publish されていなくても（ミュート開始・publish遅延）、
+          // デバイス切替 / ミュート解除で republish されたら張り直す。
+          // room がある限りマイクは LiveKit 経由に一本化し、getUserMedia の既定デバイスを
+          // 二重に開かない（別デバイスが混ざる / 二重音声を防ぐ）。
+          connectLocalMic();
+          const onLocalMicRepublished = () => {
+            connectLocalMic();
+          };
+          room.on(RoomEvent.LocalTrackPublished, onLocalMicRepublished);
+          detachLocalMicListener = () => {
+            room.off(RoomEvent.LocalTrackPublished, onLocalMicRepublished);
+          };
+        } else {
+          // room が無い単体録画のときのみ getUserMedia でマイクを取得する。
+          try {
+            micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const micSrc = audioContext.createMediaStreamSource(micStream);
+            micSrc.connect(audioDestination);
+          } catch (micErr) {
+            console.warn('[useLocalRecording] マイク取得失敗:', micErr);
+          }
         }
       }
 
@@ -376,6 +434,7 @@ export function useLocalRecording({
           room.off(RoomEvent.TrackSubscribed, addRemoteTrack);
           room.off(RoomEvent.TrackUnsubscribed, removeRemoteTrack);
         }
+        detachLocalMicListener();
       };
     }
 
