@@ -19,3 +19,10 @@
 - Push commits to `origin/main`; Vercel is linked to project `jishushitsu-discord`.
 - Run `npx tsc --noEmit` and `npm run build` before pushing when possible.
 - Local `npm run build` may need network access because `next/font/google` fetches Inter and Noto Sans JP during the build.
+
+## Production domain
+
+- Canonical production URL is `https://session.botarhythm.com` (custom domain on the `jishushitsu-discord` Vercel project). The old `jishushitsu-discord.vercel.app` still works but should be phased out.
+- Reason for the custom domain: `jishushitsu-discord.vercel.app` triggered a Google Safe Browsing false-positive ("危険なサイト" phishing warning). Trigger = the substring `discord` in the hostname + a Discord-style login page. A domain without `discord` (`session.botarhythm.com`) clears the flag.
+- DNS is managed at Xserver (nameservers `ns*.xserver.jp`). To point a subdomain at Vercel/Railway, add a **CNAME in「DNSレコード設定」only** — do NOT use「サブドメイン設定」. A サブドメイン設定 entry makes Xserver auto-publish a conflicting A record (server IP) and DKIM TXT records, which prevents the CNAME from resolving (A and CNAME can't coexist). `elevan`/`haccp` (Railway) and `session` (Vercel) all use the CNAME-only pattern.
+- The Discord OAuth redirect URI is derived from `url.origin` (`app/api/auth/discord/callback/route.ts`), so no code change is needed per domain — but every serving domain's `https://<domain>/api/auth/discord/callback` must be registered in the Discord Developer Portal → OAuth2 → Redirects.
