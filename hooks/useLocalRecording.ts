@@ -6,17 +6,29 @@ import { RoomEvent, Track } from 'livekit-client';
 import { describeDisplayMediaFailure, isDisplayMediaSupported } from '@/lib/media-device-error';
 
 /**
- * MediaRecorder の WebM 出力に SeekHead / Cues / Duration を注入して
- * 編集ソフトで開ける「シーク可能な WebM」に変換する。
- * ts-ebml は動的 import (録画停止時のみロード)。
+ * ts-ebml (と Buffer polyfill) をロードする。
+ * ts-ebml は Node の Buffer グローバルに依存しているため、ブラウザでは事前に polyfill する。
+ *
+ * 注意: ts-ebml が依存する ebml パッケージはブラウザ向けエントリが壊れており、
+ * next.config.ts の turbopack.resolveAlias で ESM ビルドへ張り替えないと
+ * この import 自体がモジュール評価時に throw する (その場合 Duration/Cues の無い
+ * 「編集ソフトで開けない WebM」が保存されてしまう)。録画開始時に preload して
+ * 失敗を早期に検知する。
  */
-async function injectWebmSeekMetadata(blob: Blob): Promise<Blob> {
-  // ts-ebml は Node の Buffer グローバルに依存しているため、ブラウザでは事前に polyfill する。
+async function loadTsEbml() {
   if (typeof window !== 'undefined' && typeof (window as unknown as { Buffer?: unknown }).Buffer === 'undefined') {
     const { Buffer } = await import('buffer');
     (window as unknown as { Buffer: typeof Buffer }).Buffer = Buffer;
   }
-  const { Decoder, tools, Reader } = await import('ts-ebml');
+  return import('ts-ebml');
+}
+
+/**
+ * MediaRecorder の WebM 出力に SeekHead / Cues / Duration を注入して
+ * 編集ソフトで開ける「シーク可能な WebM」に変換する。
+ */
+async function injectWebmSeekMetadata(blob: Blob): Promise<Blob> {
+  const { Decoder, tools, Reader } = await loadTsEbml();
   const decoder = new Decoder();
   const reader = new Reader();
   reader.logging = false;
@@ -29,8 +41,10 @@ async function injectWebmSeekMetadata(blob: Blob): Promise<Blob> {
     reader.duration,
     reader.cues
   );
-  const bodyBuf = buf.slice(reader.metadataSize);
-  return new Blob([refinedMetadataBuf, bodyBuf], { type: blob.type });
+  // 長尺録画は数百 MB になるため、本体は ArrayBuffer.slice (即コピー) ではなく
+  // Blob.slice (遅延参照) で切り出してメモリピークを倍増させない。
+  const body = blob.slice(reader.metadataSize);
+  return new Blob([refinedMetadataBuf, body], { type: blob.type });
 }
 
 export type RecordingQuality = 'streaming' | 'standard' | 'high';
@@ -178,7 +192,13 @@ export function useLocalRecording({
         // ts-ebml でメタデータを注入し、シーク可能な WebM に変換してから保存。
         const seekable = rawBlob.type.includes('webm')
           ? await injectWebmSeekMetadata(rawBlob).catch((e) => {
-              console.warn('[useLocalRecording] シーク索引の付与に失敗。生のBlobを保存します。', e);
+              console.error('[useLocalRecording] シーク索引の付与に失敗。生のBlobを保存します。', e);
+              // 生の WebM は尺情報・シーク索引が無く Canva 等の編集ソフトで
+              // 開けない/変換が壊れることがある。黙って保存すると収録後に初めて
+              // 気付くことになるため、ユーザーに見える形で警告する (保存自体は行う)。
+              setError(
+                '録画ファイルは保存されましたが、編集ソフト用のインデックス付与に失敗しました。このファイルは Canva 等で正しく読み込めない可能性があります。'
+              );
               return rawBlob;
             })
           : rawBlob;
@@ -480,6 +500,16 @@ export function useLocalRecording({
 
     displayStream.getVideoTracks()[0]?.addEventListener('ended', () => {
       stopRef.current();
+    });
+
+    // 停止時に使う ts-ebml を今のうちに preload しておく。バンドル都合等で
+    // ロードできない場合、停止時まで黙っていると長時間の収録が丸ごと
+    // 「編集ソフトで開けないファイル」になってから発覚するため、開始直後に警告する。
+    loadTsEbml().catch((e) => {
+      console.error('[useLocalRecording] ts-ebml のロードに失敗 (録画は継続します)', e);
+      setError(
+        '録画は継続しますが、保存ファイルへのインデックス付与機能が読み込めませんでした。保存された WebM は Canva 等で正しく読み込めない可能性があります。'
+      );
     });
 
     recorder.start(1000);
