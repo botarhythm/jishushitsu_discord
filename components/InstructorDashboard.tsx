@@ -17,6 +17,12 @@ interface InstructorDashboardProps {
   roomsStatus?: RoomsStatusMap;
   /** 収録モード（YouTube/Podcast 収録レイアウト）を開始する。メインルームのみ */
   onEnterStudio?: () => void;
+  /** 収録モードに入り、AI 参加者 (ChatGPT) も有効化する */
+  onStartStudioWithAi?: () => void;
+  /** 検証済みの配線が残っており、確認画面なしで AI を起動できるか */
+  aiQuickStartReady?: boolean;
+  /** AI 参加者の表示名（ボタン文言に使う） */
+  aiDisplayName?: string;
   /** 講師自身が表示中のルームを切り替える */
   onMoveInstructor: (room: RoomName) => void | Promise<void>;
   /** BO在室状況を即時再取得する */
@@ -40,6 +46,9 @@ export default function InstructorDashboard({
   onCloseDrawer,
   roomsStatus,
   onEnterStudio,
+  onStartStudioWithAi,
+  aiQuickStartReady = false,
+  aiDisplayName = 'ChatGPT',
   onMoveInstructor,
   onRoomsStatusRefresh,
   onSetParticipantMic,
@@ -270,6 +279,22 @@ export default function InstructorDashboard({
             <p className="mt-1.5 text-[11px] leading-snug text-stone-500">
               出演者を横並び表示にし、操作UIを自動格納します。YouTube/Podcast 収録向け。
             </p>
+
+            {onStartStudioWithAi && (
+              <>
+                <button
+                  onClick={onStartStudioWithAi}
+                  className="mt-2 w-full rounded-lg bg-amber-700/80 px-3 py-2 text-sm font-medium text-white hover:bg-amber-600 transition-colors"
+                >
+                  🤖 {aiDisplayName}つきで収録開始
+                </button>
+                <p className="mt-1.5 text-[11px] leading-snug text-stone-500">
+                  {aiQuickStartReady
+                    ? '前回の音声設定で AI 参加者をそのまま呼び出します。'
+                    : '初回のみ音声デバイスの設定画面が開きます。'}
+                </p>
+              </>
+            )}
           </section>
         )}
 

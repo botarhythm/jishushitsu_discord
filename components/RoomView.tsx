@@ -42,6 +42,7 @@ import { useAiParticipant, useRemoteAiTile, AI_PARTICIPANT_ID } from '@/hooks/us
 import {
   aiSlotToken,
   isAiSlotToken,
+  isAiWiringValidated,
   loadAiConfig,
   saveAiConfig,
   type AiParticipantConfig,
@@ -449,6 +450,37 @@ function RoomInner({
     });
   }, []);
 
+  // ── AI 参加者つき収録のワンクリック起動 ──
+  // 前回セットアップを通した配線がそのまま残っている場合に限り、収録モード投入と
+  // AI 有効化をまとめて行う。自己ループの危険は「配線」に紐づくので、配線が変わって
+  // いなければ再検査は不要 (変わっていれば validatedFingerprint が外れ、下の
+  // aiQuickStartReady が false になってセットアップ画面へ誘導される)。
+  const [aiDevicePresent, setAiDevicePresent] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!isInstructor || !isAiWiringValidated(aiConfig)) return;
+    let cancelled = false;
+    queueMicrotask(async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (cancelled) return;
+        const hasSource = devices.some(
+          (d) => d.kind === 'audioinput' && d.deviceId === aiConfig.sourceDeviceId
+        );
+        const hasSink =
+          !aiConfig.sinkDeviceId ||
+          devices.some((d) => d.kind === 'audiooutput' && d.deviceId === aiConfig.sinkDeviceId);
+        setAiDevicePresent(hasSource && hasSink);
+      } catch {
+        if (!cancelled) setAiDevicePresent(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isInstructor, aiConfig]);
+
+  const aiQuickStartReady = isAiWiringValidated(aiConfig) && aiDevicePresent === true;
+
   // 収録モードに入った経緯が「ダッシュボードの録画ボタン」かどうか。
   // true の場合、録画停止でダッシュボード(通常画面)へ自動的に戻す。
   const studioViaRecordRef = useRef(false);
@@ -461,6 +493,20 @@ function RoomInner({
     enterStudio();
     startLocalRecording(recordingQuality, () => studioStageRef.current);
   }, [enterStudio, startLocalRecording, recordingQuality]);
+
+  /**
+   * ダッシュボードの「AI参加者つきで収録開始」。
+   * 検証済み配線があればワンクリックで収録モード投入 + AI 有効化まで行う。
+   * 無ければ収録モードに入ったうえでセットアップ画面を開く (初回・配線変更後)。
+   */
+  const startStudioWithAi = useCallback(() => {
+    enterStudio();
+    if (aiQuickStartReady) {
+      setAiEnabled(true);
+    } else {
+      setAiSetupOpen(true);
+    }
+  }, [enterStudio, aiQuickStartReady]);
 
   // ダッシュボードの録画ボタンのトグル (講師用)。
   const handleDashboardRecord = useCallback(() => {
@@ -1065,6 +1111,9 @@ function RoomInner({
           onCloseDrawer={() => setDashboardOpen(false)}
           roomsStatus={roomsStatus}
           onEnterStudio={enterStudio}
+          onStartStudioWithAi={startStudioWithAi}
+          aiQuickStartReady={aiQuickStartReady}
+          aiDisplayName={aiConfig.displayName}
           onMoveInstructor={changeRoom}
           onRoomsStatusRefresh={refetchRoomsStatus}
           onSetParticipantMic={setParticipantMic}

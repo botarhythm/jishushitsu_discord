@@ -126,6 +126,14 @@ export interface AiParticipantConfig {
   /** ChatGPT への送出先（CABLE-B Input 等）の audiooutput deviceId。null なら入力ミキサー無効 */
   sinkDeviceId: string | null;
   sinkDeviceLabel?: string;
+  /**
+   * 自己ループ検査に通った（または手動確認した）ときの配線の指紋。
+   * 現在の配線とこれが一致する間は、セットアップを再度通さずワンクリックで起動してよい。
+   *
+   * 自己ループの危険は「どのデバイスをどう繋いだか」に紐づくので、配線が変わらない限り
+   * 再検査は不要。デバイスを変更すると指紋が外れ、再びセットアップ必須に戻る。
+   */
+  validatedFingerprint?: string | null;
 }
 
 export const DEFAULT_AI_CONFIG: AiParticipantConfig = {
@@ -133,7 +141,22 @@ export const DEFAULT_AI_CONFIG: AiParticipantConfig = {
   avatar: '🤖',
   sourceDeviceId: null,
   sinkDeviceId: null,
+  validatedFingerprint: null,
 };
+
+/** 配線（音声ソース + 送出先）の指紋 */
+export function aiWiringFingerprint(config: AiParticipantConfig): string {
+  return `${config.sourceDeviceId ?? ''}|${config.sinkDeviceId ?? ''}`;
+}
+
+/** 保存済みの検証結果が現在の配線に対して有効か */
+export function isAiWiringValidated(config: AiParticipantConfig): boolean {
+  return (
+    !!config.sourceDeviceId &&
+    !!config.validatedFingerprint &&
+    config.validatedFingerprint === aiWiringFingerprint(config)
+  );
+}
 
 export const AI_AVATAR_PRESETS = ['🤖', '🧠', '✨', '🎙️', '🦉', '🐬'] as const;
 

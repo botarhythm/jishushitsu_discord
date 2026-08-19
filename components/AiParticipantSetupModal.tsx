@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Track, type Room } from 'livekit-client';
 import {
   AI_AVATAR_PRESETS,
+  aiWiringFingerprint,
   type AiParticipantConfig,
 } from '@/lib/studio-participants';
 import type { AiProviderStatus } from '@/lib/ai/provider';
@@ -276,12 +277,25 @@ export function AiParticipantSetupModal({
     !!config.sourceDeviceId && loopSafe && !micCollision && !isRecording;
 
   const set = (patch: Partial<AiParticipantConfig>) => {
-    onChangeConfig({ ...config, ...patch });
-    // デバイス構成が変わったらループ検査は無効化（再検査を要求）
-    if ('sourceDeviceId' in patch || 'sinkDeviceId' in patch) {
+    const wiringChanged = 'sourceDeviceId' in patch || 'sinkDeviceId' in patch;
+    onChangeConfig({
+      ...config,
+      ...patch,
+      // 配線が変わったら検証済みフラグを落とす（次回もセットアップ必須に戻す）
+      ...(wiringChanged ? { validatedFingerprint: null } : {}),
+    });
+    if (wiringChanged) {
       setLoopCheck({ state: 'idle' });
       setManualConfirm(false);
     }
+  };
+
+  /** 有効化。このとき現在の配線を「検証済み」として記録し、次回以降のワンクリック起動を許可する */
+  const handleEnable = () => {
+    void resumeAllAudioContexts();
+    const validated = { ...config, validatedFingerprint: aiWiringFingerprint(config) };
+    onChangeConfig(validated);
+    onChangeEnabled(true);
   };
 
   const statusLabel: Record<AiProviderStatus, string> = {
@@ -515,6 +529,11 @@ export function AiParticipantSetupModal({
           </p>
           <p>・録画開始前に有効化してください（録画中の有効化はできません）。</p>
           <p>・ヘッドホン必須（スピーカー使用はエコーの原因になります）。</p>
+          <p>
+            ・一度有効化すると<strong>この配線を記憶</strong>し、次回からはダッシュボードの
+            「AI参加者つきで収録開始」でワンクリック起動できます。デバイスを変更すると
+            記憶は破棄され、再びこの画面での確認が必要になります。
+          </p>
         </div>
 
         {/* 有効化 */}
@@ -531,10 +550,7 @@ export function AiParticipantSetupModal({
             </button>
           ) : (
             <button
-              onClick={() => {
-                void resumeAllAudioContexts();
-                onChangeEnabled(true);
-              }}
+              onClick={handleEnable}
               disabled={!canEnable}
               className="ml-auto rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
