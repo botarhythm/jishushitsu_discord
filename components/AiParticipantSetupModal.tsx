@@ -35,6 +35,27 @@ function isVirtualCableLabel(label: string): boolean {
   return /cable|vb-audio|virtual|voicemeeter|blackhole|loopback/i.test(label);
 }
 
+function normalizeLabel(label: string): string {
+  return label.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * 仮想ケーブルの「送出先 (playback)」に対応する「監視入力 (capture)」を特定する。
+ *
+ * 仮想ケーブルは Input(再生側)/Output(録音側) が対になっており、ラベルは
+ * 例: "CABLE-B Input (VB-Audio Cable B)" ⇔ "CABLE-B Output (VB-Audio Cable B)"。
+ * groupId は環境により共有されないことがあるため、ラベル対応を第一候補にする。
+ */
+function findCableMonitorInput(sink: DeviceOption, inputs: DeviceOption[]): DeviceOption | null {
+  const expected = normalizeLabel(sink.label.replace(/\bInput\b/i, 'Output'));
+  if (expected !== normalizeLabel(sink.label)) {
+    const byLabel = inputs.find((d) => normalizeLabel(d.label) === expected);
+    if (byLabel) return byLabel;
+  }
+  const byGroup = inputs.find((d) => d.groupId && d.groupId === sink.groupId);
+  return byGroup ?? null;
+}
+
 /**
  * AI 参加者（ChatGPT デスクトップ音声）のセットアップモーダル（要件§19）。
  *
@@ -168,7 +189,8 @@ export function AiParticipantSetupModal({
 
   // ── プリフライト: 自己ループ検査 ──
   // 「AI のみ発声」の間、送出先 (CABLE-B) 側のモニタ入力が無音であることを確認する。
-  // CABLE-B Input (audiooutput) と CABLE-B Output (audioinput) は通常 groupId を共有する。
+  // この検査中は ChatGPT 入力ミキサーはまだ動いていないため、送出先で音が観測されたら
+  // それは OS 側の配線 (「このデバイスを聴く」等) による漏れを意味する。
   const runLoopCheck = useCallback(async () => {
     void resumeAllAudioContexts();
     const sink = outputs.find((d) => d.deviceId === config.sinkDeviceId);
@@ -176,14 +198,22 @@ export function AiParticipantSetupModal({
       setLoopCheck({ state: 'unavailable', reason: '送出先デバイスが未選択です' });
       return;
     }
-    const monitorInput = inputs.find(
-      (d) => d.groupId === sink.groupId && d.deviceId !== config.sourceDeviceId
-    );
+    const monitorInput = findCableMonitorInput(sink, inputs);
     if (!monitorInput) {
       setLoopCheck({
         state: 'unavailable',
         reason:
           '送出先ケーブルの監視入力を自動特定できませんでした。ガイドどおりの配線を手動で確認してください。',
+      });
+      return;
+    }
+    // 送出先と AI 音声ソースが同じケーブルの両端だと、人間の声が AI 音声として
+    // 二重に取り込まれ、ChatGPT には何も届かない。配線ミスとして明示的に弾く。
+    if (monitorInput.deviceId === config.sourceDeviceId) {
+      setLoopCheck({
+        state: 'failed',
+        reason:
+          '送出先と AI 音声ソースが同じケーブルです。ChatGPT の出力用 (CABLE-A) と入力用 (CABLE-B) は別のケーブルを指定してください。',
       });
       return;
     }
@@ -433,6 +463,10 @@ export function AiParticipantSetupModal({
           <p className="mb-2 text-[11px] leading-relaxed text-stone-500">
             ChatGPT に話させながら実行してください。AI の声が ChatGPT
             の耳（送出先）に漏れていないことを確認します。
+            <br />
+            この検査中はまだ ChatGPT にあなたの声は届きません。ChatGPT
+            にテキストで話しかけて音声で返答させるか、音声モードを開始した直後の
+            発話に合わせて実行してください。
           </p>
           {loopCheck.state === 'passed' && (
             <p className="text-xs text-emerald-400">✔ 合格: 自己ループはありません</p>
