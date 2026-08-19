@@ -40,6 +40,15 @@ Last synced: 2026-08-20
 
 ## インフラ / デプロイ
 
+### ローカル開発環境の注意（この開発PC固有）
+
+- **ポート 3000 はバインド不可**（`EACCES`。netsh の excludedportrange には現れないが
+  実際に listen できない）。README が記載する `localhost:3000` は使えないため、
+  開発サーバーは **3100** で起動する（`.claude/launch.json` の dev 設定）。
+- そのため Discord Developer Portal の OAuth2 → Redirects に
+  `http://localhost:3100/api/auth/discord/callback` の登録が必要。
+  未登録だとログイン時に「OAuth2 redirect_uri が無効です」で止まる。
+
 - [project-vercel-team] Vercel: botarhythms-projects 所有。main マージも自分で実行可。PR で Preview デプロイ
 - [project-safebrowsing-falsepositive] Safe Browsing 警告は false positive（対策として独自ドメイン session.botarhythm.com へ移行済み）
 
