@@ -34,8 +34,19 @@ import { InviteModal } from './InviteModal';
 import { ParticipantGrid } from './ParticipantGrid';
 import { BreakoutList } from './BreakoutList';
 import { ControlBar } from './ControlBar';
-import { StudioStage, AudienceStrip, type StudioLayout, STUDIO_LAYOUT_SLOTS } from './StudioStage';
+import { StudioStage, AudienceStrip, type StudioLayout, STUDIO_LAYOUT_SLOTS, MAX_STUDIO_SLOTS } from './StudioStage';
 import { StudioBar } from './StudioBar';
+import { AiParticipantSetupModal } from './AiParticipantSetupModal';
+import { AudioTrackRegistry } from '@/lib/audio-track-registry';
+import { useAiParticipant, useRemoteAiTile, AI_PARTICIPANT_ID } from '@/hooks/useAiParticipant';
+import {
+  aiSlotToken,
+  isAiSlotToken,
+  loadAiConfig,
+  saveAiConfig,
+  type AiParticipantConfig,
+  type StudioAiDescriptor,
+} from '@/lib/studio-participants';
 import { AutoLogoutModal } from './AutoLogoutModal';
 import { ChatPanel } from './ChatPanel';
 import { StudioChatPanel } from './StudioChatPanel';
@@ -216,6 +227,18 @@ function RoomInner({
   const [chatOpen, setChatOpen] = useState(false);
   const closeChatOnRegionCaptureUnavailable = useCallback(() => setChatOpen(false), []);
 
+  // ── AI 参加者 (ChatGPT デスクトップ音声) ──
+  // 完全オプトイン。aiEnabled=false の間は録画・publish・metadata いずれの
+  // 新規コードパスも走らない（既存保護戦略の不変条件）。
+  const [aiConfig, setAiConfig] = useState<AiParticipantConfig>(() => loadAiConfig());
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [aiSetupOpen, setAiSetupOpen] = useState(false);
+  const aiRegistry = useMemo(() => new AudioTrackRegistry(), []);
+  const handleChangeAiConfig = useCallback((c: AiParticipantConfig) => {
+    setAiConfig(c);
+    saveAiConfig(c);
+  }, []);
+
   // ── ローカル録画（全員対象。タブを録画して WebM 保存） ──
   const [recordingQuality, setRecordingQuality] = useState<RecordingQuality>('streaming');
   const {
@@ -231,6 +254,11 @@ function RoomInner({
     // 非対応/失敗のブラウザでは、録画はタブ全体になりチャットパネルも映り込んでしまう。
     // その瞬間に強制的にチャットを閉じる。
     onRegionCaptureUnavailable: closeChatOnRegionCaptureUnavailable,
+    // AI 参加者の音声は参加者非依存の汎用レジストリ経由で mix する
+    extraAudioTracks: aiRegistry,
+    // 単一取り込みポリシー: AI 有効時はタブ音声を録画に入れない (AI モニタ音声・
+    // リモート再生音声との二重取り込み防止)。AI 無効時は従来経路のまま。
+    excludeTabAudio: aiEnabled,
   });
   const chatHiddenFromRecording = !isLocalRecording || regionCaptureActive !== false;
 
@@ -315,7 +343,9 @@ function RoomInner({
   // ── 収録モード（講師ローカルのUIのみ切替。録画は自タブキャプチャなので同期不要） ──
   const [studioMode, setStudioMode] = useState(false);
   const [studioLayout, setStudioLayout] = useState<StudioLayout>('split');
-  const [studioSlots, setStudioSlots] = useState<(string | null)[]>([null, null, null]);
+  const [studioSlots, setStudioSlots] = useState<(string | null)[]>(
+    () => Array.from({ length: MAX_STUDIO_SLOTS }, () => null)
+  );
   const [showNameplates, setShowNameplates] = useState(true);
   // 下段に視聴者サムネを表示するか (表示のみ。録画ステージの外なので録画には含まれない)
   const [showAudience, setShowAudience] = useState(false);
@@ -328,16 +358,62 @@ function RoomInner({
     slots: (string | null)[];
     showNameplates: boolean;
     showAudience: boolean;
+    ai: StudioAiDescriptor | null;
   } | null>(null);
 
-  const participantOptions = useMemo(
-    () =>
-      participants.map((p) => ({
-        identity: p.identity,
-        name: p.name?.trim() || p.identity,
-      })),
-    [participants]
-  );
+  // ── AI 参加者のライフサイクル (ホスト側) ──
+  // 有効なのは「収録モード中」のみ。収録モードを抜けると unpublish・切断される
+  // (aiEnabled 自体は保持され、再入室で自動的に再接続する)。
+  const {
+    status: aiStatus,
+    publishFailed: aiPublishFailed,
+    tile: aiTile,
+    descriptor: aiDescriptor,
+    reconnect: aiReconnect,
+  } = useAiParticipant({
+    room,
+    enabled: aiEnabled && studioMode,
+    config: aiConfig,
+    registry: aiRegistry,
+  });
+
+  // AI 有効化時のスロット自動割当: ai トークンが未割当なら空きスロット (下段=index 2 優先) へ。
+  // split のままなら 3 人用の trio へ自動切替。無効化時は ai トークンを外す。
+  useEffect(() => {
+    if (!studioMode) return;
+    // setState を microtask に逃がし、effect body 内での同期 setState を回避 (既存パターン)
+    queueMicrotask(() => {
+      if (aiEnabled) {
+        setStudioSlots((prev) => {
+          if (prev.some(isAiSlotToken)) return prev;
+          const next = [...prev];
+          const idx = next[2] == null ? 2 : next.findIndex((s) => s == null);
+          if (idx >= 0) next[idx] = aiSlotToken(AI_PARTICIPANT_ID);
+          return next;
+        });
+        setStudioLayout((prev) => (prev === 'split' ? 'trio' : prev));
+      } else {
+        setStudioSlots((prev) =>
+          prev.some(isAiSlotToken) ? prev.map((s) => (isAiSlotToken(s) ? null : s)) : prev
+        );
+      }
+    });
+  }, [aiEnabled, studioMode]);
+
+  const participantOptions = useMemo(() => {
+    const opts = participants.map((p) => ({
+      token: p.identity,
+      name: p.name?.trim() || p.identity,
+    }));
+    // AI 参加者が有効なら割当候補に追加する (トークンは "ai:<id>")
+    if (aiEnabled) {
+      opts.push({
+        token: aiSlotToken(AI_PARTICIPANT_ID),
+        name: `${aiConfig.displayName} (AI)`,
+      });
+    }
+    return opts;
+  }, [participants, aiEnabled, aiConfig.displayName]);
 
   const instructorIdentities = useMemo(
     () =>
@@ -437,11 +513,16 @@ function RoomInner({
   // 後入室・再接続でも接続時に確実に取得できる。よってここでは設定変更時に1回送るだけでよい
   // (後入室者への再送=ParticipantConnected フックは不要)。
   const hasBroadcastedStudioRef = useRef(false);
+  // revision は単調増加。旧タブ・並行更新の巻き戻り上書きをサーバー側で拒否するために使う。
+  // タブを跨いだ単調性は時刻ベースで担保する。
+  const studioRevisionRef = useRef(0);
+  const [studioSyncError, setStudioSyncError] = useState<string | null>(null);
   useEffect(() => {
     if (!isInstructor) return;
     // まだ一度も収録/講演モードを起動していない初期状態では配信しない
     if (!studioMode && !hasBroadcastedStudioRef.current) return;
     hasBroadcastedStudioRef.current = true;
+    studioRevisionRef.current = Math.max(studioRevisionRef.current + 1, Date.now());
     fetch('/api/broadcast-studio', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -453,9 +534,27 @@ function RoomInner({
         showNameplates,
         showAudience,
         senderIdentity: localParticipant.identity,
+        schemaVersion: 2,
+        revision: studioRevisionRef.current,
+        ai: aiDescriptor,
       }),
-    }).catch(() => {});
-  }, [isInstructor, studioMode, studioLayout, studioSlots, showNameplates, showAudience, currentRoom, localParticipant]);
+    })
+      .then(async (res) => {
+        if (res.ok) {
+          setStudioSyncError(null);
+          return;
+        }
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        setStudioSyncError(
+          res.status === 409
+            ? '別のタブ/セッションがより新しい収録設定を配信しています'
+            : `収録設定の同期に失敗しました${err.error ? ` (${err.error})` : ''}`
+        );
+      })
+      .catch(() => {
+        setStudioSyncError('収録設定の同期に失敗しました (通信エラー)');
+      });
+  }, [isInstructor, studioMode, studioLayout, studioSlots, showNameplates, showAudience, currentRoom, localParticipant, aiDescriptor]);
 
   // 全参加者は room metadata から studio 状態を反映する (後入室・再接続でも確実に同期)。
   // 自分がホストとして設定中の studio は適用しない (ローカルの studioMode で制御するため)。
@@ -467,6 +566,7 @@ function RoomInner({
       showNameplates?: boolean;
       showAudience?: boolean;
       host?: string | null;
+      ai?: StudioAiDescriptor | null;
     };
     const applyStudio = () => {
       let studio: StudioMeta | null = null;
@@ -479,11 +579,20 @@ function RoomInner({
         studio = null;
       }
       if (studio?.active && studio.host !== localParticipant.identity) {
+        // ai descriptor は最低限の shape を確認してから受け入れる (不正 metadata の安全弁)
+        const ai =
+          studio.ai &&
+          typeof studio.ai.id === 'string' &&
+          typeof studio.ai.ownerIdentity === 'string' &&
+          typeof studio.ai.trackName === 'string'
+            ? studio.ai
+            : null;
         setRemoteStudio({
           layout: (studio.layout ?? 'split') as StudioLayout,
-          slots: studio.slots ?? [],
+          slots: Array.isArray(studio.slots) ? studio.slots : [],
           showNameplates: !!studio.showNameplates,
           showAudience: !!studio.showAudience,
+          ai,
         });
       } else {
         setRemoteStudio(null);
@@ -497,6 +606,11 @@ function RoomInner({
       room.off(RoomEvent.Connected, applyStudio);
     };
   }, [room, localParticipant]);
+
+  // リモート側 (非ホスト参加者) の AI タイル状態。
+  // 配信された descriptor から購読トラック (ownerIdentity + trackName 完全一致) を解決し、
+  // そのトラックへのローカル RMS で speaking を判定する (追加シグナリング不要)。
+  const remoteAiTile = useRemoteAiTile(room, remoteStudio?.ai ?? null);
 
   // ── チャットUI / デバイス設定UI ──
   const [chatUnread, setChatUnread] = useState(0);
@@ -691,6 +805,9 @@ function RoomInner({
         {deviceError && (
           <DeviceErrorBanner message={deviceError} onDismiss={() => setDeviceError(null)} />
         )}
+        {studioSyncError && (
+          <DeviceErrorBanner message={studioSyncError} onDismiss={() => setStudioSyncError(null)} />
+        )}
         <div className="flex h-full w-full">
           {/* 左: チャット (収録中も参加者の発言を確認できる)。ステージの flex 兄弟として
               配置するため Region Capture のクロップ矩形に重ならない = 録画には映らない。 */}
@@ -707,9 +824,10 @@ function RoomInner({
             <div className="min-h-0 flex-1">
               <StudioStage
                 layout={studioLayout}
-                slotIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
+                slotTokens={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
                 showNameplates={showNameplates}
                 stageRef={studioStageRef}
+                aiTiles={aiTile ? { [AI_PARTICIPANT_ID]: aiTile } : undefined}
               />
             </div>
             {/* 視聴者サムネは録画ステージ (16:9) の外。表示されるが録画には含まれない。 */}
@@ -729,6 +847,9 @@ function RoomInner({
           isCameraOn={isCameraOn}
           isScreenSharing={isScreenSharing}
           isLocalRecording={isLocalRecording}
+          aiEnabled={aiEnabled}
+          aiError={aiEnabled && (aiStatus === 'error' || aiPublishFailed)}
+          onOpenAiSetup={() => setAiSetupOpen(true)}
           recordingUnsupported={!isLocalRecordingSupported}
           recordingQuality={recordingQuality}
           layout={studioLayout}
@@ -753,6 +874,20 @@ function RoomInner({
         {/* デバイス設定 / 招待 / 終了モーダルは収録モードでも利用可能 */}
         {deviceSettingsOpen && <DeviceSettingsModal onClose={closeDeviceSettings} />}
         {inviteOpen && <InviteModal onClose={closeInvite} />}
+        {aiSetupOpen && (
+          <AiParticipantSetupModal
+            room={room}
+            config={aiConfig}
+            onChangeConfig={handleChangeAiConfig}
+            enabled={aiEnabled}
+            onChangeEnabled={setAiEnabled}
+            aiStatus={aiStatus}
+            publishFailed={aiPublishFailed}
+            onReconnect={() => void aiReconnect()}
+            isRecording={isLocalRecording}
+            onClose={() => setAiSetupOpen(false)}
+          />
+        )}
         {endModalOpen && (
           <EndSessionModal
             isRecording={isRecording}
@@ -832,11 +967,16 @@ function RoomInner({
               <div className="min-h-0 flex-1">
                 <StudioStage
                   layout={remoteStudio.layout}
-                  slotIdentities={remoteStudio.slots.slice(
+                  slotTokens={remoteStudio.slots.slice(
                     0,
                     STUDIO_LAYOUT_SLOTS[remoteStudio.layout]
                   )}
                   showNameplates={remoteStudio.showNameplates}
+                  aiTiles={
+                    remoteAiTile && remoteStudio.ai
+                      ? { [remoteStudio.ai.id]: remoteAiTile }
+                      : undefined
+                  }
                 />
               </div>
               {remoteStudio.showAudience && (

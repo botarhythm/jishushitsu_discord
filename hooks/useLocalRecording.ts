@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Room, RemoteParticipant, RemoteTrack, RemoteTrackPublication } from 'livekit-client';
 import { RoomEvent, Track } from 'livekit-client';
 import { describeDisplayMediaFailure, isDisplayMediaSupported } from '@/lib/media-device-error';
+import type { AudioTrackRegistry } from '@/lib/audio-track-registry';
 
 /**
  * ts-ebml (と Buffer polyfill) をロードする。
@@ -76,6 +77,21 @@ interface UseLocalRecordingOptions {
    * 「録画に映ってはいけない」UI (例: 収録モードのチャットパネル) を直ちに閉じること。
    */
   onRegionCaptureUnavailable?: () => void;
+  /**
+   * Recorder が参加者を知らずに追加音声（AI 参加者等）を受け取るための汎用レジストリ。
+   * 録画開始時に現在のトラックを全て mix し、録画中の add/remove にも動的に追従する。
+   */
+  extraAudioTracks?: AudioTrackRegistry | null;
+  /**
+   * true のとき displayStream のタブ音声を録画ミキサーに接続しない（単一取り込みポリシー）。
+   *
+   * タブ音声には RoomAudioRenderer が再生しているリモート音声・AI モニタ音声が含まれ、
+   * 明示的にミックスしているリモートトラック/追加トラックと構造的に二重になる。
+   * AI 参加者を有効にした収録ではこれを true にし、録画入力を
+   * 「ローカルマイク + リモートトラック + extraAudioTracks」の明示トラックに一本化する。
+   * false（既定）の場合は従来どおりタブ音声も mix する（既存挙動の保護）。
+   */
+  excludeTabAudio?: boolean;
 }
 
 interface RemoteAudioNode {
@@ -94,6 +110,11 @@ interface RecordingResources {
   audioDestination: MediaStreamAudioDestinationNode | null;
   remoteAudioNodes: Map<string, RemoteAudioNode>;
   detachListeners: () => void;
+  /**
+   * 冪等な確定処理の完了 Promise。正常 stop / recorder.onerror のどこから
+   * 停止しても finalize は1回だけ走り、全経路がこの Promise に合流する。
+   */
+  finalizePromise: Promise<Blob | null>;
 }
 
 /**
@@ -108,6 +129,8 @@ export function useLocalRecording({
   includeMicrophone = true,
   room = null,
   onRegionCaptureUnavailable,
+  extraAudioTracks = null,
+  excludeTabAudio = false,
 }: UseLocalRecordingOptions = {}) {
   const [isRecording, setIsRecording] = useState(false);
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -132,6 +155,13 @@ export function useLocalRecording({
 
   const resourcesRef = useRef<RecordingResources | null>(null);
   const stopRef = useRef<() => Promise<Blob | null>>(() => Promise.resolve(null));
+  // excludeTabAudio / extraAudioTracks は録画開始時点の最新値を使う（stale closure 回避）
+  const excludeTabAudioRef = useRef(excludeTabAudio);
+  const extraTracksRef = useRef(extraAudioTracks);
+  useEffect(() => {
+    excludeTabAudioRef.current = excludeTabAudio;
+    extraTracksRef.current = extraAudioTracks;
+  }, [excludeTabAudio, extraAudioTracks]);
 
   const cleanup = useCallback(() => {
     const r = resourcesRef.current;
@@ -178,41 +208,35 @@ export function useLocalRecording({
 
   const stop = useCallback(async (): Promise<Blob | null> => {
     const r = resourcesRef.current;
-    if (!r || r.recorder.state === 'inactive') {
-      cleanup();
+    if (!r) {
       setIsRecording(false);
       setStartedAt(null);
       return null;
     }
-    return new Promise<Blob | null>((resolve) => {
-      r.recorder.onstop = async () => {
-        const rawBlob = new Blob(r.chunks, { type: r.recorder.mimeType });
-        // MediaRecorder の WebM は SeekHead / Cues / Duration が欠落しており
-        // 編集ソフトでタイムラインを構築できない (シーク不能)。
-        // ts-ebml でメタデータを注入し、シーク可能な WebM に変換してから保存。
-        const seekable = rawBlob.type.includes('webm')
-          ? await injectWebmSeekMetadata(rawBlob).catch((e) => {
-              console.error('[useLocalRecording] シーク索引の付与に失敗。生のBlobを保存します。', e);
-              // 生の WebM は尺情報・シーク索引が無く Canva 等の編集ソフトで
-              // 開けない/変換が壊れることがある。黙って保存すると収録後に初めて
-              // 気付くことになるため、ユーザーに見える形で警告する (保存自体は行う)。
-              setError(
-                '録画ファイルは保存されましたが、編集ソフト用のインデックス付与に失敗しました。このファイルは Canva 等で正しく読み込めない可能性があります。'
-              );
-              return rawBlob;
-            })
-          : rawBlob;
-        downloadBlob(seekable);
-        cleanup();
-        setIsRecording(false);
-        setStartedAt(null);
-        resolve(seekable);
-      };
-      r.recorder.stop();
-    });
-  }, [cleanup, downloadBlob]);
+    // 確定処理 (finalize) は start() 時に recorder.onstop へ冪等に仕込んである。
+    // ここでは停止要求を出して合流するだけ。onerror 経由で既に停止済みでも
+    // finalizePromise は同じ結果を返す (二重確定しない)。
+    try {
+      if (r.recorder.state !== 'inactive') r.recorder.stop();
+    } catch {
+      // recorder が既に inactive の場合など。finalizePromise 側で回収される。
+    }
+    return r.finalizePromise;
+  }, []);
 
   stopRef.current = stop;
+
+  // 録画中のタブ閉じ/リロードを警告する (メモリ内チャンクは失われるため)
+  useEffect(() => {
+    if (!isRecording) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '録画中です。タブを閉じると録画データが失われます。';
+      return e.returnValue;
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isRecording]);
 
   const start = useCallback(async (
     quality: RecordingQuality = 'streaming',
@@ -309,21 +333,31 @@ export function useLocalRecording({
     let finalStream = displayStream;
     let detachListeners: () => void = () => {};
 
-    const willMixAudio = includeMicrophone || !!room;
+    const extraRegistry = extraTracksRef.current;
+    const willMixAudio = includeMicrophone || !!room || !!extraRegistry;
     if (willMixAudio) {
       audioContext = new AudioContext();
       audioDestination = audioContext.createMediaStreamDestination();
 
-      // タブ音声があれば足す
-      const tabAudioTracks = displayStream.getAudioTracks();
-      if (tabAudioTracks.length > 0 && audioContext && audioDestination) {
-        try {
-          const tabSrc = audioContext.createMediaStreamSource(
-            new MediaStream(tabAudioTracks)
-          );
-          tabSrc.connect(audioDestination);
-        } catch (e) {
-          console.warn('[useLocalRecording] タブ音声接続失敗', e);
+      // 接続済みトラックの重複排除 (同じ MediaStreamTrack を複数経路で二重ミックスしない)
+      const connectedTrackIds = new Set<string>();
+
+      // タブ音声があれば足す。
+      // ただし excludeTabAudio (単一取り込みポリシー) のときは接続しない —
+      // タブ音声には RoomAudioRenderer が再生中のリモート音声等が含まれ、
+      // 下の明示トラックミックスと構造的に二重になるため。
+      if (!excludeTabAudioRef.current) {
+        const tabAudioTracks = displayStream.getAudioTracks();
+        if (tabAudioTracks.length > 0 && audioContext && audioDestination) {
+          try {
+            const tabSrc = audioContext.createMediaStreamSource(
+              new MediaStream(tabAudioTracks)
+            );
+            tabSrc.connect(audioDestination);
+            tabAudioTracks.forEach((t) => connectedTrackIds.add(t.id));
+          } catch (e) {
+            console.warn('[useLocalRecording] タブ音声接続失敗', e);
+          }
         }
       }
 
@@ -352,18 +386,21 @@ export function useLocalRecording({
           const mst = pub?.track?.mediaStreamTrack;
           if (!mst) return false;
           if (localMicNode?.track === mst) return true; // 既に同じトラックを接続済み
+          if (connectedTrackIds.has(mst.id)) return true; // 別経路で接続済み (二重ミックス防止)
           if (localMicNode) {
             try {
               localMicNode.source.disconnect();
             } catch {
               // ignore
             }
+            connectedTrackIds.delete(localMicNode.track.id);
             localMicNode = null;
           }
           try {
             const source = audioContext.createMediaStreamSource(new MediaStream([mst]));
             source.connect(audioDestination);
             localMicNode = { track: mst, source };
+            connectedTrackIds.add(mst.id);
             return true;
           } catch (e) {
             console.warn('[useLocalRecording] ローカルマイク接続失敗', e);
@@ -408,10 +445,13 @@ export function useLocalRecording({
         if (!ms) return;
         const key = `${participant.identity}:${track.sid ?? Math.random()}`;
         if (remoteAudioNodes.has(key)) return;
+        const mstId = track.mediaStreamTrack?.id;
+        if (mstId && connectedTrackIds.has(mstId)) return; // 二重ミックス防止
         try {
           const source = audioContext.createMediaStreamSource(ms);
           source.connect(audioDestination);
           remoteAudioNodes.set(key, { identity: participant.identity, trackSid: track.sid ?? '', source, stream: ms });
+          if (mstId) connectedTrackIds.add(mstId);
         } catch (e) {
           console.warn('[useLocalRecording] リモート音声接続失敗', e);
         }
@@ -426,6 +466,7 @@ export function useLocalRecording({
             } catch {
               // ignore
             }
+            node.stream.getAudioTracks().forEach((t) => connectedTrackIds.delete(t.id));
             remoteAudioNodes.delete(key);
           }
         }
@@ -444,6 +485,46 @@ export function useLocalRecording({
         room.on(RoomEvent.TrackUnsubscribed, removeRemoteTrack);
       }
 
+      // 追加音声トラック (AI 参加者等)。Recorder はレジストリの中身が何かを知らない。
+      // リモートトラックと同型の動的 add/remove で、録画中の差し替え (再接続) にも追従する。
+      let detachExtraTracks: () => void = () => {};
+      if (extraRegistry) {
+        const extraNodes = new Map<string, { source: MediaStreamAudioSourceNode; trackId: string }>();
+        const connectExtra = (id: string, track: MediaStreamTrack) => {
+          if (!audioContext || !audioDestination) return;
+          if (extraNodes.has(id)) return;
+          if (connectedTrackIds.has(track.id)) return; // 二重ミックス防止
+          try {
+            const source = audioContext.createMediaStreamSource(new MediaStream([track]));
+            source.connect(audioDestination);
+            extraNodes.set(id, { source, trackId: track.id });
+            connectedTrackIds.add(track.id);
+          } catch (e) {
+            console.warn('[useLocalRecording] 追加音声トラック接続失敗', e);
+          }
+        };
+        const disconnectExtra = (id: string) => {
+          const node = extraNodes.get(id);
+          if (!node) return;
+          try {
+            node.source.disconnect();
+          } catch {
+            // ignore
+          }
+          connectedTrackIds.delete(node.trackId);
+          extraNodes.delete(id);
+        };
+        extraRegistry.list().forEach(({ id, track }) => connectExtra(id, track));
+        const unsubscribe = extraRegistry.subscribe((ev) => {
+          if (ev.type === 'add' && ev.track) connectExtra(ev.id, ev.track);
+          else if (ev.type === 'remove') disconnectExtra(ev.id);
+        });
+        detachExtraTracks = () => {
+          unsubscribe();
+          extraNodes.forEach((_node, id) => disconnectExtra(id));
+        };
+      }
+
       finalStream = new MediaStream([
         ...displayStream.getVideoTracks(),
         ...audioDestination.stream.getAudioTracks(),
@@ -455,6 +536,7 @@ export function useLocalRecording({
           room.off(RoomEvent.TrackUnsubscribed, removeRemoteTrack);
         }
         detachLocalMicListener();
+        detachExtraTracks();
       };
     }
 
@@ -487,6 +569,70 @@ export function useLocalRecording({
       if (e.data.size > 0) chunks.push(e.data);
     };
 
+    // ── 冪等な確定処理 ──
+    // 正常 stop / recorder.onerror / トラック消失のどの経路から停止しても、
+    // finalize は1回だけ実行され、ここまでのチャンクで WebM を確定・保存する。
+    // ブラウザクラッシュ以外の障害でファイルを全損させないための集約点。
+    let finalized = false;
+    let resolveFinalize: (b: Blob | null) => void = () => {};
+    const finalizePromise = new Promise<Blob | null>((resolve) => {
+      resolveFinalize = resolve;
+    });
+    const finalize = async (reason: 'stop' | 'error') => {
+      if (finalized) return;
+      finalized = true;
+      let result: Blob | null = null;
+      try {
+        if (chunks.length > 0) {
+          const rawBlob = new Blob(chunks, { type: recorder.mimeType });
+          // MediaRecorder の WebM は SeekHead / Cues / Duration が欠落しており
+          // 編集ソフトでタイムラインを構築できない (シーク不能)。
+          // ts-ebml でメタデータを注入し、シーク可能な WebM に変換してから保存。
+          const seekable = rawBlob.type.includes('webm')
+            ? await injectWebmSeekMetadata(rawBlob).catch((e) => {
+                console.error('[useLocalRecording] シーク索引の付与に失敗。生のBlobを保存します。', e);
+                // 生の WebM は尺情報・シーク索引が無く Canva 等の編集ソフトで
+                // 開けない/変換が壊れることがある。黙って保存すると収録後に初めて
+                // 気付くことになるため、ユーザーに見える形で警告する (保存自体は行う)。
+                setError(
+                  '録画ファイルは保存されましたが、編集ソフト用のインデックス付与に失敗しました。このファイルは Canva 等で正しく読み込めない可能性があります。'
+                );
+                return rawBlob;
+              })
+            : rawBlob;
+          downloadBlob(seekable);
+          result = seekable;
+          if (reason === 'error') {
+            setError('録画中にエラーが発生したため停止しました。ここまでの録画は保存済みです。');
+          }
+        } else if (reason === 'error') {
+          setError('録画中にエラーが発生しました。保存できるデータがありませんでした。');
+        }
+      } finally {
+        cleanup();
+        setIsRecording(false);
+        setStartedAt(null);
+        resolveFinalize(result);
+      }
+    };
+    recorder.onstop = () => {
+      void finalize('stop');
+    };
+    recorder.onerror = (ev) => {
+      console.error('[useLocalRecording] MediaRecorder error', ev);
+      try {
+        if (recorder.state !== 'inactive') {
+          recorder.stop(); // onstop → finalize('stop') が走るが、メッセージは error 用に上書きする
+          void finalizePromise.then(() => {});
+          setError('録画中にエラーが発生したため停止しました。ここまでの録画は保存済みです。');
+        } else {
+          void finalize('error');
+        }
+      } catch {
+        void finalize('error');
+      }
+    };
+
     resourcesRef.current = {
       recorder,
       chunks,
@@ -496,6 +642,7 @@ export function useLocalRecording({
       audioDestination,
       remoteAudioNodes,
       detachListeners,
+      finalizePromise,
     };
 
     displayStream.getVideoTracks()[0]?.addEventListener('ended', () => {

@@ -4,12 +4,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RecordingQuality } from '@/hooks/useLocalRecording';
 import {
   STUDIO_LAYOUT_LABELS,
-  STUDIO_LAYOUT_SLOTS,
+  STUDIO_LAYOUTS,
   type StudioLayout,
-} from './StudioStage';
+} from '@/lib/studio-layouts';
 
 export interface StudioParticipantOption {
-  identity: string;
+  /** スロットトークン。人間 = LiveKit identity / AI = "ai:<id>" */
+  token: string;
   name: string;
 }
 
@@ -18,6 +19,12 @@ interface StudioBarProps {
   isCameraOn: boolean;
   isScreenSharing: boolean;
   isLocalRecording: boolean;
+  /** AI 参加者 (ChatGPT) が有効か */
+  aiEnabled?: boolean;
+  /** AI 参加者にエラー/配信失敗があるか (バッジ表示) */
+  aiError?: boolean;
+  /** AI 参加者セットアップモーダルを開く */
+  onOpenAiSetup?: () => void;
   /** true の間は録画ボタンを無効化する (iPhone等 getDisplayMedia 非対応環境向け) */
   recordingUnsupported?: boolean;
   recordingQuality: RecordingQuality;
@@ -60,6 +67,9 @@ export function StudioBar(props: StudioBarProps) {
     isCameraOn,
     isScreenSharing,
     isLocalRecording,
+    aiEnabled = false,
+    aiError = false,
+    onOpenAiSetup,
     recordingUnsupported = false,
     recordingQuality,
     layout,
@@ -109,7 +119,8 @@ export function StudioBar(props: StudioBarProps) {
     };
   }, [scheduleHide]);
 
-  const slotCount = STUDIO_LAYOUT_SLOTS[layout];
+  const layoutSpec = STUDIO_LAYOUTS[layout] ?? STUDIO_LAYOUTS.split;
+  const slotCount = layoutSpec.slots.length;
 
   return (
     <div
@@ -212,12 +223,9 @@ export function StudioBar(props: StudioBarProps) {
           ))}
         </select>
 
-        {/* 出演者スロット割当（speaker レイアウトは主役/サブのラベル表示） */}
+        {/* 出演者スロット割当（ラベルはレイアウトレジストリの roleLabel から） */}
         {Array.from({ length: slotCount }).map((_, i) => {
-          const slotName =
-            layout === 'speaker'
-              ? (['主役(ゲスト)', 'サブ1', 'サブ2'][i] ?? `枠${i + 1}`)
-              : `出演者${i + 1}`;
+          const slotName = layoutSpec.slots[i]?.roleLabel ?? `出演者${i + 1}`;
           return (
             <select
               key={i}
@@ -229,13 +237,29 @@ export function StudioBar(props: StudioBarProps) {
             >
               <option value="">{slotName}: 未割当</option>
               {participantOptions.map((p) => (
-                <option key={p.identity} value={p.identity}>
+                <option key={p.token} value={p.token}>
                   {p.name}
                 </option>
               ))}
             </select>
           );
         })}
+
+        {/* AI 参加者 (ChatGPT) セットアップ */}
+        {onOpenAiSetup && (
+          <div className="relative">
+            <BarButton
+              active={aiEnabled}
+              label={aiEnabled ? 'AI参加者: 有効 (設定を開く)' : 'AI参加者を追加'}
+              onClick={onOpenAiSetup}
+            >
+              🤖
+            </BarButton>
+            {aiError && (
+              <span className="absolute -right-1 -top-1 flex h-3 w-3 rounded-full bg-red-500" aria-hidden />
+            )}
+          </div>
+        )}
 
         <BarButton active={showNameplates} label="名前表示" onClick={onToggleNameplates}>
           🏷️
