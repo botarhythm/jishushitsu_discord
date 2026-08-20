@@ -307,6 +307,22 @@ export default function AiParticipantHelpPage() {
               VoiceMeeter がインストール時に既定の再生デバイスを奪っています。
               設定 → システム → サウンド → 出力 でヘッドホンを選び直してください。
             </Trouble>
+            <Trouble q="収録以外のアプリのために Windows の既定を変えたくない">
+              変える必要はありません。Discord・Zoom などは
+              <strong className="text-stone-200">アプリ内で出力/入力デバイスを指定できます</strong>。
+              一度そこで実物（スピーカー、マイク配列）を選べば、Windows の既定が何であっても
+              影響を受けません。ChatGPT も手順6でアプリ別に固定済みです。Windows の既定は
+              「自分でデバイスを選ばないアプリのための保険」と考え、
+              <strong className="text-stone-200">CABLE と Voicemeeter だけは既定に出さない</strong>
+              ことだけ守ってください。
+            </Trouble>
+            <Trouble q="Bluetooth のヘッドホンを使いたい">
+              聴くだけなら問題ありません。ただし
+              <strong className="text-stone-200">その内蔵マイクは絶対に選ばないでください</strong>。
+              Bluetooth はマイクを使った瞬間にハンズフリー通話モードへ切り替わり、
+              音質が電話並みに落ちます（デバイス一覧に「〜 Hands-Free」として別に並んでいるのがそれです）。
+              収録に使う声は物理マイク（マイク配列）から録ってください。
+            </Trouble>
             <Trouble q="設定が壊れて何をしても直らない">
               音量ミキサー最下部の「リセット」でアプリ別設定を全消去してから、
               手順6をやり直すのが確実です。
