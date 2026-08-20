@@ -141,6 +141,16 @@ export interface AiParticipantConfig {
   sinkDeviceId: string | null;
   sinkDeviceLabel?: string;
   /**
+   * あなたの声をアプリから ChatGPT へ送るか。
+   *
+   * false にすると、アプリはリモート参加者の声だけを送る。物理マイクを
+   * VoiceMeeter 側で常時 B1 に流している構成では false にする
+   * （両方送ると ChatGPT にあなたの声が二重に届く）。
+   * false 側の利点は、アプリを起動していなくても他の通話アプリが
+   * 普通にマイクを使えること。
+   */
+  sendLocalMic?: boolean;
+  /**
    * 自己ループ検査に通った（または手動確認した）ときの配線の指紋。
    * 現在の配線とこれが一致する間は、セットアップを再度通さずワンクリックで起動してよい。
    *
@@ -155,6 +165,7 @@ export const DEFAULT_AI_CONFIG: AiParticipantConfig = {
   avatar: '🤖',
   sourceDeviceId: null,
   sinkDeviceId: null,
+  sendLocalMic: true,
   validatedFingerprint: null,
 };
 

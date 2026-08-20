@@ -236,7 +236,11 @@ export function useAiParticipant({
     const mixer = new ChatGptInputMixer();
     mixerRef.current = mixer;
     queueMicrotask(() => setInputMixerError(null));
-    mixer.start(room, sinkDeviceId).catch((e) => {
+    mixer
+      .start(room, sinkDeviceId, {
+        includeLocalMic: configRef.current.sendLocalMic !== false,
+      })
+      .catch((e) => {
       console.error('[useAiParticipant] ChatGPT入力ミキサーの起動に失敗', e);
       setInputMixerError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     });

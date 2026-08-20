@@ -655,6 +655,22 @@ export function AiParticipantSetupModal({
           設定すると、あなたと相手の声だけをアプリ内でミックスして ChatGPT
           の耳へ届けます（AI 自身の声は構造的に混ざりません）。
         </p>
+        <label className="mb-3 flex items-start gap-2 text-[11px] leading-relaxed text-stone-400">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={config.sendLocalMic === false}
+            onChange={(e) => set({ sendLocalMic: !e.target.checked })}
+          />
+          <span>
+            あなたの声は <strong>VoiceMeeter 側で常時 ChatGPT に送っている</strong>
+            （アプリからは送らない）
+            <br />
+            物理マイクを VoiceMeeter のハードウェア入力から B1 へ流している構成で
+            チェックします。アプリを起動していなくても他の通話アプリが普通にマイクを
+            使えるようになります。チェックしないと、あなたの声が ChatGPT に二重に届きます。
+          </span>
+        </label>
         {enabled && monitorDeviceId && (
           <div className="mb-3">
             <div className="mb-1 flex items-center justify-between text-xs text-stone-400">

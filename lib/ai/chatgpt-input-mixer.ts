@@ -32,7 +32,12 @@ export class ChatGptInputMixer {
    * @param room   接続済みの LiveKit Room
    * @param sinkId ChatGPT の入力デバイスへ渡す audiooutput deviceId（CABLE-B Input 等）
    */
-  async start(room: Room, sinkId: string): Promise<void> {
+  async start(
+    room: Room,
+    sinkId: string,
+    opts: { includeLocalMic?: boolean } = {}
+  ): Promise<void> {
+    const includeLocalMic = opts.includeLocalMic ?? true;
     if (this.started) return;
     this.started = true;
 
@@ -65,6 +70,9 @@ export class ChatGptInputMixer {
 
     // ── ローカルマイク（Human A）──
     const connectLocalMic = () => {
+      // 物理マイクを VoiceMeeter 側で送っている構成では、アプリからは送らない
+      // （両方送るとChatGPTにあなたの声が二重に届く）
+      if (!includeLocalMic) return;
       const pub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
       // 実行時ガード: マイク publication 以外（AI publish 等）はここに来ない
       if (!pub || classifyAudioPublication(pub) !== 'human') return;
