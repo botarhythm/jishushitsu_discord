@@ -303,7 +303,7 @@ export default function AiParticipantHelpPage() {
           </ul>
           <Shot
             src="/help/ai-participant/app-settings.png"
-            caption="デバイスを選び終えた状態。★印は名前から自動で見つけた推奨デバイス。長い説明は「詳しく」に畳まれている"
+            caption="デバイスを選び終えた状態。★印は名前から自動で見つけた推奨デバイス。詳しい説明は「詳しく」に畳まれている"
           />
           <Callout tone="warn" title="この設定はサイトごとに保存されます">
             設定はブラウザの localStorage に保存されるため、
@@ -352,7 +352,7 @@ export default function AiParticipantHelpPage() {
           </Callout>
           <Shot
             src="/help/ai-participant/preflight.png"
-            caption="収録前チェックと、その下の参考情報。「Windows 側で選ぶべきデバイス」には、いま選んだ内容に対応する Windows 側の設定値が出る"
+            caption="収録前チェックと送出モニタ。「Windows 側で選ぶべきデバイス」には、いま選んだ内容に対応する Windows 側の設定値が出る"
           />
           <Check>
             6項目すべてに ✔ が付けば設定完了です。この配線が「検証済み」として記録され、
