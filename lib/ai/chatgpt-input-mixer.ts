@@ -26,6 +26,8 @@ export class ChatGptInputMixer {
   private detach: (() => void) | null = null;
   private started = false;
   private blockedMicLabel: string | null = null;
+  private includeLocalMic = true;
+  private connectLocalMicFn: (() => void) | null = null;
 
   /**
    * @param room   接続済みの LiveKit Room
@@ -36,41 +38,48 @@ export class ChatGptInputMixer {
     sinkId: string,
     opts: { includeLocalMic?: boolean } = {}
   ): Promise<void> {
-    const includeLocalMic = opts.includeLocalMic ?? true;
+    this.includeLocalMic = opts.includeLocalMic ?? true;
     if (this.started) return;
     this.started = true;
 
-    const ctx = getSharedAudioContext();
-    this.ctx = ctx;
-    this.dest = ctx.createMediaStreamDestination();
-    // 全ソースはこの gain を経由して destination へ送る。自己ループ検査中に
-    // 送出だけ止めて「OS 側の漏れ」だけを測れるようにするため。
-    this.gain = ctx.createGain();
-    this.gain.connect(this.dest);
-    // autoplay ポリシーで suspended のまま作られることがある。suspended だと
-    // destination に音が流れず、送出先に何も届かない（無音の原因になる）。
-    if (ctx.state !== "running") {
-      await ctx.resume().catch(() => {});
-    }
+    try {
+      const ctx = getSharedAudioContext();
+      this.ctx = ctx;
+      this.dest = ctx.createMediaStreamDestination();
+      // 全ソースはこの gain を経由して destination へ送る。自己ループ検査中に
+      // 送出だけ止めて「OS 側の漏れ」だけを測れるようにするため。
+      this.gain = ctx.createGain();
+      this.gain.connect(this.dest);
+      // autoplay ポリシーで suspended のまま作られることがある。suspended だと
+      // destination に音が流れず、送出先に何も届かない（無音の原因になる）。
+      if (ctx.state !== "running") {
+        await ctx.resume().catch(() => {});
+      }
 
-    // 送出先: hidden audio 要素を明示 sink（CABLE-B Input）へ。
-    // 既定出力（ヘッドホン）には流さないので、ホストのモニタ経路とは独立。
-    const el = document.createElement('audio');
-    el.style.display = 'none';
-    el.autoplay = true;
-    el.srcObject = this.dest.stream;
-    document.body.appendChild(el);
-    this.audioEl = el;
-    await el.setSinkId(sinkId);
-    el.play().catch(() => {
-      // autoplay 制限は AudioRuntime の resume と同じユーザー操作で解除される
-    });
+      // 送出先: hidden audio 要素を明示 sink（CABLE-B Input）へ。
+      // 既定出力（ヘッドホン）には流さないので、ホストのモニタ経路とは独立。
+      //
+      // 順序が重要: setSinkId が「先」、srcObject / DOM 追加 / play が「後」。
+      // 逆にすると setSinkId 失敗時に既定出力（＝スピーカー等）へ音が流れる
+      // audio 要素が残り、意図しない再生になる (Codex レビュー #7)。
+      const el = document.createElement('audio');
+      el.style.display = 'none';
+      await el.setSinkId(sinkId);
+      el.srcObject = this.dest.stream;
+      document.body.appendChild(el);
+      this.audioEl = el;
+      el.play().catch(() => {
+        // autoplay 制限は AudioRuntime の resume と同じユーザー操作で解除される
+      });
 
     // ── ローカルマイク（Human A）──
     const connectLocalMic = () => {
       // 物理マイクを VoiceMeeter 側で送っている構成では、アプリからは送らない
       // （両方送るとChatGPTにあなたの声が二重に届く）
-      if (!includeLocalMic) return;
+      if (!this.includeLocalMic) {
+        this.disconnectLocalMic();
+        return;
+      }
       const pub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
       // 実行時ガード: マイク publication 以外（AI publish 等）はここに来ない
       if (!pub || classifyAudioPublication(pub) !== 'human') return;
@@ -154,13 +163,45 @@ export class ChatGptInputMixer {
     // さらに取りこぼし対策として定期的にも読み直す(connectLocalMic は冪等)。
     room.on(RoomEvent.ActiveDeviceChanged, onLocalPublished);
     const micPoll = setInterval(connectLocalMic, 1000);
-    this.detach = () => {
-      room.off(RoomEvent.TrackSubscribed, addRemote);
-      room.off(RoomEvent.TrackUnsubscribed, removeRemote);
-      room.off(RoomEvent.LocalTrackPublished, onLocalPublished);
-      room.off(RoomEvent.ActiveDeviceChanged, onLocalPublished);
-      clearInterval(micPoll);
-    };
+      this.connectLocalMicFn = connectLocalMic;
+      this.detach = () => {
+        room.off(RoomEvent.TrackSubscribed, addRemote);
+        room.off(RoomEvent.TrackUnsubscribed, removeRemote);
+        room.off(RoomEvent.LocalTrackPublished, onLocalPublished);
+        room.off(RoomEvent.ActiveDeviceChanged, onLocalPublished);
+        clearInterval(micPoll);
+      };
+    } catch (e) {
+      // 中途半端に起動したノード・要素を残さない (setSinkId 失敗時に既定出力へ
+      // 流れる audio 要素が残る事故の防止)。失敗は呼び出し側に伝える。
+      this.stop();
+      throw e;
+    }
+  }
+
+  /**
+   * ローカルマイクをミックスに含めるかを稼働中に切り替える。
+   * 設定画面のチェックボックスは有効化後も変更できるため、start 時の
+   * スナップショットだけでなくここで即時反映する (Codex レビュー #5)。
+   */
+  setIncludeLocalMic(on: boolean): void {
+    this.includeLocalMic = on;
+    if (!this.started) return;
+    if (on) {
+      this.connectLocalMicFn?.();
+    } else {
+      this.disconnectLocalMic();
+    }
+  }
+
+  private disconnectLocalMic(): void {
+    if (!this.localMicNode) return;
+    try {
+      this.localMicNode.source.disconnect();
+    } catch {
+      // ignore
+    }
+    this.localMicNode = null;
   }
 
   /** 送出の一時停止/再開（自己ループ検査中に OS 側の漏れだけを測るため） */
@@ -219,6 +260,7 @@ export class ChatGptInputMixer {
     this.ctx = null;
     this.gain = null;
     this.dest = null;
+    this.connectLocalMicFn = null;
     this.started = false;
   }
 }

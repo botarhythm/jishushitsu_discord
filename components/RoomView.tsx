@@ -44,7 +44,8 @@ import {
   isAiSlotToken,
   isAiWiringValidated,
   loadAiConfig,
-  saveAiConfig,
+  patchAiConfig,
+  subscribeAiConfig,
   type AiParticipantConfig,
   type StudioAiDescriptor,
 } from '@/lib/studio-participants';
@@ -249,10 +250,22 @@ function RoomInner({
   const [aiEnabled, setAiEnabled] = useState(false);
   const [aiSetupOpen, setAiSetupOpen] = useState(false);
   const aiRegistry = useMemo(() => new AudioTrackRegistry(), []);
-  const handleChangeAiConfig = useCallback((c: AiParticipantConfig) => {
-    setAiConfig(c);
-    saveAiConfig(c);
-  }, []);
+  /**
+   * 設定の書き込みは patch 経路に一本化する。保存済みの最新値へ patch だけを
+   * 重ねるので、この画面の state が古くても他フィールドを巻き戻さない
+   * (スナップショット全体保存による設定消失の恒久対策。Codex レビュー #3/#4)。
+   * @returns localStorage へ書けたか
+   */
+  const handlePatchAiConfig = useCallback(
+    async (patch: Partial<AiParticipantConfig>): Promise<boolean> => {
+      const { config, persisted } = await patchAiConfig(patch);
+      setAiConfig(config);
+      return persisted;
+    },
+    []
+  );
+  // 別タブで保存されたら読み直す (古い state のまま上書きし合う競合の遮断)
+  useEffect(() => subscribeAiConfig(setAiConfig), []);
 
   // ── ローカル録画（全員対象。タブを録画して WebM 保存） ──
   const [recordingQuality, setRecordingQuality] = useState<RecordingQuality>('streaming');
@@ -384,6 +397,7 @@ function RoomInner({
     publishFailed: aiPublishFailed,
     inputMixerError: aiInputMixerError,
     setInputMixerSendEnabled: aiSetInputMixerSendEnabled,
+    setInputMixerIncludeLocalMic: aiSetInputMixerIncludeLocalMic,
     getInputMixerDiagnostics: aiGetInputMixerDiagnostics,
     tile: aiTile,
     descriptor: aiDescriptor,
@@ -510,6 +524,14 @@ function RoomInner({
    * 収録中に素早く出し入れできるよう、収録バーから1クリックで切り替えられる。
    */
   const toggleAi = useCallback(() => {
+    // 録画中の切替は全面禁止 (Codex レビュー #2)。録画ミキサーのタブ音声経路は
+    // 録画開始時のスナップショットで固定されるため、途中で AI を足すと
+    // 「タブ再生 + AI トラック」で音声が二重に録音される。外す方向も、
+    // 経路の整合が取れないまま録画が続くので許可しない。
+    if (isLocalRecording) {
+      alert('録画中は AI 参加者を切り替えできません。録画を停止してから操作してください。');
+      return;
+    }
     if (aiEnabled) {
       setAiEnabled(false);
       return;
@@ -519,7 +541,7 @@ function RoomInner({
       return;
     }
     setAiEnabled(true);
-  }, [aiEnabled, aiConfig.sourceDeviceId]);
+  }, [aiEnabled, aiConfig.sourceDeviceId, isLocalRecording]);
 
   /**
    * ダッシュボードの「AI参加者つきで収録開始」。
@@ -923,6 +945,7 @@ function RoomInner({
           isLocalRecording={isLocalRecording}
           aiEnabled={aiEnabled}
           aiError={aiEnabled && (aiStatus === 'error' || aiPublishFailed)}
+          aiToggleDisabled={isLocalRecording}
           onToggleAi={toggleAi}
           onOpenAiSetup={() => setAiSetupOpen(true)}
           onOpenDeviceSettings={openDeviceSettings}
@@ -954,13 +977,14 @@ function RoomInner({
           <AiParticipantSetupModal
             room={room}
             config={aiConfig}
-            onChangeConfig={handleChangeAiConfig}
+            onPatchConfig={handlePatchAiConfig}
             enabled={aiEnabled}
             onChangeEnabled={setAiEnabled}
             aiStatus={aiStatus}
             publishFailed={aiPublishFailed}
             inputMixerError={aiInputMixerError}
             setInputMixerSendEnabled={aiSetInputMixerSendEnabled}
+            setInputMixerIncludeLocalMic={aiSetInputMixerIncludeLocalMic}
             getInputMixerDiagnostics={aiGetInputMixerDiagnostics}
             onReconnect={() => void aiReconnect()}
             isRecording={isLocalRecording}

@@ -202,30 +202,125 @@ export function isAiWiringValidated(config: AiParticipantConfig): boolean {
 
 export const AI_AVATAR_PRESETS = ['🤖', '🧠', '✨', '🎙️', '🦉', '🐬'] as const;
 
+/* ── 永続化 (v2) ──────────────────────────────────────────
+ *
+ * v1 (キー jishushitsu.aiParticipant) は config を素の JSON で保存しており、
+ * ①スキーマ版数が無く、後から追加した真偽値フィールドが「無い＝既定値 true」に
+ * 化ける ②UI が古いスナップショット全体を保存すると他フィールドが巻き戻る、
+ * という2つの欠陥で設定消失を起こした (2026-08-20 実機で再現、Codex レビュー #3)。
+ *
+ * v2 は {schemaVersion, updatedAt, config} の封筒に入れ、キー自体を変える。
+ * 旧ビルドのタブは v2 キーを知らないため、並走しても v2 を上書きできない。
+ * 書き込みは patchAiConfig() の「最新値を読み直してから patch だけ重ねる」
+ * 経路に一本化し、スナップショット全体保存を廃止する。
+ */
+
+const STORAGE_KEY_V2 = 'jishushitsu.aiParticipant.v2';
+
+interface AiConfigEnvelopeV2 {
+  schemaVersion: 2;
+  updatedAt: number;
+  config: AiParticipantConfig;
+}
+
+/** フィールドごとに型検証しながら既定値へマージする (as Partial を信用しない) */
+function sanitizeAiConfig(raw: unknown): AiParticipantConfig {
+  const p = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
+  const optStr = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+  const bool = (v: unknown, dflt: boolean): boolean => (typeof v === 'boolean' ? v : dflt);
+  return {
+    displayName:
+      typeof p.displayName === 'string' && p.displayName.trim()
+        ? p.displayName.trim().slice(0, 32)
+        : DEFAULT_AI_CONFIG.displayName,
+    avatar: typeof p.avatar === 'string' && p.avatar ? p.avatar : DEFAULT_AI_CONFIG.avatar,
+    sourceDeviceId: str(p.sourceDeviceId),
+    sourceDeviceLabel: optStr(p.sourceDeviceLabel),
+    sinkDeviceId: str(p.sinkDeviceId),
+    sinkDeviceLabel: optStr(p.sinkDeviceLabel),
+    sendLocalMic: bool(p.sendLocalMic, true),
+    monitorAiLocally: bool(p.monitorAiLocally, true),
+    validatedFingerprint: str(p.validatedFingerprint),
+  };
+}
+
 export function loadAiConfig(): AiParticipantConfig {
   if (typeof window === 'undefined') return DEFAULT_AI_CONFIG;
   try {
-    const raw = window.localStorage.getItem(AI_PARTICIPANT_STORAGE_KEY);
-    if (!raw) return DEFAULT_AI_CONFIG;
-    const parsed = JSON.parse(raw) as Partial<AiParticipantConfig>;
-    return {
-      ...DEFAULT_AI_CONFIG,
-      ...parsed,
-      displayName:
-        typeof parsed.displayName === 'string' && parsed.displayName.trim()
-          ? parsed.displayName.trim().slice(0, 32)
-          : DEFAULT_AI_CONFIG.displayName,
-    };
+    const rawV2 = window.localStorage.getItem(STORAGE_KEY_V2);
+    if (rawV2) {
+      const env = JSON.parse(rawV2) as Partial<AiConfigEnvelopeV2>;
+      if (env && env.schemaVersion === 2) return sanitizeAiConfig(env.config);
+      // 版数が読めない v2 キーは壊れている。v1 フォールバックへ
+    }
+    // v1 からの移行 (読み取りのみ。v1 は旧ビルドのロールバック用に残す)
+    const rawV1 = window.localStorage.getItem(AI_PARTICIPANT_STORAGE_KEY);
+    if (rawV1) return sanitizeAiConfig(JSON.parse(rawV1));
+    return DEFAULT_AI_CONFIG;
   } catch {
     return DEFAULT_AI_CONFIG;
   }
 }
 
-export function saveAiConfig(config: AiParticipantConfig): void {
-  if (typeof window === 'undefined') return;
+/** @returns 保存に成功したか。false なら設定はこのセッション限りで消える */
+export function saveAiConfig(config: AiParticipantConfig): boolean {
+  if (typeof window === 'undefined') return false;
   try {
-    window.localStorage.setItem(AI_PARTICIPANT_STORAGE_KEY, JSON.stringify(config));
+    const env: AiConfigEnvelopeV2 = { schemaVersion: 2, updatedAt: Date.now(), config };
+    window.localStorage.setItem(STORAGE_KEY_V2, JSON.stringify(env));
+    return true;
   } catch {
-    // localStorage 不可 (プライベートモード等) は永続化を諦めるだけでよい
+    // localStorage 不可 (プライベートモード等)。呼び出し側が UI に警告を出す
+    return false;
   }
+}
+
+/**
+ * 保存に失敗したとき (プライベートモード等) のメモリ上の正本。
+ * localStorage が使えない環境でも、同一タブ内の連続編集が
+ * 「古い保存値との再マージ」で消えないようにする (Codex 第2巡 #9)。
+ */
+let unpersistedConfig: AiParticipantConfig | null = null;
+
+/**
+ * 設定の唯一の書き込み経路。
+ *
+ * 保存済みの最新値 (保存不能時はメモリ正本) へ patch だけを重ねる。呼び出し側の
+ * スナップショット (React の props / 別タブの古い state) が何であっても、
+ * patch に含まれないフィールドは巻き戻らない。
+ *
+ * load→merge→save を Web Locks で同一オリジン全タブにわたり直列化する
+ * (Codex 第2巡 #3: 同期実行だけではタブ間の交錯書き込みを防げない)。
+ * Web Locks 非対応環境 (このアプリは Region Capture の都合で Chromium 前提
+ * なので実質無い) では直列化なしで実行する。
+ *
+ * @returns { config, persisted } — マージ後の全体と、localStorage へ書けたか
+ */
+export async function patchAiConfig(
+  patch: Partial<AiParticipantConfig>
+): Promise<{ config: AiParticipantConfig; persisted: boolean }> {
+  const apply = (): { config: AiParticipantConfig; persisted: boolean } => {
+    const base = unpersistedConfig ?? loadAiConfig();
+    const merged = sanitizeAiConfig({ ...base, ...patch });
+    const persisted = saveAiConfig(merged);
+    unpersistedConfig = persisted ? null : merged;
+    return { config: merged, persisted };
+  };
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  if (locks?.request) {
+    return locks.request('jishushitsu.aiParticipant.v2', async () => apply());
+  }
+  return apply();
+}
+
+/** 別タブでの保存を購読する。cb には保存後の最新 config が渡る */
+export function subscribeAiConfig(cb: (config: AiParticipantConfig) => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const handler = (e: StorageEvent) => {
+    if (e.key !== STORAGE_KEY_V2) return;
+    cb(loadAiConfig());
+  };
+  window.addEventListener('storage', handler);
+  return () => window.removeEventListener('storage', handler);
 }

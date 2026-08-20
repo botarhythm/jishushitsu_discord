@@ -183,12 +183,16 @@ export class RecordingChunkWriter {
    * ここが失敗しても実害は「次回起動時に復旧を促される」だけなので握り潰す。
    */
   async discard(): Promise<void> {
-    this.disabled = true;
+    // 先に書き込みキューを飲み込み切ってから止める。disabled を先に立てると
+    // 飛行中の append が中断され、最後のチャンクだけ書かれない状態で削除に入る
+    // （通常はそのまま消すので実害はないが、削除が失敗して残った場合に
+    // 「復旧したら最後の1秒が無い」バックアップになる）。
     try {
       await this.queue;
     } catch {
       // ignore
     }
+    this.disabled = true;
     try {
       await deleteRecordingSession(this.meta.id, this.db);
     } catch {

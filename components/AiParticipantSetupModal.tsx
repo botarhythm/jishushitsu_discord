@@ -10,19 +10,33 @@ import {
 import type { AiProviderStatus } from '@/lib/ai/provider';
 import { RmsSpeakingDetector } from '@/lib/ai/speaking-detector';
 import { resumeAllAudioContexts } from '@/lib/audio-runtime';
+import {
+  findCableMonitorInput,
+  findCablePlaybackForCapture,
+  isVirtualCableLabel,
+  playToneProbe,
+  type DeviceOption,
+} from '@/lib/audio-devices';
 import { AiPreflightPanel } from './AiPreflightPanel';
 import { AiRequiredSettings } from './AiRequiredSettings';
 
 interface AiParticipantSetupModalProps {
   room: Room | null;
   config: AiParticipantConfig;
-  onChangeConfig: (config: AiParticipantConfig) => void;
+  /**
+   * 設定の書き込み。patch だけを渡す (全体スナップショットは渡さない —
+   * 古い state で他フィールドを巻き戻す事故の恒久対策)。
+   * @returns localStorage へ保存できたか
+   */
+  onPatchConfig: (patch: Partial<AiParticipantConfig>) => Promise<boolean>;
   enabled: boolean;
   onChangeEnabled: (enabled: boolean) => void;
   aiStatus: AiProviderStatus;
   publishFailed: boolean;
   inputMixerError: string | null;
   setInputMixerSendEnabled: (on: boolean) => void;
+  /** 検査用: ミキサーのローカルマイク混入を直接切り替える (設定は変えない) */
+  setInputMixerIncludeLocalMic: (on: boolean) => void;
   getInputMixerDiagnostics: () => {
     contextState: string;
     localMic: { label: string; enabled: boolean; muted: boolean } | null;
@@ -33,45 +47,6 @@ interface AiParticipantSetupModalProps {
   /** 録画中は有効化を許可しない（録画開始前に有効化しないとタブ音声二重化が起きるため） */
   isRecording: boolean;
   onClose: () => void;
-}
-
-interface DeviceOption {
-  deviceId: string;
-  groupId: string;
-  label: string;
-  recommended: boolean;
-}
-
-function isVirtualCableLabel(label: string): boolean {
-  return /cable|vb-audio|virtual|voicemeeter|blackhole|loopback/i.test(label);
-}
-
-function normalizeLabel(label: string): string {
-  return label.trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-/**
- * 仮想ケーブルの「送出先 (playback)」に対応する「監視入力 (capture)」を特定する。
- *
- * 仮想ケーブルは Input(再生側)/Output(録音側) が対になっており、ラベルは
- * 例: "CABLE-B Input (VB-Audio Cable B)" ⇔ "CABLE-B Output (VB-Audio Cable B)"。
- * groupId は環境により共有されないことがあるため、ラベル対応を第一候補にする。
- */
-function findCableMonitorInput(sink: DeviceOption, inputs: DeviceOption[]): DeviceOption | null {
-  // VoiceMeeter 構成では送出先(Voicemeeter Input)と録音側の名前が対応しない
-  // (録音側は "Voicemeeter Out B1" のようにバス名になる)。本ガイドの配線では
-  // Virtual Input を B1 バスへ流すため、B1 の録音エンドポイントを監視する。
-  if (/voicemeeter/i.test(sink.label)) {
-    const b1 = inputs.find((d) => normalizeLabel(d.label).includes("voicemeeter out b1"));
-    if (b1) return b1;
-  }
-  const expected = normalizeLabel(sink.label.replace(/\bInput\b/i, 'Output'));
-  if (expected !== normalizeLabel(sink.label)) {
-    const byLabel = inputs.find((d) => normalizeLabel(d.label) === expected);
-    if (byLabel) return byLabel;
-  }
-  const byGroup = inputs.find((d) => d.groupId && d.groupId === sink.groupId);
-  return byGroup ?? null;
 }
 
 /**
@@ -86,13 +61,14 @@ function findCableMonitorInput(sink: DeviceOption, inputs: DeviceOption[]): Devi
 export function AiParticipantSetupModal({
   room,
   config,
-  onChangeConfig,
+  onPatchConfig,
   enabled,
   onChangeEnabled,
   aiStatus,
   publishFailed,
   inputMixerError,
   setInputMixerSendEnabled,
+  setInputMixerIncludeLocalMic,
   getInputMixerDiagnostics,
   onReconnect,
   isRecording,
@@ -112,6 +88,37 @@ export function AiParticipantSetupModal({
     | { state: 'unavailable'; reason: string }
   >({ state: 'idle' });
   const [manualConfirm, setManualConfirm] = useState(false);
+  /**
+   * 検査・手動確認が「どの配線に対して」成立したかの指紋 (Codex 第4巡 #1)。
+   * boolean で持つと、検証後に別タブから配線が変わっても合格状態が残る。
+   * 有効化時は現在の配線とこの指紋の一致を要求するため、配線が変われば
+   * storage イベントの順序に関係なく自動的に無効になる。
+   */
+  const [verifiedFp, setVerifiedFp] = useState<string | null>(null);
+  // localStorage へ書けなかった (プライベートモード等)。設定がタブ限りになる警告
+  const [persistFailed, setPersistFailed] = useState(false);
+  // プリフライト完了時に「検査した配線」と「今の配線」の一致を確かめるための現在値
+  const configRef = useRef(config);
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
+  // 音を出す・測る検査は同時に1つだけ (送出ミュートの取り合い防止)。
+  // 排他は ref による同期リースで行う — state だけだと反映前の一瞬に
+  // 二重起動できてしまう (Codex 第3巡 #2)。state は UI の表示専用。
+  const [probeBusy, setProbeBusy] = useState(false);
+  const probeLeaseRef = useRef(false);
+  const acquireProbe = useCallback((): boolean => {
+    if (probeLeaseRef.current) return false;
+    probeLeaseRef.current = true;
+    setProbeBusy(true);
+    return true;
+  }, []);
+  const releaseProbe = useCallback(() => {
+    probeLeaseRef.current = false;
+    setProbeBusy(false);
+  }, []);
+  // 「試聴テスト」(Windows 常時モニタの確認) の再生中フラグ
+  const [listenTestPlaying, setListenTestPlaying] = useState(false);
 
   // ── デバイス列挙 ──
   const refreshDevices = useCallback(async () => {
@@ -317,6 +324,8 @@ export function AiParticipantSetupModal({
   // この検査中は ChatGPT 入力ミキサーはまだ動いていないため、送出先で音が観測されたら
   // それは OS 側の配線 (「このデバイスを聴く」等) による漏れを意味する。
   const runLoopCheck = useCallback(async () => {
+    // UI の disabled に頼らない論理ガード (録画中のトーンは収録と配信に混入する)
+    if (isRecording) return;
     void resumeAllAudioContexts();
     const sink = outputs.find((d) => d.deviceId === config.sinkDeviceId);
     if (!sink) {
@@ -342,6 +351,10 @@ export function AiParticipantSetupModal({
       });
       return;
     }
+    // 音を出す・測る区間はリースで排他する。前提検査はリース不要 (音を出さない)
+    if (!acquireProbe()) return;
+    // この検査が対象にした配線。完了時に一致しなければ結果を捨てる
+    const wiringFpAtStart = aiWiringFingerprint(configRef.current);
     let stream: MediaStream | null = null;
     // 有効化後はこちらの声が送出経路に乗っているため、検査中だけ送出を止めて
     // 「OS 側の漏れ」だけを測る。止めないとマイクが拾った物音を漏れと誤判定する。
@@ -387,8 +400,15 @@ export function AiParticipantSetupModal({
           reason:
             'AI の音声が ChatGPT への送出先に漏れています（自己ループ）。配線を見直してください。',
         });
+      } else if (wiringFpAtStart !== aiWiringFingerprint(configRef.current)) {
+        // 検査中に配線が変わった (別タブ等)。古い配線の合格を新配線に付けない
+        setLoopCheck({
+          state: 'unavailable',
+          reason: '検査中に配線が変更されました。もう一度実行してください。',
+        });
       } else {
         setLoopCheck({ state: 'passed' });
+        setVerifiedFp(wiringFpAtStart);
       }
     } catch (e) {
       console.warn('[AiSetup] ループ検査失敗', e);
@@ -396,8 +416,9 @@ export function AiParticipantSetupModal({
     } finally {
       setInputMixerSendEnabled(true);
       stream?.getTracks().forEach((t) => t.stop());
+      releaseProbe();
     }
-  }, [inputs, outputs, config.sinkDeviceId, config.sourceDeviceId, setInputMixerSendEnabled]);
+  }, [inputs, outputs, config.sinkDeviceId, config.sourceDeviceId, setInputMixerSendEnabled, isRecording, acquireProbe, releaseProbe]);
 
   // 送出先(ChatGPTの耳)の経路をAI音声ソースに選んでしまう取り違えの検出。
   // これをやると自分たちの声を「AIの声」として取り込むことになる。
@@ -422,24 +443,42 @@ export function AiParticipantSetupModal({
 
   const set = (patch: Partial<AiParticipantConfig>) => {
     const wiringChanged = 'sourceDeviceId' in patch || 'sinkDeviceId' in patch;
-    onChangeConfig({
-      ...config,
+    // sendLocalMic は送出経路そのものを切り替えるため、変更したら検証済みを
+    // 落として再検証に戻す (Codex 第2巡 #8。monitorAiLocally は聞こえ方だけ
+    // なので落とさない)
+    const invalidates = wiringChanged || 'sendLocalMic' in patch;
+    void onPatchConfig({
       ...patch,
-      // 配線が変わったら検証済みフラグを落とす（次回もセットアップ必須に戻す）
-      ...(wiringChanged ? { validatedFingerprint: null } : {}),
-    });
+      ...(invalidates ? { validatedFingerprint: null } : {}),
+    }).then((persisted) => setPersistFailed(!persisted));
     if (wiringChanged) {
       setLoopCheck({ state: 'idle' });
       setManualConfirm(false);
+      setVerifiedFp(null);
     }
   };
 
-  /** 有効化。このとき現在の配線を「検証済み」として記録し、次回以降のワンクリック起動を許可する */
-  const handleEnable = () => {
+  /**
+   * 有効化。「検証済み」の指紋は、収録前チェック全通過・自己ループ検査合格・
+   * 手動確認のいずれかを経たときだけ保存する。未検証のまま有効化はできる
+   * (チェックは任意という運用) が、その場合は次回のワンクリック起動を許可しない
+   * — 検証していない配線を「検証済み」として記録しない (Codex レビュー #6)。
+   */
+  const handleEnable = async () => {
     void resumeAllAudioContexts();
-    const validated = { ...config, validatedFingerprint: aiWiringFingerprint(config) };
-    onChangeConfig(validated);
+    // 検証は「今の配線に対して」成立していなければならない。指紋の一致で
+    // 確かめるため、検証後に配線が変わっていれば (別タブ含む) 自動的に落ちる
+    const verified = verifiedFp !== null && verifiedFp === aiWiringFingerprint(config);
+    const persisted = await onPatchConfig({
+      validatedFingerprint: verified ? aiWiringFingerprint(config) : null,
+    });
     onChangeEnabled(true);
+    if (!persisted) {
+      // 有効化はする (今この場では使える) が、保存できていないことを見せてから
+      // 閉じてもらう。黙って閉じると次回「設定が消えた」に見える
+      setPersistFailed(true);
+      return;
+    }
     // 設定完了なのでそのまま閉じる（状態は StudioBar の 🤖 ボタンとステージのタイルで分かる）
     onClose();
   };
@@ -473,6 +512,13 @@ export function AiParticipantSetupModal({
         >
           設定に迷ったら — セットアップ手順を開く
         </a>
+
+        {persistFailed && (
+          <p className="mb-3 rounded-lg border border-red-900/60 bg-red-950/30 px-3 py-2 text-xs text-red-200">
+            設定をブラウザに保存できませんでした（プライベートモード等）。
+            この設定はタブを閉じると消えます。
+          </p>
+        )}
 
         {/* 状態表示 */}
         <div className="mb-4 flex items-center gap-2 text-sm">
@@ -523,6 +569,7 @@ export function AiParticipantSetupModal({
         </label>
         <select
           value={config.sourceDeviceId ?? ''}
+          disabled={probeBusy}
           onChange={(e) => {
             const d = inputs.find((x) => x.deviceId === e.target.value);
             set({
@@ -617,6 +664,7 @@ export function AiParticipantSetupModal({
         </label>
         <select
           value={config.sinkDeviceId ?? ''}
+          disabled={probeBusy}
           onChange={(e) => {
             const d = outputs.find((x) => x.deviceId === e.target.value);
             set({
@@ -668,6 +716,33 @@ export function AiParticipantSetupModal({
             録音タブで AI 音声ソースの「このデバイスを聴く」を有効にしている場合に
             チェックします。<strong>アプリを起動していなくても ChatGPT の声が聞こえる</strong>
             ため、ChatGPT を普段どおり単体で使えます。チェックしないと二重に聞こえます。
+            <br />
+            <button
+              type="button"
+              disabled={
+                listenTestPlaying || !config.sourceDeviceId || enabled || isRecording || probeBusy
+              }
+              onClick={() => {
+                // AI 音声ソース (CABLE Output 等) の再生側へテストトーンを流す。
+                // Windows の「このデバイスを聴く」が生きていれば音が聞こえるはず。
+                // ブラウザからはモニタの有無を検出できないため、耳で判定してもらう。
+                const src = inputs.find((d) => d.deviceId === config.sourceDeviceId);
+                const playback = src ? findCablePlaybackForCapture(src, outputs) : null;
+                if (!playback) return;
+                setListenTestPlaying(true);
+                void playToneProbe(playback.deviceId, 2000).finally(() =>
+                  setListenTestPlaying(false)
+                );
+              }}
+              className="mt-1 rounded bg-stone-700 px-2 py-1 text-[11px] text-stone-200 hover:bg-stone-600 disabled:opacity-40"
+            >
+              {listenTestPlaying ? '♪ 再生中…' : '♪ 試聴テスト (2秒)'}
+            </button>{' '}
+            <span className="text-stone-500">
+              {enabled
+                ? '試聴テストは AI を OFF にしてから（アプリ自身の再生と聞き分けられないため）'
+                : '音が聞こえたら Windows 側モニタは生きています → チェックON'}
+            </span>
           </span>
         </label>
         {enabled && monitorDeviceId && (
@@ -740,8 +815,29 @@ export function AiParticipantSetupModal({
             mixerRunning={mixerDiag?.contextState === "running"}
             mixerHasMic={!!mixerDiag?.localMic}
             aiEnabled={enabled}
+            getMicTrack={() =>
+              room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track
+                ?.mediaStreamTrack ?? null
+            }
+            sendLocalMicOn={config.sendLocalMic !== false}
             setSendEnabled={setInputMixerSendEnabled}
-            onAllPassed={() => setManualConfirm(true)}
+            setMixerIncludeLocalMic={setInputMixerIncludeLocalMic}
+            onAutoConfig={(patch) => set(patch)}
+            disabledReason={
+              isRecording
+                ? '録画中は検査できません（テストトーンが収録と配信に入るため）'
+                : probeBusy
+                  ? '別の検査が実行中です'
+                  : null
+            }
+            acquireProbe={acquireProbe}
+            releaseProbe={releaseProbe}
+            onAllPassed={(wiringFp) => {
+              // 「検査した配線」の指紋を保存する。有効化時に現在の配線と照合する
+              // ため、検査後に配線が変わっていれば自動的に無効になる
+              setManualConfirm(true);
+              setVerifiedFp(wiringFp);
+            }}
           />
         </div>
         <div className="mb-4 rounded-xl border border-stone-700 bg-stone-800/60 p-3">
@@ -751,7 +847,9 @@ export function AiParticipantSetupModal({
             </span>
             <button
               onClick={() => void runLoopCheck()}
-              disabled={loopCheck.state === 'running' || !config.sinkDeviceId}
+              disabled={
+                loopCheck.state === 'running' || !config.sinkDeviceId || isRecording || probeBusy
+              }
               className="rounded-lg bg-stone-700 px-3 py-1 text-xs text-stone-200 hover:bg-stone-600 disabled:opacity-40"
             >
               {loopCheck.state === 'running'
@@ -781,7 +879,12 @@ export function AiParticipantSetupModal({
                 <input
                   type="checkbox"
                   checked={manualConfirm}
-                  onChange={(e) => setManualConfirm(e.target.checked)}
+                  onChange={(e) => {
+                  setManualConfirm(e.target.checked);
+                  setVerifiedFp(
+                    e.target.checked ? aiWiringFingerprint(configRef.current) : null
+                  );
+                }}
                   className="mt-0.5"
                 />
                 <span>
@@ -796,7 +899,12 @@ export function AiParticipantSetupModal({
               <input
                 type="checkbox"
                 checked={manualConfirm}
-                onChange={(e) => setManualConfirm(e.target.checked)}
+                onChange={(e) => {
+                  setManualConfirm(e.target.checked);
+                  setVerifiedFp(
+                    e.target.checked ? aiWiringFingerprint(configRef.current) : null
+                  );
+                }}
                 className="mt-0.5"
               />
               <span>
@@ -836,7 +944,7 @@ export function AiParticipantSetupModal({
             </button>
           ) : (
             <button
-              onClick={handleEnable}
+              onClick={() => void handleEnable()}
               disabled={!canEnable}
               className="ml-auto rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-40"
             >

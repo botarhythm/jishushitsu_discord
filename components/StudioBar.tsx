@@ -25,6 +25,8 @@ interface StudioBarProps {
   aiError?: boolean;
   /** AI 参加者の ON/OFF を切り替える */
   onToggleAi?: () => void;
+  /** true の間は AI の切替を封鎖する (録画中。音声二重化の防止) */
+  aiToggleDisabled?: boolean;
   /** AI 参加者セットアップモーダルを開く */
   onOpenAiSetup?: () => void;
   /** マイク/カメラのデバイス設定を開く（収録中に入力デバイスを直すため） */
@@ -73,6 +75,7 @@ export function StudioBar(props: StudioBarProps) {
     isLocalRecording,
     aiEnabled = false,
     aiError = false,
+    aiToggleDisabled = false,
     onToggleAi,
     onOpenAiSetup,
     onOpenDeviceSettings,
@@ -262,7 +265,14 @@ export function StudioBar(props: StudioBarProps) {
           <div className="relative shrink-0">
             <BarButton
               active={aiEnabled}
-              label={aiEnabled ? "AI参加者をOFFにする" : "AI参加者をONにする"}
+              disabled={aiToggleDisabled}
+              label={
+                aiToggleDisabled
+                  ? '録画中は AI を切り替えできません (音声が二重に入るため)'
+                  : aiEnabled
+                    ? 'AI参加者をOFFにする'
+                    : 'AI参加者をONにする'
+              }
               onClick={onToggleAi}
             >
               🤖
