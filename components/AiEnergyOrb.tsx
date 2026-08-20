@@ -10,8 +10,11 @@ import type { AiTileState } from '@/lib/studio-participants';
  * 実機で「もとの 60% の大きさに」との指示があり 0.228 × 0.6 ≈ 0.14 とする。
  */
 const ORB_DIAMETER_RATIO = 0.14;
-/** ステージ高さに対する球の中心位置（0=上端, 1=下端）。中央やや下に置く */
-const ORB_CENTER_Y_RATIO = 0.62;
+/**
+ * ステージ高さに対する球の中心位置（0=上端, 1=下端）。
+ * 下端寄りに置く。ブルームの外縁まで含めても画面内に収まる値。
+ */
+const ORB_CENTER_Y_RATIO = 0.8;
 
 /**
  * AI 参加者を表す「浮遊するエネルギー球」。
