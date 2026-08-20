@@ -293,6 +293,27 @@ export async function measureEnvelope(
     });
     const track = stream.getAudioTracks()[0];
     if (!track) return { env: [], peak: 0, error: 'トラックを取得できませんでした' };
+    return await measureTrackEnvelope(track, durationMs, onProgress);
+  } catch (e) {
+    return { env: [], peak: 0, error: e instanceof Error ? e.message : String(e) };
+  } finally {
+    stream?.getTracks().forEach((t) => t.stop());
+  }
+}
+
+/**
+ * 既存の MediaStreamTrack の包絡線を測る。
+ *
+ * 通話マイクは LiveKit が既に掴んでおり、同じデバイスを getUserMedia で
+ * 二重に開くと環境によって NotReadableError になる。失敗経路の分岐を
+ * 増やさないため、使用中のトラックはそのまま解析する (track を stop しない)。
+ */
+export async function measureTrackEnvelope(
+  track: MediaStreamTrack,
+  durationMs: number,
+  onProgress?: (level: number, remainingMs: number) => void
+): Promise<{ env: number[]; peak: number; error?: string }> {
+  try {
     const ctx = getSharedAudioContext();
     if (ctx.state !== 'running') await ctx.resume().catch(() => {});
     const analyser = ctx.createAnalyser();
@@ -318,8 +339,6 @@ export async function measureEnvelope(
     return { env, peak };
   } catch (e) {
     return { env: [], peak: 0, error: e instanceof Error ? e.message : String(e) };
-  } finally {
-    stream?.getTracks().forEach((t) => t.stop());
   }
 }
 
@@ -343,7 +362,7 @@ export function envelopeCorrelation(a: number[], b: number[]): number {
     return num / Math.sqrt(dx * dy);
   };
   let best = 0;
-  for (let lag = -3; lag <= 3; lag++) {
+  for (let lag = -5; lag <= 5; lag++) {
     const x = lag >= 0 ? a.slice(lag) : a;
     const y = lag >= 0 ? b : b.slice(-lag);
     best = Math.max(best, corrAt(x, y));

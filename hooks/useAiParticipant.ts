@@ -60,6 +60,8 @@ export interface UseAiParticipantResult {
   inputMixerError: string | null;
   /** 自己ループ検査中に送出を止めるためのスイッチ */
   setInputMixerSendEnabled: (on: boolean) => void;
+  /** 検査用: ミキサーのローカルマイク混入を直接切り替える (設定は変えない) */
+  setInputMixerIncludeLocalMic: (on: boolean) => void;
   /** 送出経路の内部状態を取得する（切り分け用。未起動なら null） */
   getInputMixerDiagnostics: () => ReturnType<ChatGptInputMixer["getDiagnostics"]> | null;
   /** エラー後の再接続（同一 participant ID のまま新トラック取得 → registry → publish） */
@@ -343,6 +345,16 @@ export function useAiParticipant({
     [enabled, localIdentity, trackName, info.displayName, info.avatar]
   );
 
+  /**
+   * 検査用: ミキサーのローカルマイク混入を直接切り替える。
+   * 設定 (sendLocalMic) は変えない — プリフライトが「アプリ経路を試すために
+   * 一時的にマイクを通す」ときに使い、判定が確定してから設定へ反映する
+   * (Codex 第3巡 #5: 設定の fire-and-forget 反映を待って測るのは競合する)。
+   */
+  const setInputMixerIncludeLocalMic = useCallback((on: boolean) => {
+    mixerRef.current?.setIncludeLocalMic(on);
+  }, []);
+
   const setInputMixerSendEnabled = useCallback((on: boolean) => {
     mixerRef.current?.setSendEnabled(on);
   }, []);
@@ -357,6 +369,7 @@ export function useAiParticipant({
     publishFailed,
     inputMixerError,
     setInputMixerSendEnabled,
+    setInputMixerIncludeLocalMic,
     getInputMixerDiagnostics,
     tile,
     descriptor,

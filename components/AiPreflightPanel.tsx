@@ -5,6 +5,7 @@ import {
   detectSignal,
   envelopeCorrelation,
   measureEnvelope,
+  measureTrackEnvelope,
   startToneProbe,
   findCableMonitorInput,
   findCablePlaybackForCapture,
@@ -25,6 +26,16 @@ interface CheckResult {
   status: 'idle' | 'running' | 'pass' | 'fail' | 'skip';
   detail?: string;
   fix?: string;
+}
+
+/**
+ * 相関判定の前提: 本人が実際に話したと言える程度の信号がマイクにあること。
+ * これを要求しないと、静かな環境で背景ノイズ同士が偶然相関して
+ * 誤判定する (Codex 第3巡 #6)。
+ */
+function micSignalSufficient(env: number[], peak: number): boolean {
+  const active = env.filter((v) => v > 0.01).length;
+  return peak >= 0.02 && active >= 15;
 }
 
 const CHECK_LABELS: Record<CheckId, string> = {
@@ -56,14 +67,25 @@ interface Props {
   /** AI 参加者が有効か。無効時は送出経路が動いていないので該当項目を飛ばす */
   aiEnabled: boolean;
   setSendEnabled: (on: boolean) => void;
-  /** 通話マイクの deviceId (声の相関判定に使う。null なら相関判定は行わない) */
-  micDeviceId: string | null;
+  /**
+   * 通話マイクの使用中トラックを返す (声の相関判定に使う)。
+   * LiveKit が掴んでいるトラックをそのまま解析する — 同じデバイスを
+   * getUserMedia で二重に開くと NotReadableError になる環境がある
+   * (Codex 第3巡 #1)。null なら相関判定は不能として扱う。
+   */
+  getMicTrack: () => MediaStreamTrack | null;
+  /** 現在の設定でアプリからマイクを送っているか (失敗時のミキサー復元に使う) */
+  sendLocalMicOn: boolean;
+  /** 検査用: ミキサーのローカルマイク混入を直接切り替える (設定は変えない) */
+  setMixerIncludeLocalMic: (on: boolean) => void;
   /** 検査から導けた設定を自動で反映する (sendLocalMic の自動判定) */
   onAutoConfig: (patch: Partial<AiParticipantConfig>) => void;
-  /** 検査を実行できない理由 (録画中・他検査の実行中)。null 以外なら実行を拒否する */
+  /** 検査を実行できない理由 (録画中)。null 以外なら実行を拒否する */
   disabledReason: string | null;
-  /** 音を出す・測る区間の占有を親へ通知する (検査の相互排他) */
-  onBusyChange: (busy: boolean) => void;
+  /** 音を出す・測る区間の同期リースを取得する。false なら別の検査が実行中 */
+  acquireProbe: () => boolean;
+  /** リースの解放。取得できた場合のみ finally で必ず呼ぶ */
+  releaseProbe: () => void;
   /**
    * skip を含まず全項目 pass のときだけ呼ばれる。
    * 引数は「検査した配線」の指紋 — 呼ばれた側は現在の配線と一致するときだけ
@@ -88,11 +110,14 @@ export function AiPreflightPanel({
   mixerRunning,
   mixerHasMic,
   aiEnabled,
-  micDeviceId,
+  getMicTrack,
+  sendLocalMicOn,
   setSendEnabled,
+  setMixerIncludeLocalMic,
   onAutoConfig,
   disabledReason,
-  onBusyChange,
+  acquireProbe,
+  releaseProbe,
   onAllPassed,
 }: Props) {
   const [checks, setChecks] = useState<Record<CheckId, CheckResult>>(INITIAL);
@@ -114,7 +139,7 @@ export function AiPreflightPanel({
     // UI の disabled に頼らない論理ガード。録画中のテストトーンは収録と
     // LiveKit 配信に混入するため、入口で拒否する (Codex 第2巡 #6)
     if (disabledReason) return;
-    onBusyChange(true);
+    if (!acquireProbe()) return;
     setRunning(true);
     setChecks(INITIAL);
     void resumeAllAudioContexts();
@@ -283,9 +308,18 @@ export function AiPreflightPanel({
         // 区別できないため、相関が取れないときは設定を自動変更しない
         // (Codex 第2巡 #7)。
         set('send', { status: 'running' });
+        const micTrack = getMicTrack();
+        if (!micTrack) {
+          set('send', {
+            status: 'fail',
+            detail: '通話マイクのトラックを取得できません',
+            fix: 'マイクを ON にしてから実行してください（声の照合ができないため判定できません）',
+          });
+          return;
+        }
         setSendEnabled(false);
         setPrompt('声の経路を判定します。8秒ほど話し続けてください（静かな場所で）');
-        const micEnvP = micDeviceId ? measureEnvelope(micDeviceId, 8000) : Promise.resolve(null);
+        const micEnvP = measureTrackEnvelope(micTrack, 8000);
         const monEnvA = await measureEnvelope(monitor.deviceId, 8000, onProbe);
         const micEnvA = await micEnvP;
         if (monEnvA.error) {
@@ -297,11 +331,23 @@ export function AiPreflightPanel({
           });
           return;
         }
+        if (micEnvA.error || !micSignalSufficient(micEnvA.env, micEnvA.peak)) {
+          // 本人の声が確認できない以上、監視入力の音が誰のものか判定できない。
+          // 設定は変更せず、話し直してもらう (Codex 第3巡 #1/#6)
+          setPrompt(null);
+          set('send', {
+            status: 'fail',
+            detail: micEnvA.error
+              ? `マイクを解析できません: ${micEnvA.error}`
+              : 'マイクの音量が不足しています',
+            fix: 'もう少し大きな声で、8秒間話し続けながら再実行してください。設定は変更していません',
+          });
+          return;
+        }
         const reachedExternal = monEnvA.peak >= 0.015;
-        const corrExternal =
-          reachedExternal && micEnvA && !micEnvA.error
-            ? envelopeCorrelation(micEnvA.env, monEnvA.env)
-            : 0;
+        const corrExternal = reachedExternal
+          ? envelopeCorrelation(micEnvA.env, monEnvA.env)
+          : 0;
         if (reachedExternal && corrExternal >= 0.5) {
           onAutoConfig({ sendLocalMic: false });
           setPrompt(null);
@@ -310,7 +356,6 @@ export function AiPreflightPanel({
             detail: `VoiceMeeter 経由で届いています (相関 ${corrExternal.toFixed(2)}。アプリからの送出は自動で OFF にしました)`,
           });
         } else if (reachedExternal) {
-          // 音はあるが本人の声と確認できない。設定は変えず、判定不能として続行
           setPrompt(null);
           set('send', {
             status: 'fail',
@@ -319,32 +364,35 @@ export function AiPreflightPanel({
           });
           return;
         } else if (aiEnabled) {
-          // 外部経路では届いていない。アプリ経由を試す。
-          // 保存済み設定が sendLocalMic=false のままだとミキサーがマイクを
-          // 含めず、アプリ経路が正しくても検出できない。テストの前に ON を
-          // 反映させる (稼働中反映の effect が数十ms で追従する)
-          onAutoConfig({ sendLocalMic: true });
+          // 外部経路では届いていない。アプリ経路を試す。設定 (sendLocalMic) は
+          // まだ変えず、ミキサーだけ直接マイクを通して測る — 設定の非同期反映を
+          // 待って測るのは競合する (Codex 第3巡 #5)。判定が確定してから反映する
+          setMixerIncludeLocalMic(true);
           setSendEnabled(true);
           setPrompt('アプリ経由を試します。もう一度8秒ほど話し続けてください');
-          const micEnvP2 = micDeviceId ? measureEnvelope(micDeviceId, 8000) : Promise.resolve(null);
+          const micEnvP2 = measureTrackEnvelope(micTrack, 8000);
           const monEnvB = await measureEnvelope(monitor.deviceId, 8000, onProbe);
           const micEnvB = await micEnvP2;
           setPrompt(null);
+          const micOkB = !micEnvB.error && micSignalSufficient(micEnvB.env, micEnvB.peak);
           const reachedApp = monEnvB.peak >= 0.015;
           const corrApp =
-            reachedApp && micEnvB && !micEnvB.error
-              ? envelopeCorrelation(micEnvB.env, monEnvB.env)
-              : 0;
-          if (!reachedApp || (micEnvB && !micEnvB.error && corrApp < 0.5)) {
+            reachedApp && micOkB ? envelopeCorrelation(micEnvB.env, monEnvB.env) : 0;
+          if (!reachedApp || !micOkB || corrApp < 0.5) {
+            // 確定しなかったので、ミキサーを設定どおりの状態へ戻す
+            setMixerIncludeLocalMic(sendLocalMicOn);
             set('send', {
               status: 'fail',
-              detail: reachedApp
-                ? `音はありますが、あなたの声と確認できません (相関 ${corrApp.toFixed(2)})`
-                : '声が届いていません',
-              fix: `VoiceMeeter を起動し Virtual Input の B を点灯させてください。あわせて ChatGPT の入力(既定の通信デバイス)が「${monitor.label}」になっているか確認してください`,
+              detail: !reachedApp
+                ? '声が届いていません'
+                : !micOkB
+                  ? 'マイクの音量が不足していて照合できません'
+                  : `音はありますが、あなたの声と確認できません (相関 ${corrApp.toFixed(2)})`,
+              fix: `VoiceMeeter を起動し Virtual Input の B を点灯させてください。あわせて ChatGPT の入力(既定の通信デバイス)が「${monitor.label}」になっているか確認してください。設定は変更していません`,
             });
             return;
           }
+          onAutoConfig({ sendLocalMic: true });
           set('send', {
             status: 'pass',
             detail: `アプリ経由で届いています (相関 ${corrApp.toFixed(2)}。アプリからの送出は自動で ON にしました)`,
@@ -432,7 +480,7 @@ export function AiPreflightPanel({
       setSendEnabled(true);
       setPrompt(null);
       setRunning(false);
-      onBusyChange(false);
+      releaseProbe();
     }
   }, [
     inputs,
@@ -443,11 +491,14 @@ export function AiPreflightPanel({
     mixerRunning,
     mixerHasMic,
     aiEnabled,
-    micDeviceId,
+    getMicTrack,
+    sendLocalMicOn,
     setSendEnabled,
+    setMixerIncludeLocalMic,
     onAutoConfig,
     disabledReason,
-    onBusyChange,
+    acquireProbe,
+    releaseProbe,
     onAllPassed,
   ]);
 

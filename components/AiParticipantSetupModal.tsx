@@ -35,6 +35,8 @@ interface AiParticipantSetupModalProps {
   publishFailed: boolean;
   inputMixerError: string | null;
   setInputMixerSendEnabled: (on: boolean) => void;
+  /** 検査用: ミキサーのローカルマイク混入を直接切り替える (設定は変えない) */
+  setInputMixerIncludeLocalMic: (on: boolean) => void;
   getInputMixerDiagnostics: () => {
     contextState: string;
     localMic: { label: string; enabled: boolean; muted: boolean } | null;
@@ -66,6 +68,7 @@ export function AiParticipantSetupModal({
   publishFailed,
   inputMixerError,
   setInputMixerSendEnabled,
+  setInputMixerIncludeLocalMic,
   getInputMixerDiagnostics,
   onReconnect,
   isRecording,
@@ -92,8 +95,21 @@ export function AiParticipantSetupModal({
   useEffect(() => {
     configRef.current = config;
   }, [config]);
-  // 音を出す・測る検査は同時に1つだけ (送出ミュートの取り合い防止。Codex 第2巡 #5)
+  // 音を出す・測る検査は同時に1つだけ (送出ミュートの取り合い防止)。
+  // 排他は ref による同期リースで行う — state だけだと反映前の一瞬に
+  // 二重起動できてしまう (Codex 第3巡 #2)。state は UI の表示専用。
   const [probeBusy, setProbeBusy] = useState(false);
+  const probeLeaseRef = useRef(false);
+  const acquireProbe = useCallback((): boolean => {
+    if (probeLeaseRef.current) return false;
+    probeLeaseRef.current = true;
+    setProbeBusy(true);
+    return true;
+  }, []);
+  const releaseProbe = useCallback(() => {
+    probeLeaseRef.current = false;
+    setProbeBusy(false);
+  }, []);
   // 「試聴テスト」(Windows 常時モニタの確認) の再生中フラグ
   const [listenTestPlaying, setListenTestPlaying] = useState(false);
 
@@ -301,10 +317,8 @@ export function AiParticipantSetupModal({
   // この検査中は ChatGPT 入力ミキサーはまだ動いていないため、送出先で音が観測されたら
   // それは OS 側の配線 (「このデバイスを聴く」等) による漏れを意味する。
   const runLoopCheck = useCallback(async () => {
-    // UI の disabled に頼らない論理ガード (Codex 第2巡 #6: 録画中のトーンは
-    // 収録と LiveKit 配信に混入する)
-    if (isRecording || probeBusy) return;
-    setProbeBusy(true);
+    // UI の disabled に頼らない論理ガード (録画中のトーンは収録と配信に混入する)
+    if (isRecording) return;
     void resumeAllAudioContexts();
     const sink = outputs.find((d) => d.deviceId === config.sinkDeviceId);
     if (!sink) {
@@ -330,6 +344,10 @@ export function AiParticipantSetupModal({
       });
       return;
     }
+    // 音を出す・測る区間はリースで排他する。前提検査はリース不要 (音を出さない)
+    if (!acquireProbe()) return;
+    // この検査が対象にした配線。完了時に一致しなければ結果を捨てる
+    const wiringFpAtStart = aiWiringFingerprint(configRef.current);
     let stream: MediaStream | null = null;
     // 有効化後はこちらの声が送出経路に乗っているため、検査中だけ送出を止めて
     // 「OS 側の漏れ」だけを測る。止めないとマイクが拾った物音を漏れと誤判定する。
@@ -375,6 +393,12 @@ export function AiParticipantSetupModal({
           reason:
             'AI の音声が ChatGPT への送出先に漏れています（自己ループ）。配線を見直してください。',
         });
+      } else if (wiringFpAtStart !== aiWiringFingerprint(configRef.current)) {
+        // 検査中に配線が変わった (別タブ等)。古い配線の合格を新配線に付けない
+        setLoopCheck({
+          state: 'unavailable',
+          reason: '検査中に配線が変更されました。もう一度実行してください。',
+        });
       } else {
         setLoopCheck({ state: 'passed' });
       }
@@ -384,9 +408,9 @@ export function AiParticipantSetupModal({
     } finally {
       setInputMixerSendEnabled(true);
       stream?.getTracks().forEach((t) => t.stop());
-      setProbeBusy(false);
+      releaseProbe();
     }
-  }, [inputs, outputs, config.sinkDeviceId, config.sourceDeviceId, setInputMixerSendEnabled, isRecording, probeBusy]);
+  }, [inputs, outputs, config.sinkDeviceId, config.sourceDeviceId, setInputMixerSendEnabled, isRecording, acquireProbe, releaseProbe]);
 
   // 送出先(ChatGPTの耳)の経路をAI音声ソースに選んでしまう取り違えの検出。
   // これをやると自分たちの声を「AIの声」として取り込むことになる。
@@ -534,6 +558,7 @@ export function AiParticipantSetupModal({
         </label>
         <select
           value={config.sourceDeviceId ?? ''}
+          disabled={probeBusy}
           onChange={(e) => {
             const d = inputs.find((x) => x.deviceId === e.target.value);
             set({
@@ -628,6 +653,7 @@ export function AiParticipantSetupModal({
         </label>
         <select
           value={config.sinkDeviceId ?? ''}
+          disabled={probeBusy}
           onChange={(e) => {
             const d = outputs.find((x) => x.deviceId === e.target.value);
             set({
@@ -778,8 +804,13 @@ export function AiParticipantSetupModal({
             mixerRunning={mixerDiag?.contextState === "running"}
             mixerHasMic={!!mixerDiag?.localMic}
             aiEnabled={enabled}
-            micDeviceId={micInfo?.deviceId ?? null}
+            getMicTrack={() =>
+              room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track
+                ?.mediaStreamTrack ?? null
+            }
+            sendLocalMicOn={config.sendLocalMic !== false}
             setSendEnabled={setInputMixerSendEnabled}
+            setMixerIncludeLocalMic={setInputMixerIncludeLocalMic}
             onAutoConfig={(patch) => set(patch)}
             disabledReason={
               isRecording
@@ -788,7 +819,8 @@ export function AiParticipantSetupModal({
                   ? '別の検査が実行中です'
                   : null
             }
-            onBusyChange={setProbeBusy}
+            acquireProbe={acquireProbe}
+            releaseProbe={releaseProbe}
             onAllPassed={(wiringFp) => {
               // 検査中に配線が変わっていたら (別タブ・select 操作)、その結果で
               // 新しい配線を検証済みにしない (Codex 第2巡 #4)

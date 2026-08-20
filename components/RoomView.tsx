@@ -397,6 +397,7 @@ function RoomInner({
     publishFailed: aiPublishFailed,
     inputMixerError: aiInputMixerError,
     setInputMixerSendEnabled: aiSetInputMixerSendEnabled,
+    setInputMixerIncludeLocalMic: aiSetInputMixerIncludeLocalMic,
     getInputMixerDiagnostics: aiGetInputMixerDiagnostics,
     tile: aiTile,
     descriptor: aiDescriptor,
@@ -983,6 +984,7 @@ function RoomInner({
             publishFailed={aiPublishFailed}
             inputMixerError={aiInputMixerError}
             setInputMixerSendEnabled={aiSetInputMixerSendEnabled}
+            setInputMixerIncludeLocalMic={aiSetInputMixerIncludeLocalMic}
             getInputMixerDiagnostics={aiGetInputMixerDiagnostics}
             onReconnect={() => void aiReconnect()}
             isRecording={isLocalRecording}
