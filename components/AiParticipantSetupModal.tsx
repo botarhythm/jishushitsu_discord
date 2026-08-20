@@ -90,6 +90,7 @@ export function AiParticipantSetupModal({
   const [previewLevel, setPreviewLevel] = useState(0);
   const [previewActive, setPreviewActive] = useState(false);
   const [previewSuspended, setPreviewSuspended] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [loopCheck, setLoopCheck] = useState<
     | { state: 'idle' }
     | { state: 'running'; secondsLeft: number }
@@ -134,6 +135,7 @@ export function AiParticipantSetupModal({
       setPreviewLevel(0);
       setPreviewActive(false);
       setPreviewSuspended(false);
+      setPreviewError(null);
     });
     const deviceId = config.sourceDeviceId;
     if (!deviceId || deviceId === 'fake') return;
@@ -166,6 +168,9 @@ export function AiParticipantSetupModal({
         void resumeAllAudioContexts();
       } catch (e) {
         console.warn('[AiSetup] プレビュー取得失敗', e);
+        setPreviewError(
+          e instanceof Error ? `${e.name}: ${e.message}` : String(e)
+        );
       }
     })();
     return () => {
@@ -476,6 +481,11 @@ export function AiParticipantSetupModal({
               style={{ width: `${Math.round(Math.min(previewLevel, 1) * 100)}%` }}
             />
           </div>
+          {previewError && (
+            <p className="mt-1.5 rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-200">
+              ⚠ このデバイスを開けませんでした: {previewError}
+            </p>
+          )}
           <p className="mt-1.5 text-[11px] leading-relaxed text-stone-500">
             ChatGPT に話しかけても反応しないのは正常です。あなたの声は
             「AI 参加者を有効にする」を押した時点から届きます。ここでの確認は
