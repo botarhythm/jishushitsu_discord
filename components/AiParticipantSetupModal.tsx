@@ -469,7 +469,7 @@ export function AiParticipantSetupModal({
           href="/help/ai-participant"
           target="_blank"
           rel="noopener noreferrer"
-          className="mb-4 block text-[11px] font-medium text-amber-500 underline-offset-4 hover:underline"
+          className="mb-4 block text-[11px] font-medium text-amber-400 underline-offset-4 hover:underline"
         >
           設定に迷ったら — セットアップ手順を開く
         </a>

@@ -297,7 +297,7 @@ export default function InstructorDashboard({
                   href="/help/ai-participant"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mt-2 block text-[11px] font-medium text-amber-500 underline-offset-4 hover:underline"
+                  className="mt-2 block text-[11px] font-medium text-amber-400 underline-offset-4 hover:underline"
                 >
                   初めて設定する方へ — セットアップ手順を開く
                 </a>

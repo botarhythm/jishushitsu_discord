@@ -15,8 +15,8 @@ export function Shot({ src, caption }: { src: string; caption: string }) {
   if (failed) {
     return (
       <figure className="my-5 rounded-lg border border-dashed border-stone-700 bg-stone-900/60 px-4 py-6 text-center">
-        <p className="text-sm text-stone-400">{caption}</p>
-        <p className="mt-1 text-xs text-stone-600">
+        <p className="text-sm text-stone-300">{caption}</p>
+        <p className="mt-1 text-xs text-stone-400">
           スクリーンショット未設置 —{' '}
           <code className="rounded bg-stone-800 px-1 py-0.5">public{src}</code> に置くと表示されます
         </p>
@@ -34,7 +34,7 @@ export function Shot({ src, caption }: { src: string; caption: string }) {
         onError={() => setFailed(true)}
         className="w-full rounded-lg border border-stone-800"
       />
-      <figcaption className="mt-2 text-center text-xs text-stone-500">{caption}</figcaption>
+      <figcaption className="mt-2 text-center text-xs text-stone-400">{caption}</figcaption>
     </figure>
   );
 }
