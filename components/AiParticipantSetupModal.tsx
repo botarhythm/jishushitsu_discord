@@ -278,10 +278,19 @@ export function AiParticipantSetupModal({
     }
   }, [inputs, outputs, config.sinkDeviceId, config.sourceDeviceId]);
 
+  // 送出先(ChatGPTの耳)の経路をAI音声ソースに選んでしまう取り違えの検出。
+  // これをやると自分たちの声を「AIの声」として取り込むことになる。
+  const sourceIsSinkMonitor = useMemo(() => {
+    if (!config.sinkDeviceId || !config.sourceDeviceId) return false;
+    const sink = outputs.find((d) => d.deviceId === config.sinkDeviceId);
+    if (!sink) return false;
+    return findCableMonitorInput(sink, inputs)?.deviceId === config.sourceDeviceId;
+  }, [config.sinkDeviceId, config.sourceDeviceId, inputs, outputs]);
+
   const loopSafe =
     !config.sinkDeviceId || loopCheck.state === 'passed' || manualConfirm;
   const canEnable =
-    !!config.sourceDeviceId && loopSafe && !micCollision && !isRecording;
+    !!config.sourceDeviceId && loopSafe && !micCollision && !sourceIsSinkMonitor && !isRecording;
 
   const set = (patch: Partial<AiParticipantConfig>) => {
     const wiringChanged = 'sourceDeviceId' in patch || 'sinkDeviceId' in patch;
@@ -389,7 +398,10 @@ export function AiParticipantSetupModal({
 
         {/* 音声ソース選択 */}
         <label className="mb-1 block text-xs text-stone-400">
-          AI 音声ソース (ChatGPT の出力が流れる仮想デバイス。例: CABLE-A Output)
+          <strong className="text-stone-300">① AI 音声ソース</strong> — ChatGPT の声が<strong>出てくる</strong>側
+          <br />
+          ChatGPT の「出力デバイス」に指定した仮想ケーブルの録音側を選ぶ。
+          例: <code>CABLE Output</code> / <code>CABLE-A Output</code>
         </label>
         <select
           value={config.sourceDeviceId ?? ''}
@@ -414,6 +426,13 @@ export function AiParticipantSetupModal({
           <p className="mb-2 rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-200">
             ⚠ 選択中のデバイスは通話マイクと同一です。あなたの声が二重に録音されます。
             仮想ケーブル (CABLE Output 等) を選択してください。
+          </p>
+        )}
+        {sourceIsSinkMonitor && (
+          <p className="mb-2 rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-200">
+            ⚠ AI 音声ソースに「ChatGPT への送出先」と同じ経路を選んでいます。
+            そちらは<strong>こちらの声を送る側</strong>なので、ChatGPT の声が
+            出てくる側 (CABLE Output 等) を選んでください。
           </p>
         )}
 
@@ -444,7 +463,10 @@ export function AiParticipantSetupModal({
 
         {/* ChatGPT への送出先 */}
         <label className="mb-1 block text-xs text-stone-400">
-          ChatGPT への送出先 (ChatGPT の入力に設定した仮想デバイス。例: CABLE-B Input) — 任意
+          <strong className="text-stone-300">② ChatGPT への送出先</strong> — こちらの声を<strong>送る</strong>側（任意）
+          <br />
+          ChatGPT の「入力デバイス」に指定した仮想デバイスの再生側を選ぶ。
+          例: <code>Voicemeeter Input</code> / <code>CABLE-B Input</code>
         </label>
         <select
           value={config.sinkDeviceId ?? ''}
