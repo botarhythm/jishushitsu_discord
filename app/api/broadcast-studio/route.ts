@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RoomServiceClient } from 'livekit-server-sdk';
 import { requireInstructor } from '@/lib/auth-guard';
+import { livekitIdentityFor } from '@/lib/session';
 
 const KNOWN_LAYOUTS = new Set(['split', 'screen-main', 'solo', 'speaker', 'trio', 'triple']);
 const MAX_SLOTS = 8;
@@ -27,7 +28,10 @@ interface BroadcastStudioRequest {
   showNameplates: boolean;
   /** 下段に視聴者サムネを表示するか（録画には含めない、表示のみ） */
   showAudience: boolean;
-  /** 設定したホストの identity。受信側で自分の設定を無視する（ホストは studioMode で制御）のに使う */
+  /**
+   * 旧クライアント互換のために受け取るが**使わない**。ホストの identity は
+   * サーバ側でセッションから導出する（クライアントの自称を信用しない）。
+   */
   senderIdentity?: string;
   /**
    * v2 フィールド。schemaVersion が無い payload は旧クライアント (legacy) として
@@ -88,7 +92,10 @@ function validateV2(body: BroadcastStudioRequest): string | null {
  * 全員へ再配布されるため、後入室・再接続でも確実に同期する。
  *
  * v2: payload の shape 検証・revision による巻き戻り拒否・既存 metadata との merge を行う
- * （認証強化ではなく状態破壊防止。送信者の身元確定は別課題）。
+ * （状態破壊防止）。ホストの identity はセッションから導出し、クライアントの
+ * 自称を採用しない。なお「送信者がそのルームに実在するか」までは確認しない —
+ * ルーム切替直後は LiveKit 側の参加者登録が間に合わず、正当な配信を弾いて
+ * しまうため。講師のみが到達できる経路であることと合わせて許容する。
  */
 export async function POST(request: NextRequest) {
   const auth = await requireInstructor();
@@ -100,7 +107,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'payload が大きすぎます' }, { status: 413 });
     }
     const body: BroadcastStudioRequest = JSON.parse(raw);
-    const { roomName, active, layout, slots, showNameplates, showAudience, senderIdentity } = body;
+    const { roomName, active, layout, slots, showNameplates, showAudience } = body;
+
+    // ホストの identity はセッションから導出する。クライアントが body で名乗る
+    // senderIdentity / ai.ownerIdentity は信用しない。受信側は ownerIdentity を
+    // 「どの参加者のトラックを AI とみなすか」の判定に使うため、ここが詐称できると
+    // 他人の音声を AI として扱わせられる。
+    const hostIdentity = livekitIdentityFor(auth.session);
 
     if (!roomName || typeof roomName !== 'string' || roomName.length > 64) {
       return NextResponse.json({ error: 'roomName が必要です' }, { status: 400 });
@@ -117,6 +130,13 @@ export async function POST(request: NextRequest) {
       if (active) {
         const err = validateV2(body);
         if (err) return NextResponse.json({ error: err }, { status: 400 });
+        // AI 記述子の owner は必ず送信者自身。ズレていればクライアントのバグか詐称。
+        if (body.ai && body.ai.ownerIdentity !== hostIdentity) {
+          return NextResponse.json(
+            { error: 'ai.ownerIdentity が送信者と一致しません' },
+            { status: 403 }
+          );
+        }
       }
     }
 
@@ -168,7 +188,7 @@ export async function POST(request: NextRequest) {
             slots,
             showNameplates: !!showNameplates,
             showAudience: !!showAudience,
-            host: senderIdentity ?? null,
+            host: hostIdentity,
             ...(isV2
               ? {
                   schemaVersion: 2,

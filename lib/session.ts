@@ -147,3 +147,14 @@ export async function consumeOAuthStateCookie(): Promise<string | null> {
   if (state) c.delete(OAUTH_STATE_COOKIE);
   return state;
 }
+
+/**
+ * セッションから LiveKit の participant identity を導出する。
+ *
+ * identity はクライアントから受け取らない。ここだけが正本で、トークン発行
+ * (/api/token) と、identity を名乗る API (broadcast-studio) の双方が同じ
+ * 規則を共有する。guest の discordId は既に `guest:<jti>` 形式。
+ */
+export function livekitIdentityFor(session: SessionPayload): string {
+  return session.kind === 'guest' ? session.discordId : `discord:${session.discordId}`;
+}
