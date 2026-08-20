@@ -5,6 +5,7 @@ import { Track, type Room } from 'livekit-client';
 import {
   AI_AVATAR_PRESETS,
   aiWiringFingerprint,
+  isLoopbackCaptureLabel,
   type AiParticipantConfig,
 } from '@/lib/studio-participants';
 import type { AiProviderStatus } from '@/lib/ai/provider';
@@ -191,13 +192,39 @@ export function AiParticipantSetupModal({
 
   // ── 物理マイク誤選択（二重取り込み）の検知 ──
   // 通話に使っているマイクの実体（診断表示にも使う）
-  const micInfo = useMemo(() => {
-    const t = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track
-      ?.mediaStreamTrack;
-    if (!t) return null;
-    const st = t.getSettings();
-    return { label: t.label, deviceId: st.deviceId ?? "", groupId: st.groupId ?? "" };
+  const [micInfo, setMicInfo] = useState<{
+    label: string;
+    deviceId: string;
+    groupId: string;
+  } | null>(null);
+  useEffect(() => {
+    const read = () => {
+      const t = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track
+        ?.mediaStreamTrack;
+      if (!t) {
+        setMicInfo(null);
+        return;
+      }
+      const st = t.getSettings();
+      setMicInfo({ label: t.label, deviceId: st.deviceId ?? "", groupId: st.groupId ?? "" });
+    };
+    const id = setInterval(read, 500);
+    return () => clearInterval(id);
   }, [room]);
+
+  // 通話マイクの切替（この画面から直せるようにする。収録バーの⚙️はモーダルに隠れるため）
+  const [switchingMic, setSwitchingMic] = useState(false);
+  const switchMic = async (deviceId: string) => {
+    if (!room || !deviceId) return;
+    setSwitchingMic(true);
+    try {
+      await room.switchActiveDevice("audioinput", deviceId);
+    } catch (err) {
+      console.error("[AiSetup] マイク切替に失敗", err);
+    } finally {
+      setSwitchingMic(false);
+    }
+  };
 
   // ── 物理マイク誤選択（二重取り込み）の検知 ──
   const micCollision = useMemo(() => {
@@ -569,6 +596,28 @@ export function AiParticipantSetupModal({
         </div>
 
         {/* ChatGPT への送出先 */}
+        <label className="mb-1 block text-xs text-stone-400">
+          通話マイク — あなたの声を拾うデバイス（ChatGPT へはここから送られます）
+        </label>
+        <select
+          value={micInfo?.deviceId ?? ""}
+          disabled={switchingMic}
+          onChange={(e) => void switchMic(e.target.value)}
+          className="mb-1 w-full rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-sm text-stone-200 disabled:opacity-50"
+        >
+          {!micInfo && <option value="">(マイク未取得)</option>}
+          {inputs.map((d) => (
+            <option key={d.deviceId} value={d.deviceId}>
+              {isLoopbackCaptureLabel(d.label) ? "⚠ " : ""}
+              {d.label}
+            </option>
+          ))}
+        </select>
+        <p className="mb-4 text-[11px] leading-relaxed text-stone-500">
+          ⚠ が付くものは録音デバイス（再生音を録るもの）で、マイクには使えません。
+          物理マイク（マイク配列など）を選んでください。
+        </p>
+
         <label className="mb-1 block text-xs text-stone-400">
           <strong className="text-stone-300">② ChatGPT への送出先</strong> — こちらの声を<strong>送る</strong>側（任意）
           <br />
