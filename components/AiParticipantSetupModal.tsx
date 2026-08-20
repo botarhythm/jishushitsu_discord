@@ -492,464 +492,483 @@ export function AiParticipantSetupModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl border border-stone-700 bg-stone-900 p-5 shadow-2xl">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-stone-100">🤖 AI 参加者 (ChatGPT)</h2>
+      {/* ヘッダーとフッターを固定し、中身だけスクロールさせる。
+          長い設定画面でも「今どういう状態か」と「有効化ボタン」を見失わない */}
+      <div className="flex max-h-[90dvh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-stone-700 bg-stone-900 shadow-2xl">
+        <header className="flex items-start justify-between gap-3 border-b border-stone-800 px-5 py-4">
+          <div className="min-w-0">
+            <h2 className="text-balance text-base font-semibold text-stone-100">
+              AI 参加者 (ChatGPT)
+            </h2>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <span
+                className={`text-sm font-medium ${
+                  !enabled
+                    ? 'text-stone-400'
+                    : aiStatus === 'connected'
+                      ? 'text-emerald-400'
+                      : aiStatus === 'error'
+                        ? 'text-red-400'
+                        : 'text-stone-400'
+                }`}
+              >
+                {enabled ? statusLabel[aiStatus] : '無効'}
+              </span>
+              {publishFailed && (
+                <span className="rounded bg-amber-900/60 px-2 py-0.5 text-xs text-amber-200">
+                  配信失敗 (他の参加者に AI 音声が届いていません)
+                </span>
+              )}
+              {enabled && aiStatus === 'error' && (
+                <button
+                  onClick={onReconnect}
+                  className="rounded-lg bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-500"
+                >
+                  再接続
+                </button>
+              )}
+            </div>
+          </div>
           <button
             onClick={onClose}
-            className="rounded-lg px-2 py-1 text-stone-400 hover:bg-stone-800 hover:text-stone-200"
+            className="-mr-1 shrink-0 rounded-lg px-2 py-1 text-stone-400 hover:bg-stone-800 hover:text-stone-200"
             aria-label="閉じる"
           >
             ✕
           </button>
-        </div>
+        </header>
 
-        <a
-          href="/help/ai-participant"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mb-4 block text-[11px] font-medium text-amber-400 underline-offset-4 hover:underline"
-        >
-          設定に迷ったら — セットアップ手順を開く
-        </a>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {persistFailed && (
+            <Alert tone="error">
+              設定をブラウザに保存できませんでした（プライベートモード等）。
+              この設定はタブを閉じると消えます。
+            </Alert>
+          )}
 
-        {persistFailed && (
-          <p className="mb-3 rounded-lg border border-red-900/60 bg-red-950/30 px-3 py-2 text-xs text-red-200">
-            設定をブラウザに保存できませんでした（プライベートモード等）。
-            この設定はタブを閉じると消えます。
-          </p>
-        )}
+          <SectionTitle step={1}>デバイスを選ぶ</SectionTitle>
 
-        {/* 状態表示 */}
-        <div className="mb-4 flex items-center gap-2 text-sm">
-          <span
-            className={
-              aiStatus === 'connected'
-                ? 'text-emerald-400'
-                : aiStatus === 'error'
-                  ? 'text-red-400'
-                  : 'text-stone-400'
+          <Field
+            htmlFor="ai-source"
+            label="① AI 音声ソース"
+            hint="ChatGPT の声が出てくる側。ChatGPT の「出力デバイス」に指定した仮想ケーブルの録音側を選びます。"
+            help={
+              <>
+                例: <Code>CABLE Output</Code> / <Code>CABLE-A Output</Code>
+                <br />
+                ★ が付くものは、名前から自動で見つけた推奨デバイスです。
+              </>
             }
           >
-            {enabled ? statusLabel[aiStatus] : '無効'}
-          </span>
-          {publishFailed && (
-            <span className="rounded bg-amber-900/60 px-2 py-0.5 text-xs text-amber-200">
-              録画中・配信失敗 (他の参加者にAI音声が届いていません)
-            </span>
-          )}
-          {enabled && aiStatus === 'error' && (
-            <button
-              onClick={onReconnect}
-              className="rounded-lg bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-500"
+            <select
+              id="ai-source"
+              value={config.sourceDeviceId ?? ''}
+              disabled={probeBusy}
+              onChange={(e) => {
+                const d = inputs.find((x) => x.deviceId === e.target.value);
+                set({
+                  sourceDeviceId: e.target.value || null,
+                  sourceDeviceLabel: d?.label,
+                });
+              }}
+              className={selectClass}
             >
-              再接続
-            </button>
-          )}
-        </div>
+              <option value="">未選択</option>
+              {inputs.map((d) => (
+                <option key={d.deviceId} value={d.deviceId}>
+                  {d.recommended ? '★ ' : ''}
+                  {d.label}
+                </option>
+              ))}
+            </select>
 
-        {/* 表示名。アバターは中央のエネルギー球で表現するため選択欄は持たない */}
-        <label className="mb-4 block text-xs text-stone-400">
-          表示名
-          <input
-            type="text"
-            value={config.displayName}
-            maxLength={32}
-            onChange={(e) => set({ displayName: e.target.value })}
-            className="mt-1 w-full rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-sm text-stone-100"
-          />
-        </label>
+            {micCollision && (
+              <Alert tone="error">
+                選択中のデバイスは通話に使っているマイク
+                {micInfo?.label ? `（${micInfo.label}）` : ''}
+                と同一です。あなたの声が二重に録音されます。仮想ケーブル (CABLE Output 等)
+                を選択してください。
+              </Alert>
+            )}
+            {sourceIsSinkMonitor && (
+              <Alert tone="error">
+                AI 音声ソースに「ChatGPT への送出先」と同じ経路を選んでいます。そちらは
+                <strong className="font-medium">こちらの声を送る側</strong>なので、ChatGPT
+                の声が出てくる側 (CABLE Output 等) を選んでください。
+              </Alert>
+            )}
 
-        {/* 音声ソース選択 */}
-        <label className="mb-1 block text-xs text-stone-400">
-          <strong className="text-stone-300">① AI 音声ソース</strong> — ChatGPT の声が<strong>出てくる</strong>側
-          <br />
-          ChatGPT の「出力デバイス」に指定した仮想ケーブルの録音側を選ぶ。
-          例: <code>CABLE Output</code> / <code>CABLE-A Output</code>
-        </label>
-        <select
-          value={config.sourceDeviceId ?? ''}
-          disabled={probeBusy}
-          onChange={(e) => {
-            const d = inputs.find((x) => x.deviceId === e.target.value);
-            set({
-              sourceDeviceId: e.target.value || null,
-              sourceDeviceLabel: d?.label,
-            });
-          }}
-          className="mb-1 w-full rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-sm text-stone-200"
-        >
-          <option value="">未選択</option>
-          {inputs.map((d) => (
-            <option key={d.deviceId} value={d.deviceId}>
-              {d.recommended ? '★ ' : ''}
-              {d.label}
-            </option>
-          ))}
-        </select>
-        {micCollision && (
-          <p className="mb-2 rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-200">
-            ⚠ 選択中のデバイスは通話に使っているマイク
-            {micInfo?.label ? `（${micInfo.label}）` : ""}
-            と同一です。あなたの声が二重に録音されます。仮想ケーブル
-            (CABLE Output 等) を選択してください。
-          </p>
-        )}
-        {sourceIsSinkMonitor && (
-          <p className="mb-2 rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-200">
-            ⚠ AI 音声ソースに「ChatGPT への送出先」と同じ経路を選んでいます。
-            そちらは<strong>こちらの声を送る側</strong>なので、ChatGPT の声が
-            出てくる側 (CABLE Output 等) を選んでください。
-          </p>
-        )}
+            <Meter
+              label="音声レベル"
+              level={previewLevel}
+              color="bg-emerald-500"
+              status={
+                previewSuspended
+                  ? { text: '⏸ 解析停止中 (画面をクリック)', tone: 'warn' }
+                  : previewActive
+                    ? { text: '● 検出中', tone: 'ok' }
+                    : { text: '○ 無音', tone: 'idle' }
+              }
+            />
+            {previewError && <Alert tone="error">このデバイスを開けませんでした: {previewError}</Alert>}
+            <Help>
+              ChatGPT に話しかけても反応しないのは正常です。あなたの声は「AI
+              参加者を有効にする」を押した時点から届きます。ここでの確認は
+              <strong className="font-medium text-stone-200">
+                ChatGPT にテキストで話しかけて
+              </strong>
+              音声で返答させてください。
+            </Help>
+          </Field>
 
-        {/* レベルメーター */}
-        <div className="mb-4">
-          <div className="mb-1 flex items-center justify-between text-xs text-stone-400">
-            <span>音声レベル (ChatGPT に何か話させて確認)</span>
-            <span className={previewActive ? 'text-emerald-400' : 'text-stone-500'}>
-              {previewSuspended
-                ? '⏸ 音声解析が停止中 (画面をクリック)'
-                : previewActive
-                  ? '● 検出中'
-                  : '○ 無音'}
-            </span>
-          </div>
-          <div className="h-2 w-full overflow-hidden rounded bg-stone-800">
-            <div
-              className="h-full rounded bg-emerald-500 transition-[width] duration-100"
-              style={{ width: `${Math.round(Math.min(previewLevel, 1) * 100)}%` }}
+          <Field
+            htmlFor="ai-mic"
+            label="通話マイク"
+            hint="あなたの声を拾うデバイス。ChatGPT へはここから送られます。"
+            help={
+              <>
+                ⚠ が付くものは録音デバイス（再生音を録るもの）で、マイクには使えません。
+                物理マイク（マイク配列など）を選んでください。
+              </>
+            }
+          >
+            <select
+              id="ai-mic"
+              value={micInfo?.deviceId ?? ''}
+              disabled={switchingMic}
+              onChange={(e) => void switchMic(e.target.value)}
+              className={`${selectClass} disabled:opacity-50`}
+            >
+              {!micInfo && <option value="">(マイク未取得)</option>}
+              {inputs.map((d) => (
+                <option key={d.deviceId} value={d.deviceId}>
+                  {isLoopbackCaptureLabel(d.label) ? '⚠ ' : ''}
+                  {d.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field
+            htmlFor="ai-sink"
+            label="② ChatGPT への送出先"
+            hint="こちらの声を送る側。ChatGPT の「入力デバイス」に指定した仮想デバイスの再生側を選びます。"
+            help={
+              <>
+                例: <Code>Voicemeeter Input</Code> / <Code>CABLE-B Input</Code>
+                <br />
+                設定すると、あなたと相手の声だけをアプリ内でミックスして ChatGPT
+                の耳へ届けます（AI 自身の声は構造的に混ざりません）。
+              </>
+            }
+          >
+            <select
+              id="ai-sink"
+              value={config.sinkDeviceId ?? ''}
+              disabled={probeBusy}
+              onChange={(e) => {
+                const d = outputs.find((x) => x.deviceId === e.target.value);
+                set({
+                  sinkDeviceId: e.target.value || null,
+                  sinkDeviceLabel: d?.label,
+                });
+              }}
+              className={selectClass}
+            >
+              <option value="">使用しない (外部でルーティング済み)</option>
+              {outputs.map((d) => (
+                <option key={d.deviceId} value={d.deviceId}>
+                  {d.recommended ? '★ ' : ''}
+                  {d.label}
+                </option>
+              ))}
+            </select>
+
+            <div className="mt-3 space-y-2.5 rounded-lg border border-stone-800 bg-stone-950/40 p-3">
+              <p className="text-xs text-stone-400">
+                二重送出・二重再生を避けるための設定です。
+                <strong className="font-medium text-stone-300">
+                  1つ目は収録前チェックが自動で設定します
+                </strong>
+                。
+              </p>
+
+              <CheckLine
+                checked={config.sendLocalMic === false}
+                onChange={(v) => set({ sendLocalMic: !v })}
+                title="あなたの声は VoiceMeeter 側で常時 ChatGPT に送っている"
+                sub="アプリからは送らない"
+                help="物理マイクを VoiceMeeter のハードウェア入力から B1 へ流している構成でオンにします。アプリを起動していなくても他の通話アプリが普通にマイクを使えます。オフにすると、あなたの声が ChatGPT に二重に届きます。"
+              />
+
+              <CheckLine
+                checked={config.monitorAiLocally === false}
+                onChange={(v) => set({ monitorAiLocally: !v })}
+                title="ChatGPT の声は Windows 側で常時モニタしている"
+                sub="アプリからは再生しない"
+                help="録音タブで AI 音声ソースの「このデバイスを聴く」を有効にしている場合にオンにします。アプリを起動していなくても ChatGPT の声が聞こえるため、ChatGPT を普段どおり単体で使えます。オフにすると二重に聞こえます。"
+              >
+                <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={
+                      listenTestPlaying ||
+                      !config.sourceDeviceId ||
+                      enabled ||
+                      isRecording ||
+                      probeBusy
+                    }
+                    onClick={() => {
+                      // AI 音声ソース (CABLE Output 等) の再生側へテストトーンを流す。
+                      // Windows の「このデバイスを聴く」が生きていれば音が聞こえるはず。
+                      // ブラウザからはモニタの有無を検出できないため、耳で判定してもらう。
+                      const src = inputs.find((d) => d.deviceId === config.sourceDeviceId);
+                      const playback = src ? findCablePlaybackForCapture(src, outputs) : null;
+                      if (!playback) return;
+                      setListenTestPlaying(true);
+                      void playToneProbe(playback.deviceId, 2000).finally(() =>
+                        setListenTestPlaying(false)
+                      );
+                    }}
+                    className="rounded-lg bg-stone-700 px-2.5 py-1 text-xs font-medium text-stone-200 hover:bg-stone-600 disabled:opacity-40"
+                  >
+                    {listenTestPlaying ? '♪ 再生中…' : '♪ 試聴テスト (2秒)'}
+                  </button>
+                  <span className="text-xs text-stone-400">
+                    {enabled
+                      ? 'AI を OFF にすると使えます'
+                      : '音が聞こえたらオンにしてください'}
+                  </span>
+                </div>
+              </CheckLine>
+            </div>
+          </Field>
+
+          <Field htmlFor="ai-name" label="表示名" hint="ステージの名札に出る名前です。">
+            <input
+              id="ai-name"
+              type="text"
+              value={config.displayName}
+              maxLength={32}
+              onChange={(e) => set({ displayName: e.target.value })}
+              className={selectClass}
+            />
+          </Field>
+
+          <SectionTitle step={2}>動作を確認する</SectionTitle>
+
+          <div className="mb-4">
+            <AiPreflightPanel
+              inputs={inputs}
+              outputs={outputs}
+              sourceDeviceId={config.sourceDeviceId}
+              sinkDeviceId={config.sinkDeviceId}
+              micLabel={micInfo?.label ?? null}
+              mixerRunning={mixerDiag?.contextState === 'running'}
+              mixerHasMic={!!mixerDiag?.localMic}
+              aiEnabled={enabled}
+              getMicTrack={() =>
+                room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track
+                  ?.mediaStreamTrack ?? null
+              }
+              sendLocalMicOn={config.sendLocalMic !== false}
+              setSendEnabled={setInputMixerSendEnabled}
+              setMixerIncludeLocalMic={setInputMixerIncludeLocalMic}
+              onAutoConfig={(patch) => set(patch)}
+              disabledReason={
+                isRecording
+                  ? '録画中は検査できません（テストトーンが収録と配信に入るため）'
+                  : probeBusy
+                    ? '別の検査が実行中です'
+                    : null
+              }
+              acquireProbe={acquireProbe}
+              releaseProbe={releaseProbe}
+              onAllPassed={(wiringFp) => {
+                // 「検査した配線」の指紋を保存する。有効化時に現在の配線と照合する
+                // ため、検査後に配線が変わっていれば自動的に無効になる
+                setManualConfirm(true);
+                setVerifiedFp(wiringFp);
+              }}
             />
           </div>
-          {previewError && (
-            <p className="mt-1.5 rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-200">
-              ⚠ このデバイスを開けませんでした: {previewError}
-            </p>
-          )}
-          <p className="mt-1.5 text-[11px] leading-relaxed text-stone-500">
-            ChatGPT に話しかけても反応しないのは正常です。あなたの声は
-            「AI 参加者を有効にする」を押した時点から届きます。ここでの確認は
-            <strong>ChatGPT にテキストで話しかけて</strong>音声で返答させてください。
-          </p>
-        </div>
 
-        {/* ChatGPT への送出先 */}
-        <label className="mb-1 block text-xs text-stone-400">
-          通話マイク — あなたの声を拾うデバイス（ChatGPT へはここから送られます）
-        </label>
-        <select
-          value={micInfo?.deviceId ?? ""}
-          disabled={switchingMic}
-          onChange={(e) => void switchMic(e.target.value)}
-          className="mb-1 w-full rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-sm text-stone-200 disabled:opacity-50"
-        >
-          {!micInfo && <option value="">(マイク未取得)</option>}
-          {inputs.map((d) => (
-            <option key={d.deviceId} value={d.deviceId}>
-              {isLoopbackCaptureLabel(d.label) ? "⚠ " : ""}
-              {d.label}
-            </option>
-          ))}
-        </select>
-        <p className="mb-4 text-[11px] leading-relaxed text-stone-500">
-          ⚠ が付くものは録音デバイス（再生音を録るもの）で、マイクには使えません。
-          物理マイク（マイク配列など）を選んでください。
-        </p>
-
-        <label className="mb-1 block text-xs text-stone-400">
-          <strong className="text-stone-300">② ChatGPT への送出先</strong> — こちらの声を<strong>送る</strong>側（任意）
-          <br />
-          ChatGPT の「入力デバイス」に指定した仮想デバイスの再生側を選ぶ。
-          例: <code>Voicemeeter Input</code> / <code>CABLE-B Input</code>
-        </label>
-        <select
-          value={config.sinkDeviceId ?? ''}
-          disabled={probeBusy}
-          onChange={(e) => {
-            const d = outputs.find((x) => x.deviceId === e.target.value);
-            set({
-              sinkDeviceId: e.target.value || null,
-              sinkDeviceLabel: d?.label,
-            });
-          }}
-          className="mb-2 w-full rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-sm text-stone-200"
-        >
-          <option value="">使用しない (外部でルーティング済み)</option>
-          {outputs.map((d) => (
-            <option key={d.deviceId} value={d.deviceId}>
-              {d.recommended ? '★ ' : ''}
-              {d.label}
-            </option>
-          ))}
-        </select>
-        <p className="mb-3 text-[11px] leading-relaxed text-stone-500">
-          設定すると、あなたと相手の声だけをアプリ内でミックスして ChatGPT
-          の耳へ届けます（AI 自身の声は構造的に混ざりません）。
-        </p>
-        <label className="mb-3 flex items-start gap-2 text-[11px] leading-relaxed text-stone-400">
-          <input
-            type="checkbox"
-            className="mt-0.5"
-            checked={config.sendLocalMic === false}
-            onChange={(e) => set({ sendLocalMic: !e.target.checked })}
-          />
-          <span>
-            あなたの声は <strong>VoiceMeeter 側で常時 ChatGPT に送っている</strong>
-            （アプリからは送らない）
-            <br />
-            物理マイクを VoiceMeeter のハードウェア入力から B1 へ流している構成で
-            チェックします。アプリを起動していなくても他の通話アプリが普通にマイクを
-            使えるようになります。チェックしないと、あなたの声が ChatGPT に二重に届きます。
-          </span>
-        </label>
-        <label className="mb-3 flex items-start gap-2 text-[11px] leading-relaxed text-stone-400">
-          <input
-            type="checkbox"
-            className="mt-0.5"
-            checked={config.monitorAiLocally === false}
-            onChange={(e) => set({ monitorAiLocally: !e.target.checked })}
-          />
-          <span>
-            ChatGPT の声は <strong>Windows 側で常時モニタしている</strong>
-            （アプリからは再生しない）
-            <br />
-            録音タブで AI 音声ソースの「このデバイスを聴く」を有効にしている場合に
-            チェックします。<strong>アプリを起動していなくても ChatGPT の声が聞こえる</strong>
-            ため、ChatGPT を普段どおり単体で使えます。チェックしないと二重に聞こえます。
-            <br />
-            <button
-              type="button"
-              disabled={
-                listenTestPlaying || !config.sourceDeviceId || enabled || isRecording || probeBusy
-              }
-              onClick={() => {
-                // AI 音声ソース (CABLE Output 等) の再生側へテストトーンを流す。
-                // Windows の「このデバイスを聴く」が生きていれば音が聞こえるはず。
-                // ブラウザからはモニタの有無を検出できないため、耳で判定してもらう。
-                const src = inputs.find((d) => d.deviceId === config.sourceDeviceId);
-                const playback = src ? findCablePlaybackForCapture(src, outputs) : null;
-                if (!playback) return;
-                setListenTestPlaying(true);
-                void playToneProbe(playback.deviceId, 2000).finally(() =>
-                  setListenTestPlaying(false)
-                );
-              }}
-              className="mt-1 rounded bg-stone-700 px-2 py-1 text-[11px] text-stone-200 hover:bg-stone-600 disabled:opacity-40"
-            >
-              {listenTestPlaying ? '♪ 再生中…' : '♪ 試聴テスト (2秒)'}
-            </button>{' '}
-            <span className="text-stone-500">
-              {enabled
-                ? '試聴テストは AI を OFF にしてから（アプリ自身の再生と聞き分けられないため）'
-                : '音が聞こえたら Windows 側モニタは生きています → チェックON'}
-            </span>
-          </span>
-        </label>
-        {enabled && monitorDeviceId && (
-          <div className="mb-3">
-            <div className="mb-1 flex items-center justify-between text-xs text-stone-400">
-              <span>送出モニタ (あなたの声が ChatGPT に届いているか)</span>
-              <span className={sendActive ? "text-emerald-400" : "text-stone-500"}>
-                {sendActive ? "● 届いています" : "○ 無音"}
-              </span>
-            </div>
-            <div className="h-2 w-full overflow-hidden rounded bg-stone-800">
-              <div
-                className="h-full rounded bg-sky-500 transition-[width] duration-100"
-                style={{ width: `${Math.round(Math.min(sendLevel, 1) * 100)}%` }}
+          {enabled && monitorDeviceId && (
+            <div className="mb-4 rounded-xl border border-stone-700 bg-stone-800/60 p-3">
+              <Meter
+                label="送出モニタ (あなたの声が ChatGPT に届いているか)"
+                level={sendLevel}
+                color="bg-sky-500"
+                status={
+                  sendActive
+                    ? { text: '● 届いています', tone: 'ok' }
+                    : { text: '○ 無音', tone: 'idle' }
+                }
               />
-            </div>
-            {inputMixerError && (
-              <p className="mt-1.5 rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-200">
-                ⚠ 送出経路を開けませんでした: {inputMixerError}
-              </p>
-            )}
-            {mixerDiag?.blockedMicLabel && (
-              <p className="mt-1.5 rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-200">
-                ⚠ 通話マイクが録音デバイス「{mixerDiag.blockedMicLabel}」になっています。
-                これは再生音をそのまま録るもので、あなたの声は入らず AI の声が
-                ChatGPT へ戻ってハウリングします。安全のため送出を止めました。
-                Windows の既定の録音デバイスを<strong>物理マイク（マイク配列など）</strong>
-                に変更してください。
-              </p>
-            )}
-            {mixerDiag && (
-              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-stone-400">
-                <span>
-                  音声処理:{" "}
-                  <b className={mixerDiag.contextState === "running" ? "text-emerald-400" : "text-red-300"}>
+              {inputMixerError && (
+                <Alert tone="error">送出経路を開けませんでした: {inputMixerError}</Alert>
+              )}
+              {mixerDiag?.blockedMicLabel && (
+                <Alert tone="error">
+                  通話マイクが録音デバイス「{mixerDiag.blockedMicLabel}」になっています。
+                  これは再生音をそのまま録るもので、あなたの声は入らず AI の声が ChatGPT
+                  へ戻ってハウリングします。安全のため送出を止めました。Windows
+                  の既定の録音デバイスを
+                  <strong className="font-medium">物理マイク（マイク配列など）</strong>
+                  に変更してください。
+                </Alert>
+              )}
+              {mixerDiag && (
+                <dl className="mt-2.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                  <dt className="text-stone-400">音声処理</dt>
+                  <dd
+                    className={
+                      mixerDiag.contextState === 'running' ? 'text-emerald-400' : 'text-red-300'
+                    }
+                  >
                     {mixerDiag.contextState}
-                  </b>
-                </span>
-                <span>
-                  あなたのマイク:{" "}
-                  <b
+                  </dd>
+                  <dt className="text-stone-400">あなたのマイク</dt>
+                  <dd
                     className={
                       mixerDiag.localMic
-                        ? "text-stone-200"
+                        ? 'text-stone-200'
                         : config.sendLocalMic === false
-                          ? "text-stone-400"
-                          : "text-red-300"
+                          ? 'text-stone-400'
+                          : 'text-red-300'
                     }
                   >
                     {mixerDiag.localMic?.label ||
                       (config.sendLocalMic === false
-                        ? "VoiceMeeter が送信中 (アプリからは送らない)"
-                        : "未接続")}
-                  </b>
-                </span>
-                <span>
-                  相手の声:{" "}
-                  <b className={mixerDiag.remoteCount > 0 ? "text-emerald-400" : "text-stone-500"}>
+                        ? 'VoiceMeeter が送信中 (アプリからは送らない)'
+                        : '未接続')}
+                  </dd>
+                  <dt className="text-stone-400">相手の声</dt>
+                  <dd
+                    className={`tabular-nums ${
+                      mixerDiag.remoteCount > 0 ? 'text-emerald-400' : 'text-stone-400'
+                    }`}
+                  >
                     {mixerDiag.remoteCount}人
-                  </b>
-                </span>
+                  </dd>
+                </dl>
+              )}
+            </div>
+          )}
+
+          <div className="mb-4 rounded-xl border border-stone-700 bg-stone-800/60 p-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <span className="text-sm font-medium text-stone-200">自己ループ検査</span>
+              <button
+                onClick={() => void runLoopCheck()}
+                disabled={
+                  loopCheck.state === 'running' || !config.sinkDeviceId || isRecording || probeBusy
+                }
+                className="shrink-0 rounded-lg bg-stone-700 px-3 py-1 text-xs font-medium text-stone-200 hover:bg-stone-600 disabled:opacity-40"
+              >
+                {loopCheck.state === 'running'
+                  ? `検査中… ${loopCheck.secondsLeft}s`
+                  : '検査を実行'}
+              </button>
+            </div>
+            <p className="text-pretty text-xs leading-relaxed text-stone-300">
+              上の「すべて確認」に同じ検査が自動で含まれます。個別に確かめたいときだけ使ってください。
+            </p>
+            <Help>
+              ChatGPT に話させながら実行してください。AI の声が ChatGPT
+              の耳（送出先）に漏れていないことを確認します。検査中はこちらの声の送出を
+              自動的に止めます（8秒間 ChatGPT には届きません）。
+            </Help>
+
+            {loopCheck.state === 'passed' && (
+              <p className="mt-2 text-xs text-emerald-400">✔ 合格: 自己ループはありません</p>
+            )}
+            {loopCheck.state === 'failed' && (
+              <p className="mt-2 text-pretty text-xs leading-relaxed text-red-300">
+                ✘ {loopCheck.reason}
+              </p>
+            )}
+            {loopCheck.state === 'unavailable' && (
+              <div className="mt-2 text-xs text-amber-200">
+                <p className="text-pretty leading-relaxed">△ {loopCheck.reason}</p>
+                <CheckLine
+                  checked={manualConfirm}
+                  onChange={(v) => {
+                    setManualConfirm(v);
+                    setVerifiedFp(v ? aiWiringFingerprint(configRef.current) : null);
+                  }}
+                  title="ChatGPT の声が ChatGPT 自身の入力に戻らないことを手動で確認しました"
+                  tone="warn"
+                />
+              </div>
+            )}
+            {!config.sinkDeviceId && (
+              <div className="mt-2">
+                <CheckLine
+                  checked={manualConfirm}
+                  onChange={(v) => {
+                    setManualConfirm(v);
+                    setVerifiedFp(v ? aiWiringFingerprint(configRef.current) : null);
+                  }}
+                  title="外部ルーティングで ChatGPT の声が ChatGPT 自身の入力に戻らないことを確認しました"
+                  tone="warn"
+                />
               </div>
             )}
           </div>
-        )}
 
-        {/* プリフライト */}
-        <AiRequiredSettings
-          inputs={inputs}
-          outputs={outputs}
-          sourceDeviceId={config.sourceDeviceId}
-          sinkDeviceId={config.sinkDeviceId}
-        />
-        <div className="mb-3">
-          <AiPreflightPanel
+          <SectionTitle>参考</SectionTitle>
+
+          <AiRequiredSettings
             inputs={inputs}
             outputs={outputs}
             sourceDeviceId={config.sourceDeviceId}
             sinkDeviceId={config.sinkDeviceId}
-            micLabel={micInfo?.label ?? null}
-            mixerRunning={mixerDiag?.contextState === "running"}
-            mixerHasMic={!!mixerDiag?.localMic}
-            aiEnabled={enabled}
-            getMicTrack={() =>
-              room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track
-                ?.mediaStreamTrack ?? null
-            }
-            sendLocalMicOn={config.sendLocalMic !== false}
-            setSendEnabled={setInputMixerSendEnabled}
-            setMixerIncludeLocalMic={setInputMixerIncludeLocalMic}
-            onAutoConfig={(patch) => set(patch)}
-            disabledReason={
-              isRecording
-                ? '録画中は検査できません（テストトーンが収録と配信に入るため）'
-                : probeBusy
-                  ? '別の検査が実行中です'
-                  : null
-            }
-            acquireProbe={acquireProbe}
-            releaseProbe={releaseProbe}
-            onAllPassed={(wiringFp) => {
-              // 「検査した配線」の指紋を保存する。有効化時に現在の配線と照合する
-              // ため、検査後に配線が変わっていれば自動的に無効になる
-              setManualConfirm(true);
-              setVerifiedFp(wiringFp);
-            }}
           />
-        </div>
-        <div className="mb-4 rounded-xl border border-stone-700 bg-stone-800/60 p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <span className="text-xs font-medium text-stone-300">
-              プリフライト: 自己ループ検査
-            </span>
-            <button
-              onClick={() => void runLoopCheck()}
-              disabled={
-                loopCheck.state === 'running' || !config.sinkDeviceId || isRecording || probeBusy
-              }
-              className="rounded-lg bg-stone-700 px-3 py-1 text-xs text-stone-200 hover:bg-stone-600 disabled:opacity-40"
-            >
-              {loopCheck.state === 'running'
-                ? `検査中… ${loopCheck.secondsLeft}s`
-                : '検査を実行'}
-            </button>
-          </div>
-          <p className="mb-2 text-[11px] leading-relaxed text-stone-500">
-            ChatGPT に話させながら実行してください。AI の声が ChatGPT
-            の耳（送出先）に漏れていないことを確認します。
-            <br />
-            検査中はこちらの声の送出を自動的に止めます（8秒間 ChatGPT には
-            届きません）。ChatGPT にテキストで話しかけて音声で返答させながら実行してください。
-            にテキストで話しかけて音声で返答させるか、音声モードを開始した直後の
-            発話に合わせて実行してください。
-          </p>
-          {loopCheck.state === 'passed' && (
-            <p className="text-xs text-emerald-400">✔ 合格: 自己ループはありません</p>
-          )}
-          {loopCheck.state === 'failed' && (
-            <p className="text-xs text-red-300">✘ {loopCheck.reason}</p>
-          )}
-          {loopCheck.state === 'unavailable' && (
-            <div className="text-xs text-amber-200">
-              <p>△ {loopCheck.reason}</p>
-              <label className="mt-1 flex items-start gap-2">
-                <input
-                  type="checkbox"
-                  checked={manualConfirm}
-                  onChange={(e) => {
-                  setManualConfirm(e.target.checked);
-                  setVerifiedFp(
-                    e.target.checked ? aiWiringFingerprint(configRef.current) : null
-                  );
-                }}
-                  className="mt-0.5"
-                />
-                <span>
-                  セットアップガイドどおりに配線し、ChatGPT の声が ChatGPT
-                  自身の入力に戻らないことを手動で確認しました
-                </span>
-              </label>
-            </div>
-          )}
-          {!config.sinkDeviceId && (
-            <label className="mt-1 flex items-start gap-2 text-xs text-amber-200">
-              <input
-                type="checkbox"
-                checked={manualConfirm}
-                onChange={(e) => {
-                  setManualConfirm(e.target.checked);
-                  setVerifiedFp(
-                    e.target.checked ? aiWiringFingerprint(configRef.current) : null
-                  );
-                }}
-                className="mt-0.5"
-              />
-              <span>
-                外部ルーティングで ChatGPT の声が ChatGPT
-                自身の入力に戻らないことを確認しました
-              </span>
-            </label>
-          )}
+
+          <details className="mt-3 rounded-xl border border-stone-800 bg-stone-950/40 px-3 py-2">
+            <summary className="cursor-pointer text-sm font-medium text-stone-300">
+              この画面について（4点）
+            </summary>
+            <ul className="mt-2 space-y-1.5 text-pretty text-xs leading-relaxed text-stone-300">
+              <li>
+                AI タイルは
+                <strong className="font-medium text-stone-300">
+                  この画面を再読み込みした参加者にのみ
+                </strong>
+                表示されます。有効化の前に、参加中のメンバーへページの再読み込みを依頼してください。
+              </li>
+              <li>録画開始前に有効化してください（録画中の有効化はできません）。</li>
+              <li>ヘッドホン必須（スピーカー使用はエコーの原因になります）。</li>
+              <li>
+                一度有効化すると
+                <strong className="font-medium text-stone-300">この配線を記憶</strong>
+                し、次回からはダッシュボードの「🤖 ChatGPTつきで収録モードへ」でワンクリック起動できます。
+                デバイスを変更すると記憶は破棄され、再びこの画面での確認が必要になります。
+              </li>
+            </ul>
+          </details>
+
+          <a
+            href="/help/ai-participant"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-3 inline-block text-xs font-medium text-amber-400 underline-offset-4 hover:underline"
+          >
+            設定に迷ったら — セットアップ手順を開く
+          </a>
         </div>
 
-        {/* 注意書き */}
-        <div className="mb-4 space-y-1 text-[11px] leading-relaxed text-stone-500">
-          <p>
-            ・AI タイルは<strong>この画面を再読み込みした参加者にのみ</strong>
-            表示されます。有効化の前に、参加中のメンバーへページの再読み込みを依頼してください。
-          </p>
-          <p>・録画開始前に有効化してください（録画中の有効化はできません）。</p>
-          <p>・ヘッドホン必須（スピーカー使用はエコーの原因になります）。</p>
-          <p>
-            ・一度有効化すると<strong>この配線を記憶</strong>し、次回からはダッシュボードの
-            「AI参加者つきで収録開始」でワンクリック起動できます。デバイスを変更すると
-            記憶は破棄され、再びこの画面での確認が必要になります。
-          </p>
-        </div>
-
-        {/* 有効化 */}
-        <div className="flex items-center justify-between gap-3">
+        <footer className="flex items-center justify-end gap-3 border-t border-stone-800 px-5 py-3">
           {!enabled && enableBlockReason && (
-            <span className="text-xs text-amber-300">{enableBlockReason}</span>
+            <span className="text-pretty text-xs leading-relaxed text-amber-300">
+              {enableBlockReason}
+            </span>
           )}
           {enabled ? (
             <button
               onClick={() => onChangeEnabled(false)}
-              className="ml-auto rounded-lg bg-stone-700 px-4 py-2 text-sm font-medium text-stone-200 hover:bg-stone-600"
+              className="shrink-0 rounded-lg bg-stone-700 px-4 py-2 text-sm font-medium text-stone-200 hover:bg-stone-600"
             >
               AI 参加者を無効にする
             </button>
@@ -957,13 +976,175 @@ export function AiParticipantSetupModal({
             <button
               onClick={() => void handleEnable()}
               disabled={!canEnable}
-              className="ml-auto rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-40"
+              className="shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
               AI 参加者を有効にする
             </button>
           )}
-        </div>
+        </footer>
       </div>
     </div>
   );
+}
+
+/* ── 画面の部品 ──────────────────────────────────────────
+ * この設定画面は「1画面に情報が多すぎて操作対象が埋もれる」のが最大の問題だった。
+ * 部品を切り出して、①ラベルと本文の階層を作る ②長い説明は既定で畳む
+ * ③本文を 11px から Tailwind 既定の text-xs へ戻す、の3点で読めるようにする。
+ */
+
+const selectClass =
+  'w-full rounded-lg border border-stone-600 bg-stone-800 px-2.5 py-2 text-sm text-stone-100';
+
+function SectionTitle({ step, children }: { step?: number; children: React.ReactNode }) {
+  return (
+    <h3 className="mb-3 mt-6 flex items-baseline gap-2 text-sm font-semibold text-stone-200 first:mt-0">
+      {step != null && (
+        <span className="tabular-nums text-xs font-bold text-amber-500">{step}</span>
+      )}
+      {children}
+    </h3>
+  );
+}
+
+function Field({
+  htmlFor,
+  label,
+  hint,
+  help,
+  children,
+}: {
+  htmlFor?: string;
+  label: string;
+  hint?: string;
+  help?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="mb-5">
+      <label htmlFor={htmlFor} className="block text-sm font-medium text-stone-200">
+        {label}
+      </label>
+      {hint && (
+        <p className="mb-1.5 mt-0.5 text-pretty text-xs leading-relaxed text-stone-300">{hint}</p>
+      )}
+      {children}
+      {help && <Help>{help}</Help>}
+    </div>
+  );
+}
+
+/** 既定では畳んでおく補足。読まなくても操作できる情報はここへ入れる */
+function Help({ children }: { children: React.ReactNode }) {
+  return (
+    <details className="mt-1.5">
+      <summary className="cursor-pointer text-xs text-stone-400 hover:text-stone-300">
+        詳しく
+      </summary>
+      <div className="mt-1.5 text-pretty text-xs leading-relaxed text-stone-300">{children}</div>
+    </details>
+  );
+}
+
+function Alert({ tone, children }: { tone: 'error' | 'warn'; children: React.ReactNode }) {
+  return (
+    <p
+      className={`mt-2 rounded-lg border px-3 py-2 text-pretty text-xs leading-relaxed ${
+        tone === 'error'
+          ? 'border-red-900/60 bg-red-950/40 text-red-200'
+          : 'border-amber-900/60 bg-amber-950/40 text-amber-200'
+      }`}
+    >
+      ⚠ {children}
+    </p>
+  );
+}
+
+function Meter({
+  label,
+  level,
+  color,
+  status,
+}: {
+  label: string;
+  level: number;
+  color: string;
+  status: { text: string; tone: 'ok' | 'idle' | 'warn' };
+}) {
+  return (
+    <div className="mt-3">
+      <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+        <span className="text-stone-400">{label}</span>
+        <span
+          className={
+            status.tone === 'ok'
+              ? 'text-emerald-400'
+              : status.tone === 'warn'
+                ? 'text-amber-300'
+                : 'text-stone-400'
+          }
+        >
+          {status.text}
+        </span>
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded bg-stone-800">
+        <div
+          className={`h-full rounded ${color} transition-[width] duration-100`}
+          style={{ width: `${Math.round(Math.min(level, 1) * 100)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** チェックボックス1行。長い説明は「詳しく」へ畳む */
+function CheckLine({
+  checked,
+  onChange,
+  title,
+  sub,
+  help,
+  tone,
+  children,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  title: string;
+  sub?: string;
+  help?: string;
+  tone?: 'warn';
+  children?: React.ReactNode;
+}) {
+  return (
+    <div>
+      <label className="flex items-start gap-2">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          className="mt-0.5 size-4 shrink-0 accent-amber-600"
+        />
+        <span className="min-w-0">
+          <span
+            className={`block text-pretty text-xs font-medium leading-relaxed ${
+              tone === 'warn' ? 'text-amber-200' : 'text-stone-200'
+            }`}
+          >
+            {title}
+          </span>
+          {sub && <span className="block text-xs text-stone-400">{sub}</span>}
+        </span>
+      </label>
+      {help && (
+        <div className="ml-6">
+          <Help>{help}</Help>
+        </div>
+      )}
+      {children && <div className="ml-6">{children}</div>}
+    </div>
+  );
+}
+
+function Code({ children }: { children: React.ReactNode }) {
+  return <code className="rounded bg-stone-800 px-1 py-0.5 text-stone-300">{children}</code>;
 }

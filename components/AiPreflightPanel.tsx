@@ -515,7 +515,7 @@ export function AiPreflightPanel({
         ? 'text-red-300'
         : s === 'running'
           ? 'text-amber-300'
-          : 'text-stone-500';
+          : 'text-stone-400';
 
   return (
     <div className="rounded-xl border border-stone-700 bg-stone-800/60 p-3">
@@ -531,7 +531,7 @@ export function AiPreflightPanel({
         </button>
       </div>
 
-      <p className="mb-2 text-[11px] leading-relaxed text-stone-500">
+      <p className="mb-2 text-xs leading-relaxed text-stone-300">
         経路のどこが崩れているかを順に確認します。失敗した項目に対処法を表示します。
       </p>
 
@@ -539,7 +539,7 @@ export function AiPreflightPanel({
         {(Object.keys(CHECK_LABELS) as CheckId[]).map((id) => {
           const c = checks[id];
           return (
-            <li key={id} className="text-[11px] leading-relaxed">
+            <li key={id} className="text-xs leading-relaxed">
               <span className={color(c.status)}>
                 {icon(c.status)} {CHECK_LABELS[id]}
                 {c.detail ? `: ${c.detail}` : ''}
@@ -558,7 +558,7 @@ export function AiPreflightPanel({
 
       {running && prompt && (
         <div className="mt-1">
-          <div className="mb-1 flex items-center justify-between text-[11px] text-stone-400">
+          <div className="mb-1 flex items-center justify-between text-xs text-stone-400">
             <span>検出レベル</span>
             <span>残り {probeLeft} 秒</span>
           </div>

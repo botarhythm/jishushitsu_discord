@@ -51,21 +51,21 @@ export function AiRequiredSettings({ inputs, outputs, sourceDeviceId, sinkDevice
       </p>
       <ul className="space-y-2">
         {rows.map((r) => (
-          <li key={r.where} className="text-[11px] leading-relaxed">
+          <li key={r.where} className="text-xs leading-relaxed">
             <span className="text-stone-400">{r.where}</span>
-            <span className="text-stone-500"> の </span>
+            <span className="text-stone-400"> の </span>
             <span className="text-stone-400">{r.what}</span>
-            <span className="text-stone-500"> → </span>
+            <span className="text-stone-400"> → </span>
             {r.value ? (
               <code className="rounded bg-stone-800 px-1.5 py-0.5 text-sky-200">{r.value}</code>
             ) : (
-              <span className="text-stone-500">（上の選択が済むと表示されます）</span>
+              <span className="text-stone-400">（上の選択が済むと表示されます）</span>
             )}
-            {r.note && <p className="ml-2 text-stone-500">※ {r.note}</p>}
+            {r.note && <p className="ml-2 text-stone-400">※ {r.note}</p>}
           </li>
         ))}
       </ul>
-      <p className="mt-2 text-[11px] leading-relaxed text-stone-500">
+      <p className="mt-2 text-xs leading-relaxed text-stone-300">
         ChatGPT を再起動すると出力デバイスが戻ることがあります。収録前チェックが失敗したら、
         まずここの2つを見比べてください。
       </p>
