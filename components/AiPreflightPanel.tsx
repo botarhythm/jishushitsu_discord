@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import {
   detectSignal,
   findCableMonitorInput,
+  findCablePlaybackForCapture,
   type DeviceOption,
 } from '@/lib/audio-devices';
 import { isLoopbackCaptureLabel } from '@/lib/studio-participants';
@@ -73,6 +74,8 @@ export function AiPreflightPanel({
     setChecks((prev) => ({ ...prev, [id]: r }));
 
   const run = useCallback(async () => {
+    const srcDev = inputs.find((d) => d.deviceId === sourceDeviceId) ?? null;
+    const expectedChatGptOutput = srcDev ? findCablePlaybackForCapture(srcDev, outputs) : null;
     setRunning(true);
     setChecks(INITIAL);
     void resumeAllAudioContexts();
@@ -142,7 +145,9 @@ export function AiPreflightPanel({
         set('receive', {
           status: 'fail',
           detail: recv.error ?? '信号を検出できません',
-          fix: 'ChatGPT の出力が仮想ケーブルに向いていません。音量ミキサーで ChatGPT の出力デバイスを確認してください（再起動で戻ることがあります）',
+          fix: expectedChatGptOutput
+            ? `音量ミキサーで ChatGPT の「出力デバイス」を「${expectedChatGptOutput.label}」にしてください`
+            : 'ChatGPT の出力を、AI 音声ソースと対になる仮想ケーブルの再生側に設定してください',
         });
         return;
       }
@@ -173,7 +178,7 @@ export function AiPreflightPanel({
           set('send', {
             status: 'fail',
             detail: '声が届いていません',
-            fix: 'VoiceMeeter が起動しているか、Virtual Input の B が点灯しているかを確認してください',
+            fix: `VoiceMeeter を起動し Virtual Input の B を点灯させてください。あわせて ChatGPT の入力(既定の通信デバイス)が「${monitor.label}」になっているか確認してください`,
           });
           return;
         }

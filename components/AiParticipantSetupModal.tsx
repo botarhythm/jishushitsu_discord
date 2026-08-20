@@ -12,6 +12,7 @@ import type { AiProviderStatus } from '@/lib/ai/provider';
 import { RmsSpeakingDetector } from '@/lib/ai/speaking-detector';
 import { resumeAllAudioContexts } from '@/lib/audio-runtime';
 import { AiPreflightPanel } from './AiPreflightPanel';
+import { AiRequiredSettings } from './AiRequiredSettings';
 
 interface AiParticipantSetupModalProps {
   room: Room | null;
@@ -696,6 +697,12 @@ export function AiParticipantSetupModal({
         )}
 
         {/* プリフライト */}
+        <AiRequiredSettings
+          inputs={inputs}
+          outputs={outputs}
+          sourceDeviceId={config.sourceDeviceId}
+          sinkDeviceId={config.sinkDeviceId}
+        />
         <div className="mb-3">
           <AiPreflightPanel
             inputs={inputs}

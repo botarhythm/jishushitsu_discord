@@ -58,6 +58,25 @@ export function findCableMonitorInput(
  * 指定デバイスを一定時間監視し、有意な音声が観測されたかを返す。
  * 収録前チェックの「声が届いているか」判定に使う。
  */
+/**
+ * 録音側デバイス（例: CABLE Output）に対応する「再生側」デバイスを特定する。
+ *
+ * ChatGPT の出力先として何を選ばせるべきかを UI に具体名で提示するために使う。
+ * 「確認してください」ではなくデバイス名を名指しできるようにするのが目的。
+ */
+export function findCablePlaybackForCapture(
+  capture: DeviceOption,
+  outputs: DeviceOption[]
+): DeviceOption | null {
+  if (capture.label.includes("Output")) {
+    const expected = normalizeLabel(capture.label.replace("Output", "Input"));
+    const byLabel = outputs.find((d) => normalizeLabel(d.label) === expected);
+    if (byLabel) return byLabel;
+  }
+  const byGroup = outputs.find((d) => d.groupId && d.groupId === capture.groupId);
+  return byGroup ?? null;
+}
+
 export async function detectSignal(
   deviceId: string,
   durationMs: number,
