@@ -138,10 +138,17 @@ export class ChatGptInputMixer {
     room.on(RoomEvent.TrackSubscribed, addRemote);
     room.on(RoomEvent.TrackUnsubscribed, removeRemote);
     room.on(RoomEvent.LocalTrackPublished, onLocalPublished);
+    // デバイス切替(switchActiveDevice)はトラックを差し替えるだけで
+    // LocalTrackPublished が飛ばないことがある。ActiveDeviceChanged を拾い、
+    // さらに取りこぼし対策として定期的にも読み直す(connectLocalMic は冪等)。
+    room.on(RoomEvent.ActiveDeviceChanged, onLocalPublished);
+    const micPoll = setInterval(connectLocalMic, 1000);
     this.detach = () => {
       room.off(RoomEvent.TrackSubscribed, addRemote);
       room.off(RoomEvent.TrackUnsubscribed, removeRemote);
       room.off(RoomEvent.LocalTrackPublished, onLocalPublished);
+      room.off(RoomEvent.ActiveDeviceChanged, onLocalPublished);
+      clearInterval(micPoll);
     };
   }
 
