@@ -3,8 +3,13 @@
 import { useEffect, useRef } from 'react';
 import type { AiTileState } from '@/lib/studio-participants';
 
-/** ステージ高さに対する球の直径の比率 */
-const ORB_DIAMETER_RATIO = 0.6;
+/**
+ * ステージ高さに対する球の直径の比率。
+ *
+ * 初期実装は 0.228 相当（38% の正方形要素にその 60% の球を描いていた）。
+ * 実機で「もとの 60% の大きさに」との指示があり 0.228 × 0.6 ≈ 0.14 とする。
+ */
+const ORB_DIAMETER_RATIO = 0.14;
 /** ステージ高さに対する球の中心位置（0=上端, 1=下端）。中央やや下に置く */
 const ORB_CENTER_Y_RATIO = 0.62;
 
