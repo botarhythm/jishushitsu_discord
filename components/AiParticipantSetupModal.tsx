@@ -21,6 +21,7 @@ interface AiParticipantSetupModalProps {
   aiStatus: AiProviderStatus;
   publishFailed: boolean;
   inputMixerError: string | null;
+  setInputMixerSendEnabled: (on: boolean) => void;
   getInputMixerDiagnostics: () => {
     contextState: string;
     localMic: { label: string; enabled: boolean; muted: boolean } | null;
@@ -90,6 +91,7 @@ export function AiParticipantSetupModal({
   aiStatus,
   publishFailed,
   inputMixerError,
+  setInputMixerSendEnabled,
   getInputMixerDiagnostics,
   onReconnect,
   isRecording,
@@ -340,6 +342,9 @@ export function AiParticipantSetupModal({
       return;
     }
     let stream: MediaStream | null = null;
+    // 有効化後はこちらの声が送出経路に乗っているため、検査中だけ送出を止めて
+    // 「OS 側の漏れ」だけを測る。止めないとマイクが拾った物音を漏れと誤判定する。
+    setInputMixerSendEnabled(false);
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -388,9 +393,10 @@ export function AiParticipantSetupModal({
       console.warn('[AiSetup] ループ検査失敗', e);
       setLoopCheck({ state: 'unavailable', reason: '監視入力を開けませんでした' });
     } finally {
+      setInputMixerSendEnabled(true);
       stream?.getTracks().forEach((t) => t.stop());
     }
-  }, [inputs, outputs, config.sinkDeviceId, config.sourceDeviceId]);
+  }, [inputs, outputs, config.sinkDeviceId, config.sourceDeviceId, setInputMixerSendEnabled]);
 
   // 送出先(ChatGPTの耳)の経路をAI音声ソースに選んでしまう取り違えの検出。
   // これをやると自分たちの声を「AIの声」として取り込むことになる。
@@ -708,7 +714,8 @@ export function AiParticipantSetupModal({
             ChatGPT に話させながら実行してください。AI の声が ChatGPT
             の耳（送出先）に漏れていないことを確認します。
             <br />
-            この検査中はまだ ChatGPT にあなたの声は届きません。ChatGPT
+            検査中はこちらの声の送出を自動的に止めます（8秒間 ChatGPT には
+            届きません）。ChatGPT にテキストで話しかけて音声で返答させながら実行してください。
             にテキストで話しかけて音声で返答させるか、音声モードを開始した直後の
             発話に合わせて実行してください。
           </p>

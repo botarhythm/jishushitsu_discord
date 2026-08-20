@@ -58,6 +58,8 @@ export interface UseAiParticipantResult {
   descriptor: StudioAiDescriptor | null;
   /** ChatGPT 入力ミキサーの起動に失敗したときの理由（送出経路が死んでいる） */
   inputMixerError: string | null;
+  /** 自己ループ検査中に送出を止めるためのスイッチ */
+  setInputMixerSendEnabled: (on: boolean) => void;
   /** 送出経路の内部状態を取得する（切り分け用。未起動なら null） */
   getInputMixerDiagnostics: () => ReturnType<ChatGptInputMixer["getDiagnostics"]> | null;
   /** エラー後の再接続（同一 participant ID のまま新トラック取得 → registry → publish） */
@@ -288,6 +290,10 @@ export function useAiParticipant({
     [enabled, localIdentity, trackName, info.displayName, info.avatar]
   );
 
+  const setInputMixerSendEnabled = useCallback((on: boolean) => {
+    mixerRef.current?.setSendEnabled(on);
+  }, []);
+
   const getInputMixerDiagnostics = useCallback(
     () => mixerRef.current?.getDiagnostics() ?? null,
     []
@@ -297,6 +303,7 @@ export function useAiParticipant({
     status,
     publishFailed,
     inputMixerError,
+    setInputMixerSendEnabled,
     getInputMixerDiagnostics,
     tile,
     descriptor,

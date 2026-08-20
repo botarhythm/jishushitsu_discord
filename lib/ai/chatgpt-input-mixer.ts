@@ -20,6 +20,7 @@ export class ChatGptInputMixer {
   private ctx: AudioContext | null = null;
   private unregister: (() => void) | null = null;
   private dest: MediaStreamAudioDestinationNode | null = null;
+  private gain: GainNode | null = null;
   private audioEl: HTMLAudioElement | null = null;
   private nodes = new Map<string, MediaStreamAudioSourceNode>();
   private localMicNode: { track: MediaStreamTrack; source: MediaStreamAudioSourceNode } | null = null;
@@ -39,6 +40,10 @@ export class ChatGptInputMixer {
     this.ctx = ctx;
     this.unregister = registerAudioContext(ctx);
     this.dest = ctx.createMediaStreamDestination();
+    // 全ソースはこの gain を経由して destination へ送る。自己ループ検査中に
+    // 送出だけ止めて「OS 側の漏れ」だけを測れるようにするため。
+    this.gain = ctx.createGain();
+    this.gain.connect(this.dest);
     // autoplay ポリシーで suspended のまま作られることがある。suspended だと
     // destination に音が流れず、送出先に何も届かない（無音の原因になる）。
     if (ctx.state !== "running") {
@@ -64,7 +69,7 @@ export class ChatGptInputMixer {
       // 実行時ガード: マイク publication 以外（AI publish 等）はここに来ない
       if (!pub || classifyAudioPublication(pub) !== 'human') return;
       const mst = pub.track?.mediaStreamTrack;
-      if (!mst || !this.ctx || !this.dest) return;
+      if (!mst || !this.ctx || !this.gain) return;
       // ループバック録音デバイス(ステレオミキサー等)は再生音をそのまま拾うため、
       // AI モニタの音声が ChatGPT の耳へ戻り自己ループ(ハウリング)になる。
       // しかも本人の声は入らない。接続を拒否して UI に理由を出す。
@@ -84,7 +89,7 @@ export class ChatGptInputMixer {
       }
       try {
         const source = this.ctx.createMediaStreamSource(new MediaStream([mst]));
-        source.connect(this.dest);
+        source.connect(this.gain);
         this.localMicNode = { track: mst, source };
       } catch (e) {
         console.warn('[ChatGptInputMixer] ローカルマイク接続失敗', e);
@@ -97,14 +102,14 @@ export class ChatGptInputMixer {
       // 実行時ガード: human 以外（AI音声・画面共有音声・未分類 Unknown）は接続しない。
       // これが「ChatGPT出力 → ChatGPT入力」の再帰ループを塞ぐ本体。
       if (classifyAudioPublication(pub) !== 'human') return;
-      if (!this.ctx || !this.dest) return;
+      if (!this.ctx || !this.gain) return;
       const ms = track.mediaStream ?? (track.mediaStreamTrack ? new MediaStream([track.mediaStreamTrack]) : null);
       if (!ms) return;
       const key = `${participant.identity}:${track.sid ?? ''}`;
       if (this.nodes.has(key)) return;
       try {
         const source = this.ctx.createMediaStreamSource(ms);
-        source.connect(this.dest);
+        source.connect(this.gain);
         this.nodes.set(key, source);
       } catch (e) {
         console.warn('[ChatGptInputMixer] リモート音声接続失敗', e);
@@ -152,6 +157,12 @@ export class ChatGptInputMixer {
     };
   }
 
+  /** 送出の一時停止/再開（自己ループ検査中に OS 側の漏れだけを測るため） */
+  setSendEnabled(on: boolean): void {
+    if (!this.gain || !this.ctx) return;
+    this.gain.gain.setTargetAtTime(on ? 1 : 0, this.ctx.currentTime, 0.01);
+  }
+
   /** 送出経路が実際に成立しているかの内部状態（切り分け用） */
   getDiagnostics(): {
     contextState: string;
@@ -196,6 +207,7 @@ export class ChatGptInputMixer {
     this.unregister = null;
     this.ctx?.close().catch(() => {});
     this.ctx = null;
+    this.gain = null;
     this.dest = null;
     this.started = false;
   }
