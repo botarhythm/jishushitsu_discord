@@ -23,6 +23,8 @@ interface StudioBarProps {
   aiEnabled?: boolean;
   /** AI 参加者にエラー/配信失敗があるか (バッジ表示) */
   aiError?: boolean;
+  /** AI 参加者の ON/OFF を切り替える */
+  onToggleAi?: () => void;
   /** AI 参加者セットアップモーダルを開く */
   onOpenAiSetup?: () => void;
   /** マイク/カメラのデバイス設定を開く（収録中に入力デバイスを直すため） */
@@ -71,6 +73,7 @@ export function StudioBar(props: StudioBarProps) {
     isLocalRecording,
     aiEnabled = false,
     aiError = false,
+    onToggleAi,
     onOpenAiSetup,
     onOpenDeviceSettings,
     recordingUnsupported = false,
@@ -254,19 +257,24 @@ export function StudioBar(props: StudioBarProps) {
           </BarButton>
         )}
 
-        {/* AI 参加者 (ChatGPT) セットアップ */}
-        {onOpenAiSetup && (
+        {/* AI 参加者: 左が ON/OFF、右が設定 */}
+        {onToggleAi && (
           <div className="relative">
             <BarButton
               active={aiEnabled}
-              label={aiEnabled ? 'AI参加者: 有効 (設定を開く)' : 'AI参加者を追加'}
-              onClick={onOpenAiSetup}
+              label={aiEnabled ? "AI参加者をOFFにする" : "AI参加者をONにする"}
+              onClick={onToggleAi}
             >
               🤖
             </BarButton>
             {aiError && (
               <span className="absolute -right-1 -top-1 flex h-3 w-3 rounded-full bg-red-500" aria-hidden />
             )}
+        {onOpenAiSetup && (
+          <BarButton label="AI参加者の設定" onClick={onOpenAiSetup}>
+            🔧
+          </BarButton>
+        )}
           </div>
         )}
 

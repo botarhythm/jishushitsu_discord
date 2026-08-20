@@ -491,6 +491,25 @@ function RoomInner({
   /**
    * ダッシュボードの「AI参加者つきで収録開始」。
    * 検証済み配線があればワンクリックで収録モード投入 + AI 有効化まで行う。
+  /**
+   * AI 参加者の ON/OFF。設定が済んでいなければ設定画面へ誘導する。
+   * 収録中に素早く出し入れできるよう、収録バーから1クリックで切り替えられる。
+   */
+  const toggleAi = useCallback(() => {
+    if (aiEnabled) {
+      setAiEnabled(false);
+      return;
+    }
+    if (!aiConfig.sourceDeviceId) {
+      setAiSetupOpen(true);
+      return;
+    }
+    setAiEnabled(true);
+  }, [aiEnabled, aiConfig.sourceDeviceId]);
+
+  /**
+   * ダッシュボードの「AI参加者つきで収録開始」。
+   * 検証済み配線があればワンクリックで収録モード投入 + AI 有効化まで行う。
    * 無ければ収録モードに入ったうえでセットアップ画面を開く (初回・配線変更後)。
    */
   const startStudioWithAi = useCallback(() => {
@@ -890,6 +909,7 @@ function RoomInner({
           isLocalRecording={isLocalRecording}
           aiEnabled={aiEnabled}
           aiError={aiEnabled && (aiStatus === 'error' || aiPublishFailed)}
+          onToggleAi={toggleAi}
           onOpenAiSetup={() => setAiSetupOpen(true)}
           onOpenDeviceSettings={openDeviceSettings}
           recordingUnsupported={!isLocalRecordingSupported}
