@@ -435,6 +435,11 @@ export function AiParticipantSetupModal({
               style={{ width: `${Math.round(Math.min(previewLevel, 1) * 100)}%` }}
             />
           </div>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-stone-500">
+            ChatGPT に話しかけても反応しないのは正常です。あなたの声は
+            「AI 参加者を有効にする」を押した時点から届きます。ここでの確認は
+            <strong>ChatGPT にテキストで話しかけて</strong>音声で返答させてください。
+          </p>
         </div>
 
         {/* ChatGPT への送出先 */}
