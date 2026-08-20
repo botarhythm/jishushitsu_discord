@@ -98,6 +98,8 @@ export function useAiParticipant({
   const mixerRef = useRef<ChatGptInputMixer | null>(null);
   const monitorElRef = useRef<HTMLAudioElement | null>(null);
   const publishedTrackRef = useRef<MediaStreamTrack | null>(null);
+  /** attach 済みの AI トラック (publish 失敗時も保持。モニタの後付け切替用) */
+  const currentTrackRef = useRef<MediaStreamTrack | null>(null);
   const wasSpeakingRef = useRef(false);
 
   const configRef = useRef(config);
@@ -118,6 +120,7 @@ export function useAiParticipant({
   const attachTrack = useCallback(
     async (track: MediaStreamTrack) => {
       registry.add(AI_PARTICIPANT_ID, track);
+      currentTrackRef.current = track;
 
       // ホストのモニタ (既定出力=ヘッドホン)。LiveKit のローカル publish はホスト自身では
       // 再生されないため、これが無いとホストだけ AI の声が聞こえない。
@@ -162,6 +165,7 @@ export function useAiParticipant({
   /** publish / registry / モニタから track を外す。Provider の track 自体は止めない（オーナーは Provider） */
   const detachTrack = useCallback(async () => {
     registry.remove(AI_PARTICIPANT_ID);
+    currentTrackRef.current = null;
     if (monitorElRef.current) {
       monitorElRef.current.srcObject = null;
     }
@@ -263,6 +267,37 @@ export function useAiParticipant({
       if (mixerRef.current === mixer) mixerRef.current = null;
     };
   }, [room, sinkDeviceId]);
+
+  // ── チェックボックスの稼働中反映 (Codex レビュー #5) ──
+  // start/attach 時のスナップショットだけだと、AI 有効化後にチェックを変えても
+  // 実際の配線が追従せず、UI と実挙動が食い違う (2026-08-20 のハウリングの原因)。
+  const sendLocalMicOn = config.sendLocalMic !== false;
+  useEffect(() => {
+    mixerRef.current?.setIncludeLocalMic(sendLocalMicOn);
+  }, [sendLocalMicOn]);
+
+  const monitorLocallyOn = config.monitorAiLocally !== false;
+  useEffect(() => {
+    if (!enabled) return;
+    if (!monitorLocallyOn) {
+      // アプリからの再生を即時停止 (Windows 側モニタに任せる)
+      if (monitorElRef.current) monitorElRef.current.srcObject = null;
+      return;
+    }
+    const track = currentTrackRef.current;
+    if (!track) return;
+    if (!monitorElRef.current) {
+      const el = document.createElement('audio');
+      el.style.display = 'none';
+      el.autoplay = true;
+      document.body.appendChild(el);
+      monitorElRef.current = el;
+    }
+    monitorElRef.current.srcObject = new MediaStream([track]);
+    monitorElRef.current.play().catch(() => {
+      // autoplay 制限は StartAudioBanner のユーザー操作で解除される
+    });
+  }, [enabled, monitorLocallyOn]);
 
   /** 再接続: 同一 participant ID のまま「新トラック取得 → registry → publish」の順で復帰 */
   const reconnect = useCallback(async () => {

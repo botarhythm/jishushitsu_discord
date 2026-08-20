@@ -172,3 +172,58 @@ export function suggestSendSinkOutput(outputs: DeviceOption[]): DeviceOption | n
   if (vm) return vm;
   return outputs.find((d) => d.recommended) ?? null;
 }
+
+/**
+ * 指定の再生デバイスへテストトーンを一定時間流す。
+ *
+ * プリフライトの自動化に使う: 仮想ケーブルの再生側 (CABLE Input 等) に
+ * 鳴らせば、ChatGPT に喋らせなくても「ケーブルの疎通」と「AI 音声経路の
+ * 自己ループ」を機械で判定できる (Codex レビュー #9)。
+ * 880Hz は FakeProvider と同じ・人の声と混同しない帯域。
+ */
+export async function playToneProbe(
+  sinkDeviceId: string,
+  durationMs: number,
+  frequency = 880
+): Promise<{ ok: boolean; error?: string }> {
+  let el: HTMLAudioElement | null = null;
+  let osc: OscillatorNode | null = null;
+  let gain: GainNode | null = null;
+  let dest: MediaStreamAudioDestinationNode | null = null;
+  try {
+    const ctx = getSharedAudioContext();
+    if (ctx.state !== 'running') await ctx.resume().catch(() => {});
+    dest = ctx.createMediaStreamDestination();
+    osc = ctx.createOscillator();
+    osc.frequency.value = frequency;
+    gain = ctx.createGain();
+    gain.gain.value = 0.3;
+    osc.connect(gain);
+    gain.connect(dest);
+
+    // setSinkId が先。失敗時に既定出力へトーンが漏れる要素を作らない
+    el = document.createElement('audio');
+    await el.setSinkId(sinkDeviceId);
+    el.srcObject = dest.stream;
+    document.body.appendChild(el);
+    osc.start();
+    await el.play();
+    await new Promise((r) => setTimeout(r, durationMs));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  } finally {
+    try {
+      osc?.stop();
+      osc?.disconnect();
+      gain?.disconnect();
+      dest?.disconnect();
+    } catch {
+      // ignore
+    }
+    if (el) {
+      el.srcObject = null;
+      el.remove();
+    }
+  }
+}

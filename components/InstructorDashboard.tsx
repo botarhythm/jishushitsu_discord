@@ -286,12 +286,13 @@ export default function InstructorDashboard({
                   onClick={onStartStudioWithAi}
                   className="mt-2 w-full rounded-lg bg-amber-700/80 px-3 py-2 text-sm font-medium text-white hover:bg-amber-600 transition-colors"
                 >
-                  🤖 {aiDisplayName}つきで収録開始
+                  🤖 {aiDisplayName}つきで収録モードへ
                 </button>
                 <p className="mt-1.5 text-[11px] leading-snug text-stone-500">
                   {aiQuickStartReady
                     ? '前回の音声設定で AI 参加者をそのまま呼び出します。'
-                    : '初回のみ音声デバイスの設定画面が開きます。'}
+                    : '初回のみ音声デバイスの設定画面が開きます。'}{' '}
+                  録画はまだ始まりません — 収録モード内の 🎥 ボタンで開始します。
                 </p>
                 <a
                   href="/help/ai-participant"

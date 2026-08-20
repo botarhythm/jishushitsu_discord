@@ -10,13 +10,25 @@ import {
 import type { AiProviderStatus } from '@/lib/ai/provider';
 import { RmsSpeakingDetector } from '@/lib/ai/speaking-detector';
 import { resumeAllAudioContexts } from '@/lib/audio-runtime';
+import {
+  findCableMonitorInput,
+  findCablePlaybackForCapture,
+  isVirtualCableLabel,
+  playToneProbe,
+  type DeviceOption,
+} from '@/lib/audio-devices';
 import { AiPreflightPanel } from './AiPreflightPanel';
 import { AiRequiredSettings } from './AiRequiredSettings';
 
 interface AiParticipantSetupModalProps {
   room: Room | null;
   config: AiParticipantConfig;
-  onChangeConfig: (config: AiParticipantConfig) => void;
+  /**
+   * 設定の書き込み。patch だけを渡す (全体スナップショットは渡さない —
+   * 古い state で他フィールドを巻き戻す事故の恒久対策)。
+   * @returns localStorage へ保存できたか
+   */
+  onPatchConfig: (patch: Partial<AiParticipantConfig>) => boolean;
   enabled: boolean;
   onChangeEnabled: (enabled: boolean) => void;
   aiStatus: AiProviderStatus;
@@ -35,45 +47,6 @@ interface AiParticipantSetupModalProps {
   onClose: () => void;
 }
 
-interface DeviceOption {
-  deviceId: string;
-  groupId: string;
-  label: string;
-  recommended: boolean;
-}
-
-function isVirtualCableLabel(label: string): boolean {
-  return /cable|vb-audio|virtual|voicemeeter|blackhole|loopback/i.test(label);
-}
-
-function normalizeLabel(label: string): string {
-  return label.trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-/**
- * 仮想ケーブルの「送出先 (playback)」に対応する「監視入力 (capture)」を特定する。
- *
- * 仮想ケーブルは Input(再生側)/Output(録音側) が対になっており、ラベルは
- * 例: "CABLE-B Input (VB-Audio Cable B)" ⇔ "CABLE-B Output (VB-Audio Cable B)"。
- * groupId は環境により共有されないことがあるため、ラベル対応を第一候補にする。
- */
-function findCableMonitorInput(sink: DeviceOption, inputs: DeviceOption[]): DeviceOption | null {
-  // VoiceMeeter 構成では送出先(Voicemeeter Input)と録音側の名前が対応しない
-  // (録音側は "Voicemeeter Out B1" のようにバス名になる)。本ガイドの配線では
-  // Virtual Input を B1 バスへ流すため、B1 の録音エンドポイントを監視する。
-  if (/voicemeeter/i.test(sink.label)) {
-    const b1 = inputs.find((d) => normalizeLabel(d.label).includes("voicemeeter out b1"));
-    if (b1) return b1;
-  }
-  const expected = normalizeLabel(sink.label.replace(/\bInput\b/i, 'Output'));
-  if (expected !== normalizeLabel(sink.label)) {
-    const byLabel = inputs.find((d) => normalizeLabel(d.label) === expected);
-    if (byLabel) return byLabel;
-  }
-  const byGroup = inputs.find((d) => d.groupId && d.groupId === sink.groupId);
-  return byGroup ?? null;
-}
-
 /**
  * AI 参加者（ChatGPT デスクトップ音声）のセットアップモーダル（要件§19）。
  *
@@ -86,7 +59,7 @@ function findCableMonitorInput(sink: DeviceOption, inputs: DeviceOption[]): Devi
 export function AiParticipantSetupModal({
   room,
   config,
-  onChangeConfig,
+  onPatchConfig,
   enabled,
   onChangeEnabled,
   aiStatus,
@@ -112,6 +85,10 @@ export function AiParticipantSetupModal({
     | { state: 'unavailable'; reason: string }
   >({ state: 'idle' });
   const [manualConfirm, setManualConfirm] = useState(false);
+  // localStorage へ書けなかった (プライベートモード等)。設定がタブ限りになる警告
+  const [persistFailed, setPersistFailed] = useState(false);
+  // 「試聴テスト」(Windows 常時モニタの確認) の再生中フラグ
+  const [listenTestPlaying, setListenTestPlaying] = useState(false);
 
   // ── デバイス列挙 ──
   const refreshDevices = useCallback(async () => {
@@ -422,23 +399,30 @@ export function AiParticipantSetupModal({
 
   const set = (patch: Partial<AiParticipantConfig>) => {
     const wiringChanged = 'sourceDeviceId' in patch || 'sinkDeviceId' in patch;
-    onChangeConfig({
-      ...config,
+    const persisted = onPatchConfig({
       ...patch,
       // 配線が変わったら検証済みフラグを落とす（次回もセットアップ必須に戻す）
       ...(wiringChanged ? { validatedFingerprint: null } : {}),
     });
+    setPersistFailed(!persisted);
     if (wiringChanged) {
       setLoopCheck({ state: 'idle' });
       setManualConfirm(false);
     }
   };
 
-  /** 有効化。このとき現在の配線を「検証済み」として記録し、次回以降のワンクリック起動を許可する */
+  /**
+   * 有効化。「検証済み」の指紋は、収録前チェック全通過・自己ループ検査合格・
+   * 手動確認のいずれかを経たときだけ保存する。未検証のまま有効化はできる
+   * (チェックは任意という運用) が、その場合は次回のワンクリック起動を許可しない
+   * — 検証していない配線を「検証済み」として記録しない (Codex レビュー #6)。
+   */
   const handleEnable = () => {
     void resumeAllAudioContexts();
-    const validated = { ...config, validatedFingerprint: aiWiringFingerprint(config) };
-    onChangeConfig(validated);
+    const verified = manualConfirm || loopCheck.state === 'passed';
+    onPatchConfig({
+      validatedFingerprint: verified ? aiWiringFingerprint(config) : null,
+    });
     onChangeEnabled(true);
     // 設定完了なのでそのまま閉じる（状態は StudioBar の 🤖 ボタンとステージのタイルで分かる）
     onClose();
@@ -473,6 +457,13 @@ export function AiParticipantSetupModal({
         >
           設定に迷ったら — セットアップ手順を開く
         </a>
+
+        {persistFailed && (
+          <p className="mb-3 rounded-lg border border-red-900/60 bg-red-950/30 px-3 py-2 text-xs text-red-200">
+            設定をブラウザに保存できませんでした（プライベートモード等）。
+            この設定はタブを閉じると消えます。
+          </p>
+        )}
 
         {/* 状態表示 */}
         <div className="mb-4 flex items-center gap-2 text-sm">
@@ -668,6 +659,29 @@ export function AiParticipantSetupModal({
             録音タブで AI 音声ソースの「このデバイスを聴く」を有効にしている場合に
             チェックします。<strong>アプリを起動していなくても ChatGPT の声が聞こえる</strong>
             ため、ChatGPT を普段どおり単体で使えます。チェックしないと二重に聞こえます。
+            <br />
+            <button
+              type="button"
+              disabled={listenTestPlaying || !config.sourceDeviceId}
+              onClick={() => {
+                // AI 音声ソース (CABLE Output 等) の再生側へテストトーンを流す。
+                // Windows の「このデバイスを聴く」が生きていれば音が聞こえるはず。
+                // ブラウザからはモニタの有無を検出できないため、耳で判定してもらう。
+                const src = inputs.find((d) => d.deviceId === config.sourceDeviceId);
+                const playback = src ? findCablePlaybackForCapture(src, outputs) : null;
+                if (!playback) return;
+                setListenTestPlaying(true);
+                void playToneProbe(playback.deviceId, 2000).finally(() =>
+                  setListenTestPlaying(false)
+                );
+              }}
+              className="mt-1 rounded bg-stone-700 px-2 py-1 text-[11px] text-stone-200 hover:bg-stone-600 disabled:opacity-40"
+            >
+              {listenTestPlaying ? '♪ 再生中…' : '♪ 試聴テスト (2秒)'}
+            </button>{' '}
+            <span className="text-stone-500">
+              音が聞こえたら Windows 側モニタは生きています → チェックON
+            </span>
           </span>
         </label>
         {enabled && monitorDeviceId && (
@@ -741,6 +755,7 @@ export function AiParticipantSetupModal({
             mixerHasMic={!!mixerDiag?.localMic}
             aiEnabled={enabled}
             setSendEnabled={setInputMixerSendEnabled}
+            onAutoConfig={(patch) => set(patch)}
             onAllPassed={() => setManualConfirm(true)}
           />
         </div>
