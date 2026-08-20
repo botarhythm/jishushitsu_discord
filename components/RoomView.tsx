@@ -383,24 +383,15 @@ function RoomInner({
 
   // AI 有効化時のスロット自動割当: ai トークンが未割当なら空きスロット (下段=index 2 優先) へ。
   // split のままなら 3 人用の trio へ自動切替。無効化時は ai トークンを外す。
+  // AI はスロットを占有せず、ステージ中央にエネルギー球として重ねて表示する。
+  // そのため人物レイアウト（split の2画面など）と縦横比はそのまま保たれる。
+  // 無効化したときだけ、手動で割り当てられた ai トークンを掃除する。
   useEffect(() => {
-    if (!studioMode) return;
-    // setState を microtask に逃がし、effect body 内での同期 setState を回避 (既存パターン)
+    if (!studioMode || aiEnabled) return;
     queueMicrotask(() => {
-      if (aiEnabled) {
-        setStudioSlots((prev) => {
-          if (prev.some(isAiSlotToken)) return prev;
-          const next = [...prev];
-          const idx = next[2] == null ? 2 : next.findIndex((s) => s == null);
-          if (idx >= 0) next[idx] = aiSlotToken(AI_PARTICIPANT_ID);
-          return next;
-        });
-        setStudioLayout((prev) => (prev === 'split' ? 'trio' : prev));
-      } else {
-        setStudioSlots((prev) =>
-          prev.some(isAiSlotToken) ? prev.map((s) => (isAiSlotToken(s) ? null : s)) : prev
-        );
-      }
+      setStudioSlots((prev) =>
+        prev.some(isAiSlotToken) ? prev.map((s) => (isAiSlotToken(s) ? null : s)) : prev
+      );
     });
   }, [aiEnabled, studioMode]);
 
@@ -877,6 +868,7 @@ function RoomInner({
                 showNameplates={showNameplates}
                 stageRef={studioStageRef}
                 aiTiles={aiTile ? { [AI_PARTICIPANT_ID]: aiTile } : undefined}
+                aiOrb={aiTile}
               />
             </div>
             {/* 視聴者サムネは録画ステージ (16:9) の外。表示されるが録画には含まれない。 */}
@@ -1030,6 +1022,7 @@ function RoomInner({
                       ? { [remoteStudio.ai.id]: remoteAiTile }
                       : undefined
                   }
+                  aiOrb={remoteAiTile}
                 />
               </div>
               {remoteStudio.showAudience && (

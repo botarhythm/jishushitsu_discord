@@ -16,6 +16,7 @@ import {
 } from '@/lib/studio-layouts';
 import { parseSlotToken, type AiTileState } from '@/lib/studio-participants';
 import { AiAvatarTile } from './AiAvatarTile';
+import { AiEnergyOrb } from './AiEnergyOrb';
 
 // 後方互換 re-export（従来 StudioStage からインポートしていたモジュール向け）
 export {
@@ -38,6 +39,11 @@ interface StudioStageProps {
   stageRef?: React.Ref<HTMLDivElement>;
   /** AI 参加者タイルの状態 (aiId → state)。未指定/未解決の ai トークンはプレースホルダになる */
   aiTiles?: Record<string, AiTileState>;
+  /**
+   * 中央に重ねて表示する AI のエネルギー球。
+   * スロットを占有しないので、人物レイアウトの縦横比を変えずに AI を登場させられる。
+   */
+  aiOrb?: AiTileState | null;
 }
 
 /**
@@ -49,7 +55,7 @@ interface StudioStageProps {
  * - レイアウトは lib/studio-layouts.ts のレジストリでデータ駆動（固定人数のJSX分岐を持たない）。
  *   未知のレイアウトIDは split にフォールバックし、決して空ステージにしない。
  */
-export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTiles }: StudioStageProps) {
+export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTiles, aiOrb }: StudioStageProps) {
   const tracks = useTracks([Track.Source.Camera, Track.Source.ScreenShare], {
     onlySubscribed: false,
   });
@@ -159,6 +165,21 @@ export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTi
                 {renderTile(slotTokens[i] ?? null, geo)}
               </div>
             ))}
+          </div>
+        )}
+
+        {/* AI のエネルギー球。スロットを使わず中央に重ねるため、
+            人物側のレイアウトと縦横比はそのまま保たれる。 */}
+        {aiOrb && (
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+            <div className="aspect-square h-[38%]">
+              <AiEnergyOrb state={aiOrb} />
+            </div>
+            {showNameplates && (
+              <span className="mt-1 rounded-md bg-black/40 px-2 py-0.5 text-sm font-medium text-sky-100 backdrop-blur-sm">
+                {aiOrb.info.displayName}
+              </span>
+            )}
           </div>
         )}
       </div>
