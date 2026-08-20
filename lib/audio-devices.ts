@@ -344,7 +344,7 @@ export async function measureTrackEnvelope(
 
 /**
  * 2本の包絡線のピアソン相関係数 (-1..1)。長さが違えば短い方に合わせ、
- * 監視経路の遅延を吸収するため ±3 サンプル (±300ms) のラグを試して最大を返す。
+ * 監視経路の遅延を吸収するため ±5 サンプル (±500ms) のラグを試して最大を返す。
  */
 export function envelopeCorrelation(a: number[], b: number[]): number {
   const corrAt = (x: number[], y: number[]): number => {

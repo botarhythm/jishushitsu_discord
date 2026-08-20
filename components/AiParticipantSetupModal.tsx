@@ -88,6 +88,13 @@ export function AiParticipantSetupModal({
     | { state: 'unavailable'; reason: string }
   >({ state: 'idle' });
   const [manualConfirm, setManualConfirm] = useState(false);
+  /**
+   * 検査・手動確認が「どの配線に対して」成立したかの指紋 (Codex 第4巡 #1)。
+   * boolean で持つと、検証後に別タブから配線が変わっても合格状態が残る。
+   * 有効化時は現在の配線とこの指紋の一致を要求するため、配線が変われば
+   * storage イベントの順序に関係なく自動的に無効になる。
+   */
+  const [verifiedFp, setVerifiedFp] = useState<string | null>(null);
   // localStorage へ書けなかった (プライベートモード等)。設定がタブ限りになる警告
   const [persistFailed, setPersistFailed] = useState(false);
   // プリフライト完了時に「検査した配線」と「今の配線」の一致を確かめるための現在値
@@ -401,6 +408,7 @@ export function AiParticipantSetupModal({
         });
       } else {
         setLoopCheck({ state: 'passed' });
+        setVerifiedFp(wiringFpAtStart);
       }
     } catch (e) {
       console.warn('[AiSetup] ループ検査失敗', e);
@@ -446,6 +454,7 @@ export function AiParticipantSetupModal({
     if (wiringChanged) {
       setLoopCheck({ state: 'idle' });
       setManualConfirm(false);
+      setVerifiedFp(null);
     }
   };
 
@@ -457,7 +466,9 @@ export function AiParticipantSetupModal({
    */
   const handleEnable = async () => {
     void resumeAllAudioContexts();
-    const verified = manualConfirm || loopCheck.state === 'passed';
+    // 検証は「今の配線に対して」成立していなければならない。指紋の一致で
+    // 確かめるため、検証後に配線が変わっていれば (別タブ含む) 自動的に落ちる
+    const verified = verifiedFp !== null && verifiedFp === aiWiringFingerprint(config);
     const persisted = await onPatchConfig({
       validatedFingerprint: verified ? aiWiringFingerprint(config) : null,
     });
@@ -822,9 +833,10 @@ export function AiParticipantSetupModal({
             acquireProbe={acquireProbe}
             releaseProbe={releaseProbe}
             onAllPassed={(wiringFp) => {
-              // 検査中に配線が変わっていたら (別タブ・select 操作)、その結果で
-              // 新しい配線を検証済みにしない (Codex 第2巡 #4)
-              if (wiringFp === aiWiringFingerprint(configRef.current)) setManualConfirm(true);
+              // 「検査した配線」の指紋を保存する。有効化時に現在の配線と照合する
+              // ため、検査後に配線が変わっていれば自動的に無効になる
+              setManualConfirm(true);
+              setVerifiedFp(wiringFp);
             }}
           />
         </div>
@@ -867,7 +879,12 @@ export function AiParticipantSetupModal({
                 <input
                   type="checkbox"
                   checked={manualConfirm}
-                  onChange={(e) => setManualConfirm(e.target.checked)}
+                  onChange={(e) => {
+                  setManualConfirm(e.target.checked);
+                  setVerifiedFp(
+                    e.target.checked ? aiWiringFingerprint(configRef.current) : null
+                  );
+                }}
                   className="mt-0.5"
                 />
                 <span>
@@ -882,7 +899,12 @@ export function AiParticipantSetupModal({
               <input
                 type="checkbox"
                 checked={manualConfirm}
-                onChange={(e) => setManualConfirm(e.target.checked)}
+                onChange={(e) => {
+                  setManualConfirm(e.target.checked);
+                  setVerifiedFp(
+                    e.target.checked ? aiWiringFingerprint(configRef.current) : null
+                  );
+                }}
                 className="mt-0.5"
               />
               <span>
