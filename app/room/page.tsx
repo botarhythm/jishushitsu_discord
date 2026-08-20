@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import RoomView from '@/components/RoomView';
+import RecordingRecoveryPrompt from '@/components/RecordingRecoveryPrompt';
 import { RoomName, UserRole } from '@/lib/types';
 
 type InitialRec = 'off' | 'audio' | 'screen' | 'both';
@@ -112,15 +113,19 @@ export default function RoomPage() {
   if (!session) return null;
 
   return (
-    <RoomView
-      token={session.token}
-      livekitUrl={session.livekitUrl}
-      participantName={session.participantName}
-      role={session.role}
-      isGuest={session.isGuest}
-      currentRoom={session.currentRoom}
-      initialRec={session.initialRec}
-      onRoomChange={handleRoomChange}
-    />
+    <>
+      {/* 前回の録画がクラッシュで宙に浮いていれば、ここで保存/破棄を尋ねる */}
+      <RecordingRecoveryPrompt />
+      <RoomView
+        token={session.token}
+        livekitUrl={session.livekitUrl}
+        participantName={session.participantName}
+        role={session.role}
+        isGuest={session.isGuest}
+        currentRoom={session.currentRoom}
+        initialRec={session.initialRec}
+        onRoomChange={handleRoomChange}
+      />
+    </>
   );
 }
