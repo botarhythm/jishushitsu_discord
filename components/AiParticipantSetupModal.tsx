@@ -203,6 +203,60 @@ export function AiParticipantSetupModal({
     return !!micInfo.groupId && !!selected.groupId && micInfo.groupId === selected.groupId;
   }, [config.sourceDeviceId, inputs, micInfo]);
 
+  // ── 送出モニタ ──
+  // 送出先(ChatGPTの耳)の対になる録音側を監視し、こちらの声が実際に
+  // 届いているかを可視化する。有効化するまでミキサーは動かないので無音が正常。
+  const monitorDeviceId = useMemo(() => {
+    if (!config.sinkDeviceId) return null;
+    const sink = outputs.find((d) => d.deviceId === config.sinkDeviceId);
+    if (!sink) return null;
+    return findCableMonitorInput(sink, inputs)?.deviceId ?? null;
+  }, [config.sinkDeviceId, inputs, outputs]);
+
+  const [sendLevel, setSendLevel] = useState(0);
+  const [sendActive, setSendActive] = useState(false);
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      setSendLevel(0);
+      setSendActive(false);
+    });
+    if (!enabled || !monitorDeviceId) return;
+    let cancelled = false;
+    let stream: MediaStream | null = null;
+    let detector: RmsSpeakingDetector | null = null;
+    (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            deviceId: { exact: monitorDeviceId },
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          },
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        const track = stream.getAudioTracks()[0];
+        if (!track) return;
+        detector = new RmsSpeakingDetector(track);
+        detector.start((s) => {
+          setSendLevel(s.level);
+          setSendActive(s.isSpeaking);
+        });
+      } catch (e) {
+        console.warn("[AiSetup] 送出モニタ取得失敗", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      detector?.stop();
+      stream?.getTracks().forEach((t) => t.stop());
+    };
+  }, [enabled, monitorDeviceId]);
+
   // ループ検査ループから最新のプレビュー状態を読むための ref
   const previewActiveRef = useRef(false);
   useEffect(() => {
@@ -525,6 +579,22 @@ export function AiParticipantSetupModal({
           設定すると、あなたと相手の声だけをアプリ内でミックスして ChatGPT
           の耳へ届けます（AI 自身の声は構造的に混ざりません）。
         </p>
+        {enabled && monitorDeviceId && (
+          <div className="mb-3">
+            <div className="mb-1 flex items-center justify-between text-xs text-stone-400">
+              <span>送出モニタ (あなたの声が ChatGPT に届いているか)</span>
+              <span className={sendActive ? "text-emerald-400" : "text-stone-500"}>
+                {sendActive ? "● 届いています" : "○ 無音"}
+              </span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded bg-stone-800">
+              <div
+                className="h-full rounded bg-sky-500 transition-[width] duration-100"
+                style={{ width: `${Math.round(Math.min(sendLevel, 1) * 100)}%` }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* プリフライト */}
         <div className="mb-4 rounded-xl border border-stone-700 bg-stone-800/60 p-3">
