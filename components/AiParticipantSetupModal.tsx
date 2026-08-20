@@ -301,6 +301,17 @@ export function AiParticipantSetupModal({
   const canEnable =
     !!config.sourceDeviceId && loopSafe && !micCollision && !sourceIsSinkMonitor && !isRecording;
 
+  // ボタンが押せない理由を明示する（グレーアウトの理由が分からない状態を作らない）
+  const enableBlockReason = !config.sourceDeviceId
+    ? "① AI 音声ソースを選んでください"
+    : micCollision || sourceIsSinkMonitor
+      ? "上の警告を解消してください"
+      : isRecording
+        ? "録画中は有効化できません（録画を止めてから）"
+        : !loopSafe
+          ? "先に「検査を実行」で自己ループ検査を通してください"
+          : null;
+
   const set = (patch: Partial<AiParticipantConfig>) => {
     const wiringChanged = 'sourceDeviceId' in patch || 'sinkDeviceId' in patch;
     onChangeConfig({
@@ -583,8 +594,8 @@ export function AiParticipantSetupModal({
 
         {/* 有効化 */}
         <div className="flex items-center justify-between gap-3">
-          {isRecording && !enabled && (
-            <span className="text-xs text-amber-300">録画中は有効化できません</span>
+          {!enabled && enableBlockReason && (
+            <span className="text-xs text-amber-300">{enableBlockReason}</span>
           )}
           {enabled ? (
             <button
