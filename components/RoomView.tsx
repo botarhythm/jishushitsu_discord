@@ -368,6 +368,7 @@ function RoomInner({
   const {
     status: aiStatus,
     publishFailed: aiPublishFailed,
+    inputMixerError: aiInputMixerError,
     tile: aiTile,
     descriptor: aiDescriptor,
     reconnect: aiReconnect,
@@ -929,6 +930,7 @@ function RoomInner({
             onChangeEnabled={setAiEnabled}
             aiStatus={aiStatus}
             publishFailed={aiPublishFailed}
+            inputMixerError={aiInputMixerError}
             onReconnect={() => void aiReconnect()}
             isRecording={isLocalRecording}
             onClose={() => setAiSetupOpen(false)}

@@ -19,6 +19,7 @@ interface AiParticipantSetupModalProps {
   onChangeEnabled: (enabled: boolean) => void;
   aiStatus: AiProviderStatus;
   publishFailed: boolean;
+  inputMixerError: string | null;
   onReconnect: () => void;
   /** 録画中は有効化を許可しない（録画開始前に有効化しないとタブ音声二重化が起きるため） */
   isRecording: boolean;
@@ -81,6 +82,7 @@ export function AiParticipantSetupModal({
   onChangeEnabled,
   aiStatus,
   publishFailed,
+  inputMixerError,
   onReconnect,
   isRecording,
   onClose,
@@ -593,6 +595,11 @@ export function AiParticipantSetupModal({
                 style={{ width: `${Math.round(Math.min(sendLevel, 1) * 100)}%` }}
               />
             </div>
+            {inputMixerError && (
+              <p className="mt-1.5 rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-200">
+                ⚠ 送出経路を開けませんでした: {inputMixerError}
+              </p>
+            )}
           </div>
         )}
 

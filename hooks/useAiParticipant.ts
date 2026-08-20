@@ -55,6 +55,8 @@ export interface UseAiParticipantResult {
   tile: AiTileState | null;
   /** room metadata で全参加者に配信する記述子。無効時は null */
   descriptor: StudioAiDescriptor | null;
+  /** ChatGPT 入力ミキサーの起動に失敗したときの理由（送出経路が死んでいる） */
+  inputMixerError: string | null;
   /** エラー後の再接続（同一 participant ID のまま新トラック取得 → registry → publish） */
   reconnect: () => Promise<void>;
 }
@@ -80,6 +82,7 @@ export function useAiParticipant({
 }: UseAiParticipantOptions): UseAiParticipantResult {
   const [status, setStatus] = useState<AiProviderStatus>('disconnected');
   const [publishFailed, setPublishFailed] = useState(false);
+  const [inputMixerError, setInputMixerError] = useState<string | null>(null);
   const [speaking, setSpeaking] = useState({ isSpeaking: false, level: 0 });
 
   const providerRef = useRef<AiParticipantProvider | null>(null);
@@ -218,8 +221,10 @@ export function useAiParticipant({
     if (!room || !sinkDeviceId) return;
     const mixer = new ChatGptInputMixer();
     mixerRef.current = mixer;
+    queueMicrotask(() => setInputMixerError(null));
     mixer.start(room, sinkDeviceId).catch((e) => {
       console.error('[useAiParticipant] ChatGPT入力ミキサーの起動に失敗', e);
+      setInputMixerError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     });
     return () => {
       mixer.stop();
@@ -270,7 +275,7 @@ export function useAiParticipant({
     [enabled, localIdentity, trackName, info.displayName, info.avatar]
   );
 
-  return { status, publishFailed, tile, descriptor, reconnect };
+  return { status, publishFailed, inputMixerError, tile, descriptor, reconnect };
 }
 
 /**

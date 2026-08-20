@@ -38,6 +38,11 @@ export class ChatGptInputMixer {
     this.ctx = ctx;
     this.unregister = registerAudioContext(ctx);
     this.dest = ctx.createMediaStreamDestination();
+    // autoplay ポリシーで suspended のまま作られることがある。suspended だと
+    // destination に音が流れず、送出先に何も届かない（無音の原因になる）。
+    if (ctx.state !== "running") {
+      await ctx.resume().catch(() => {});
+    }
 
     // 送出先: hidden audio 要素を明示 sink（CABLE-B Input）へ。
     // 既定出力（ヘッドホン）には流さないので、ホストのモニタ経路とは独立。
