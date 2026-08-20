@@ -134,7 +134,14 @@ export default function AiParticipantHelpPage() {
               ['Voicemeeter In 3〜5 / AUX / VAIO3', 'disable'],
             ]}
           />
-          <Shot src="/help/ai-participant/devices.png" caption="無効化が済んだ録音タブ" />
+          <Shot
+            src="/help/ai-participant/sound-playback.png"
+            caption="無効化が済んだ再生タブ（一覧はスクロールするので全部は写っていません）"
+          />
+          <Shot
+            src="/help/ai-participant/sound-recording.png"
+            caption="無効化が済んだ録音タブ。Voicemeeter Out B1 に受話器アイコンが付いている"
+          />
           <Check>
             録音タブに残るのが3つ、再生タブに残るのが3つになっていれば成功です。
           </Check>
@@ -188,6 +195,10 @@ export default function AiParticipantHelpPage() {
               '設定 → システム → サウンド → 音量ミキサー を開く',
               'ChatGPT の行を展開し、出力デバイスを「CABLE Input」にする',
             ]}
+          />
+          <Shot
+            src="/help/ai-participant/volume-mixer.png"
+            caption="ChatGPT の行を展開したところ。出力 = CABLE Input、入力 = Voicemeeter Out B1"
           />
           <Callout tone="note" title="行が複数あるとき">
             音量ミキサーはアプリ単位ではなく音声セッション単位の一覧です。ChatGPT が
