@@ -107,7 +107,7 @@ ChatGPT [出力 = CABLE Input] → CABLE Output → アプリ「AI 音声ソー�
 【人間の声】
 アプリ「ChatGPT への送出先」= VoiceMeeter Input
   → VoiceMeeter の Virtual Input ストリップ → B1 バス
-  → VoiceMeeter Output = ChatGPT [入力デバイス]
+  → Voicemeeter Out B1 = ChatGPT [入力デバイス]
 ```
 
 ### 手順
@@ -137,7 +137,7 @@ ChatGPT [出力 = CABLE Input] → CABLE Output → アプリ「AI 音声ソー�
      - **CABLE 系を A1 に選ばないこと。** ChatGPT の声を運ぶ経路を汚す。
    - 右側の **Virtual Input** ストリップ（"VoiceMeeter VAIO"）の
      **B1 だけを点灯**させる。**A1 は消灯**のままにする。
-     - B1 点灯 = 人間の声が `VoiceMeeter Output` に流れる（ChatGPT が聞ける）
+     - B1 点灯 = 人間の声が `Voicemeeter Out B1` に流れる（ChatGPT が聞ける）
      - A1 消灯 = その音が自分のヘッドホンに戻らない
        （点灯させると自分の声が遅れて聞こえ、相手の声も二重になる）
    - メニュー → System Settings / Options で
@@ -150,7 +150,7 @@ ChatGPT [出力 = CABLE Input] → CABLE Output → アプリ「AI 音声ソー�
 6. **音量ミキサー**（タスクバーのスピーカーアイコンを右クリック →
    音量ミキサーを開く）で ChatGPT の行を展開し、
    - **出力デバイス** = `CABLE Input (VB-Audio Virtual Cable)`
-   - **入力デバイス** = `VoiceMeeter Output (VB-Audio VoiceMeeter VAIO)`
+   - **入力デバイス** = `Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)`
 7. アプリ側の設定は下の「アプリ側の設定」へ。
    - AI 音声ソース = `CABLE Output`
    - ChatGPT への送出先 = `VoiceMeeter Input`
@@ -257,7 +257,7 @@ B-1 / B-2 のどちらで2本目を用意したかによって、選ぶデバイ
   1. VoiceMeeter 本体が起動しているか（トレイ常駐しているか）
   2. Virtual Input ストリップの **B1 が点灯**しているか
   3. A1 に出力デバイスが割り当たっているか（未割当だとエンジンが回らない）
-  4. ChatGPT の入力デバイスが `VoiceMeeter Output` になっているか
+  4. ChatGPT の入力デバイスが `Voicemeeter Out B1` になっているか
 - **自分の声が遅れて自分に聞こえる / 相手の声が二重になる**:
   Virtual Input ストリップの **A1 が点灯している**。消灯させる。
 - **自己ループ検査が誤って不合格になる / ChatGPT が自分の声に暴走する**:

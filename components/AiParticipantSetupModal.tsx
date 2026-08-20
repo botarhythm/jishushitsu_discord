@@ -48,6 +48,13 @@ function normalizeLabel(label: string): string {
  * groupId は環境により共有されないことがあるため、ラベル対応を第一候補にする。
  */
 function findCableMonitorInput(sink: DeviceOption, inputs: DeviceOption[]): DeviceOption | null {
+  // VoiceMeeter 構成では送出先(Voicemeeter Input)と録音側の名前が対応しない
+  // (録音側は "Voicemeeter Out B1" のようにバス名になる)。本ガイドの配線では
+  // Virtual Input を B1 バスへ流すため、B1 の録音エンドポイントを監視する。
+  if (/voicemeeter/i.test(sink.label)) {
+    const b1 = inputs.find((d) => normalizeLabel(d.label).includes("voicemeeter out b1"));
+    if (b1) return b1;
+  }
   const expected = normalizeLabel(sink.label.replace(/\bInput\b/i, 'Output'));
   if (expected !== normalizeLabel(sink.label)) {
     const byLabel = inputs.find((d) => normalizeLabel(d.label) === expected);
