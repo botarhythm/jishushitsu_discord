@@ -151,6 +151,15 @@ export interface AiParticipantConfig {
    */
   sendLocalMic?: boolean;
   /**
+   * AI の声をアプリがヘッドホンへ再生するか。
+   *
+   * false にすると再生しない。Windows の「このデバイスを聴く」で常時モニタして
+   * いる構成では false にする（両方鳴らすと二重に聞こえる）。
+   * false 側の利点は、アプリを起動していなくても ChatGPT の声が聞こえること
+   * ＝ ChatGPT を普段どおり単体で使える。代償はモニタ音の遅延。
+   */
+  monitorAiLocally?: boolean;
+  /**
    * 自己ループ検査に通った（または手動確認した）ときの配線の指紋。
    * 現在の配線とこれが一致する間は、セットアップを再度通さずワンクリックで起動してよい。
    *
@@ -166,6 +175,7 @@ export const DEFAULT_AI_CONFIG: AiParticipantConfig = {
   sourceDeviceId: null,
   sinkDeviceId: null,
   sendLocalMic: true,
+  monitorAiLocally: true,
   validatedFingerprint: null,
 };
 

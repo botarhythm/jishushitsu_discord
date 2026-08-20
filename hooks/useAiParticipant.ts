@@ -118,6 +118,11 @@ export function useAiParticipant({
       // ホストのモニタ (既定出力=ヘッドホン)。LiveKit のローカル publish はホスト自身では
       // 再生されないため、これが無いとホストだけ AI の声が聞こえない。
       // ChatGPT 入力ミキサー (CABLE-B) とは独立した経路 — AI の声は CABLE-B に入らない。
+      // Windows 側でモニタしている構成ではアプリは再生しない（二重再生の防止）
+      const monitorLocally = configRef.current.monitorAiLocally !== false;
+      if (!monitorLocally) {
+        if (monitorElRef.current) monitorElRef.current.srcObject = null;
+      } else {
       if (!monitorElRef.current) {
         const el = document.createElement('audio');
         el.style.display = 'none';
@@ -129,6 +134,7 @@ export function useAiParticipant({
       monitorElRef.current.play().catch(() => {
         // autoplay 制限は StartAudioBanner のユーザー操作で解除される
       });
+      }
 
       // LiveKit へ publish。失敗しても録画は継続する（別状態で表示）。
       if (room) {

@@ -202,22 +202,31 @@ export function AiPreflightPanel({
         set('send', { status: 'pass' });
         }
 
-        // 6. AI の声が送出先に漏れていないか（送出を止めて OS 側の漏れだけを測る）
+        // 6. AI の声が送出先に漏れていないか
+        //
+        // 物理マイクを VoiceMeeter 側で常時 B1 へ流す構成では、送出先は
+        // 常にマイクの環境音を含む。「無音であること」は判定に使えないので、
+        // 「AI が喋ったときだけレベルが上がるか」の差分で判定する。
         set('loop', { status: 'running' });
-        setPrompt('もう一度 ChatGPT に話させてください。あなたは黙っていてください');
         if (aiEnabled) setSendEnabled(false);
-        const leak = await detectSignal(monitor.deviceId, 8000, 0.015, onProbe);
+        setPrompt('まず3秒間、誰も喋らないでください（基準値を測ります）');
+        // しきい値を実質無限にして早期打ち切りを止め、区間のピークだけを測る
+        const baseline = await detectSignal(monitor.deviceId, 3000, 999, onProbe);
+        setPrompt('ChatGPT に話させてください。あなたは黙っていてください');
+        const during = await detectSignal(monitor.deviceId, 8000, 999, onProbe);
         setSendEnabled(true);
         setPrompt(null);
-        if (leak.detected) {
+        // 環境音の3倍かつ有意な大きさになったら「AI の声が回り込んでいる」と判定
+        const leaked = during.peak > Math.max(baseline.peak * 3, 0.02);
+        if (leaked) {
           set('loop', {
             status: 'fail',
-            detail: 'AI の声が送出先に漏れています',
-            fix: 'ヘッドホンの音量を下げるか、スピーカーを使っていないか確認してください',
+            detail: `AI発話中にレベルが上昇 (基準 ${baseline.peak.toFixed(3)} → ${during.peak.toFixed(3)})`,
+            fix: 'ヘッドホンの音量を下げてください。スピーカーを使っている場合はヘッドホンに変えてください（AI の声がマイクに回り込んでいます）',
           });
           return;
         }
-        set('loop', { status: 'pass' });
+        set('loop', { status: 'pass', detail: `基準 ${baseline.peak.toFixed(3)} / AI発話中 ${during.peak.toFixed(3)}` });
       }
 
       onAllPassed();

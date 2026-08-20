@@ -671,6 +671,22 @@ export function AiParticipantSetupModal({
             使えるようになります。チェックしないと、あなたの声が ChatGPT に二重に届きます。
           </span>
         </label>
+        <label className="mb-3 flex items-start gap-2 text-[11px] leading-relaxed text-stone-400">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={config.monitorAiLocally === false}
+            onChange={(e) => set({ monitorAiLocally: !e.target.checked })}
+          />
+          <span>
+            ChatGPT の声は <strong>Windows 側で常時モニタしている</strong>
+            （アプリからは再生しない）
+            <br />
+            録音タブで AI 音声ソースの「このデバイスを聴く」を有効にしている場合に
+            チェックします。<strong>アプリを起動していなくても ChatGPT の声が聞こえる</strong>
+            ため、ChatGPT を普段どおり単体で使えます。チェックしないと二重に聞こえます。
+          </span>
+        </label>
         {enabled && monitorDeviceId && (
           <div className="mb-3">
             <div className="mb-1 flex items-center justify-between text-xs text-stone-400">
