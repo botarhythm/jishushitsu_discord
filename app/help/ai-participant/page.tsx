@@ -260,8 +260,8 @@ export default function AiParticipantHelpPage() {
             手順5・7で VoiceMeeter と Windows に任せた分を、アプリ側で二重に鳴らさないための設定です。
           </p>
           <Shot
-            src="/help/ai-participant/app-settings.jpg"
-            caption="開いた直後の設定画面。①・通話マイク・② の3か所を上の表のとおりに選ぶ"
+            src="/help/ai-participant/app-settings.png"
+            caption="設定が済んだ状態。★印は自動で見つけた推奨デバイス、状態が🟢接続済みなら成立している"
           />
           <Callout tone="warn" title="この設定はサイトごとに保存されます">
             設定はブラウザの localStorage に保存されるため、
