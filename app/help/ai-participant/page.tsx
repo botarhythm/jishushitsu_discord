@@ -178,7 +178,16 @@ export default function AiParticipantHelpPage() {
             A を点灯させると、あなたと相手の声がスピーカーから流れます。
             その音をマイクが拾って ChatGPT へ戻り、ハウリングします。
           </Callout>
-          <Shot src="/help/ai-participant/voicemeeter.png" caption="正しい状態の VoiceMeeter" />
+          <Shot
+            src="/help/ai-participant/voicemeeter.png"
+            caption="正しい状態の VoiceMeeter。左のマイクも右の Virtual Input も B だけが点灯している"
+          />
+          <p className="mt-1 text-pretty text-xs leading-relaxed text-stone-400">
+            スクリーンショットではマイクのストリップで{' '}
+            <code className="rounded bg-stone-800 px-1">mono</code>{' '}
+            も点灯しています。マイク1本なら左右に振れないほうが素直なので点けてあるだけで、
+            必須ではありません。
+          </p>
           <Check>
             話すと右側の「B VIRTUAL OUT」メーターが振れれば成功です。
           </Check>
