@@ -93,12 +93,14 @@ export function useSessionRecorder({
 
     /** 現在の参加者の音声トラックを録音先にすべて接続 */
     const subscribeAllToRecorder = (recorder: SessionAudioRecorder) => {
-      const localPub = room.localParticipant.getTrackPublication(
-        Track.Source.Microphone
-      ) as LocalTrackPublication | undefined;
-      if (localPub?.track?.mediaStreamTrack) {
-        recorder.addTrack(`local-${localPub.trackSid}`, localPub.track.mediaStreamTrack);
-      }
+      // ローカルの全音声 publication (マイクに加え、AI 参加者音声 = ai-audio:* も含む)。
+      // 途中 publish は handleLocalTrackPublished が拾うが、録音開始が publish より
+      // 後のケースはここで取り込む必要がある。
+      room.localParticipant.audioTrackPublications.forEach((pub) => {
+        if (pub.track?.mediaStreamTrack) {
+          recorder.addTrack(`local-${pub.trackSid}`, pub.track.mediaStreamTrack);
+        }
+      });
       room.remoteParticipants.forEach((p) => {
         p.audioTrackPublications.forEach((pub) => {
           if (pub.track?.mediaStreamTrack) {
@@ -131,10 +133,16 @@ export function useSessionRecorder({
         recorderRef.current?.addTrack(`local-${publication.trackSid}`, publication.track.mediaStreamTrack);
       }
     };
+    // AI 参加者の再接続 (unpublish → 再publish) でトラックが差し替わるため、
+    // unpublish されたローカルトラックは録音ミキサーから外す (古いソースノード残留の防止)。
+    const handleLocalTrackUnpublished = (publication: LocalTrackPublication) => {
+      recorderRef.current?.removeTrack(`local-${publication.trackSid}`);
+    };
 
     room.on(RoomEvent.TrackSubscribed, handleTrackSubscribed);
     room.on(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
     room.on(RoomEvent.LocalTrackPublished, handleLocalTrackPublished);
+    room.on(RoomEvent.LocalTrackUnpublished, handleLocalTrackUnpublished);
 
     /** 確定したチャンクを完了一覧に追加し、onChunkReady で通知する */
     const emitChunk = (
@@ -232,6 +240,7 @@ export function useSessionRecorder({
       room.off(RoomEvent.TrackSubscribed, handleTrackSubscribed);
       room.off(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
       room.off(RoomEvent.LocalTrackPublished, handleLocalTrackPublished);
+      room.off(RoomEvent.LocalTrackUnpublished, handleLocalTrackUnpublished);
 
       // 現在のチャンクを最終チャンクとして確定（fire-and-forget）
       const recorder = recorderRef.current;

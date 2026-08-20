@@ -1,6 +1,7 @@
 'use client';
 
 import { useRoomContext, useStartAudio } from '@livekit/components-react';
+import { resumeAllAudioContexts } from '@/lib/audio-runtime';
 
 /**
  * iOS Safari 等の自動再生ポリシーでリモート参加者の音声がブロックされた場合に表示する。
@@ -18,6 +19,12 @@ export function StartAudioBanner() {
     <div className="pointer-events-none fixed left-1/2 top-4 z-50 w-full max-w-md -translate-x-1/2 px-4">
       <button
         {...mergedProps}
+        onClick={(e) => {
+          // LiveKit の再生解除 (mergedProps.onClick) と同じユーザー操作で、
+          // アプリ独自の AudioContext (発話検出・ChatGPT入力ミキサー等) も resume する。
+          void resumeAllAudioContexts();
+          mergedProps.onClick?.(e);
+        }}
         className="pointer-events-auto flex w-full items-center justify-center gap-2 rounded-xl border border-amber-400/60 bg-amber-600 px-4 py-3 text-sm font-semibold text-white shadow-2xl hover:bg-amber-500 active:scale-[0.98]"
       >
         <span aria-hidden>🔊</span>

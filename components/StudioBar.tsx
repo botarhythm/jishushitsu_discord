@@ -4,12 +4,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RecordingQuality } from '@/hooks/useLocalRecording';
 import {
   STUDIO_LAYOUT_LABELS,
-  STUDIO_LAYOUT_SLOTS,
+  STUDIO_LAYOUTS,
   type StudioLayout,
-} from './StudioStage';
+} from '@/lib/studio-layouts';
 
 export interface StudioParticipantOption {
-  identity: string;
+  /** スロットトークン。人間 = LiveKit identity / AI = "ai:<id>" */
+  token: string;
   name: string;
 }
 
@@ -18,6 +19,16 @@ interface StudioBarProps {
   isCameraOn: boolean;
   isScreenSharing: boolean;
   isLocalRecording: boolean;
+  /** AI 参加者 (ChatGPT) が有効か */
+  aiEnabled?: boolean;
+  /** AI 参加者にエラー/配信失敗があるか (バッジ表示) */
+  aiError?: boolean;
+  /** AI 参加者の ON/OFF を切り替える */
+  onToggleAi?: () => void;
+  /** AI 参加者セットアップモーダルを開く */
+  onOpenAiSetup?: () => void;
+  /** マイク/カメラのデバイス設定を開く（収録中に入力デバイスを直すため） */
+  onOpenDeviceSettings?: () => void;
   /** true の間は録画ボタンを無効化する (iPhone等 getDisplayMedia 非対応環境向け) */
   recordingUnsupported?: boolean;
   recordingQuality: RecordingQuality;
@@ -60,6 +71,11 @@ export function StudioBar(props: StudioBarProps) {
     isCameraOn,
     isScreenSharing,
     isLocalRecording,
+    aiEnabled = false,
+    aiError = false,
+    onToggleAi,
+    onOpenAiSetup,
+    onOpenDeviceSettings,
     recordingUnsupported = false,
     recordingQuality,
     layout,
@@ -109,7 +125,8 @@ export function StudioBar(props: StudioBarProps) {
     };
   }, [scheduleHide]);
 
-  const slotCount = STUDIO_LAYOUT_SLOTS[layout];
+  const layoutSpec = STUDIO_LAYOUTS[layout] ?? STUDIO_LAYOUTS.split;
+  const slotCount = layoutSpec.slots.length;
 
   return (
     <div
@@ -186,7 +203,7 @@ export function StudioBar(props: StudioBarProps) {
           value={recordingQuality}
           onChange={(e) => onChangeRecordingQuality(e.target.value as RecordingQuality)}
           disabled={isLocalRecording}
-          className="rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200 disabled:opacity-50"
+          className="shrink-0 rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200 disabled:opacity-50"
           aria-label="録画品質"
           title="録画開始前に品質を選択"
         >
@@ -201,7 +218,7 @@ export function StudioBar(props: StudioBarProps) {
         <select
           value={layout}
           onChange={(e) => onChangeLayout(e.target.value as StudioLayout)}
-          className="rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200"
+          className="shrink-0 rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200"
           aria-label="レイアウト"
           title="収録レイアウト"
         >
@@ -212,30 +229,54 @@ export function StudioBar(props: StudioBarProps) {
           ))}
         </select>
 
-        {/* 出演者スロット割当（speaker レイアウトは主役/サブのラベル表示） */}
+        {/* 出演者スロット割当（ラベルはレイアウトレジストリの roleLabel から） */}
         {Array.from({ length: slotCount }).map((_, i) => {
-          const slotName =
-            layout === 'speaker'
-              ? (['主役(ゲスト)', 'サブ1', 'サブ2'][i] ?? `枠${i + 1}`)
-              : `出演者${i + 1}`;
+          const slotName = layoutSpec.slots[i]?.roleLabel ?? `出演者${i + 1}`;
           return (
             <select
               key={i}
               value={slotIdentities[i] ?? ''}
               onChange={(e) => onChangeSlot(i, e.target.value || null)}
-              className="max-w-[9rem] rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200"
+              className="max-w-[9rem] shrink-0 rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200"
               aria-label={slotName}
               title={slotName}
             >
               <option value="">{slotName}: 未割当</option>
               {participantOptions.map((p) => (
-                <option key={p.identity} value={p.identity}>
+                <option key={p.token} value={p.token}>
                   {p.name}
                 </option>
               ))}
             </select>
           );
         })}
+
+        {onOpenDeviceSettings && (
+          <BarButton label="マイク/カメラのデバイス設定" onClick={onOpenDeviceSettings}>
+            ⚙️
+          </BarButton>
+        )}
+
+        {/* AI 参加者: 左が ON/OFF、右が設定。横並びにするため入れ子にしない */}
+        {onToggleAi && (
+          <div className="relative shrink-0">
+            <BarButton
+              active={aiEnabled}
+              label={aiEnabled ? "AI参加者をOFFにする" : "AI参加者をONにする"}
+              onClick={onToggleAi}
+            >
+              🤖
+            </BarButton>
+            {aiError && (
+              <span className="absolute -right-1 -top-1 flex h-3 w-3 rounded-full bg-red-500" aria-hidden />
+            )}
+          </div>
+        )}
+        {onOpenAiSetup && (
+          <BarButton label="AI参加者の設定" onClick={onOpenAiSetup}>
+            🔧
+          </BarButton>
+        )}
 
         <BarButton active={showNameplates} label="名前表示" onClick={onToggleNameplates}>
           🏷️
@@ -259,14 +300,14 @@ export function StudioBar(props: StudioBarProps) {
         {/* 退出系 */}
         <button
           onClick={onExitStudio}
-          className="rounded-lg bg-stone-700 px-3 py-2 text-xs font-medium text-stone-200 hover:bg-stone-600"
+          className="shrink-0 rounded-lg bg-stone-700 px-3 py-2 text-xs font-medium text-stone-200 hover:bg-stone-600"
         >
           収録モード終了
         </button>
         {onEndSession && (
           <button
             onClick={onEndSession}
-            className="rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-500"
+            className="shrink-0 rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-500"
           >
             セッション終了
           </button>
@@ -297,7 +338,7 @@ function BarButton({
       disabled={disabled}
       aria-label={label}
       title={label}
-      className={`flex h-10 min-w-[2.5rem] items-center justify-center rounded-lg px-2 text-base transition-colors ${
+      className={`flex h-10 min-w-[2.5rem] shrink-0 items-center justify-center rounded-lg px-2 text-base transition-colors ${
         disabled
           ? 'cursor-not-allowed bg-stone-800/50 text-stone-600'
           : danger
