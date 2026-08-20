@@ -252,7 +252,10 @@ export default function AiParticipantHelpPage() {
             <strong className="text-stone-200">両方オン</strong>にしてください。
             手順5・7で VoiceMeeter と Windows に任せた分を、アプリ側で二重に鳴らさないための設定です。
           </p>
-          <Shot src="/help/ai-participant/app-settings.png" caption="設定が済んだ状態" />
+          <Shot
+            src="/help/ai-participant/app-settings.jpg"
+            caption="開いた直後の設定画面。①・通話マイク・② の3か所を上の表のとおりに選ぶ"
+          />
           <Callout tone="warn" title="この設定はサイトごとに保存されます">
             設定はブラウザの localStorage に保存されるため、
             <strong className="text-stone-200">URL が変わると引き継がれません</strong>。
