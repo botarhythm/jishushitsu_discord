@@ -212,7 +212,10 @@ export function AiPreflightPanel({
           status: 'skip',
           detail: suggested ? `送出先が未設定（② で「${suggested.label}」）` : '送出先が未設定',
         });
-      } else if (!mixerRunning || !mixerHasMic) {
+      } else if (!mixerRunning || (sendLocalMicOn && !mixerHasMic)) {
+        // マイク未接続を故障扱いにするのは「アプリから送る設定」のときだけ。
+        // VoiceMeeter 側で送る設定 (sendLocalMic=false) では、ミキサーに
+        // マイクが無いのが正しい状態 — 経路の実効性は検査5が実測で確かめる
         set('mixer', {
           status: 'fail',
           detail: !mixerRunning ? '音声処理が停止しています' : 'マイクが接続されていません',
