@@ -11,6 +11,7 @@ import {
 import type { AiProviderStatus } from '@/lib/ai/provider';
 import { RmsSpeakingDetector } from '@/lib/ai/speaking-detector';
 import { resumeAllAudioContexts } from '@/lib/audio-runtime';
+import { AiPreflightPanel } from './AiPreflightPanel';
 
 interface AiParticipantSetupModalProps {
   room: Room | null;
@@ -695,6 +696,19 @@ export function AiParticipantSetupModal({
         )}
 
         {/* プリフライト */}
+        <div className="mb-3">
+          <AiPreflightPanel
+            inputs={inputs}
+            outputs={outputs}
+            sourceDeviceId={config.sourceDeviceId}
+            sinkDeviceId={config.sinkDeviceId}
+            micLabel={micInfo?.label ?? null}
+            mixerRunning={mixerDiag?.contextState === "running"}
+            mixerHasMic={!!mixerDiag?.localMic}
+            setSendEnabled={setInputMixerSendEnabled}
+            onAllPassed={() => setManualConfirm(true)}
+          />
+        </div>
         <div className="mb-4 rounded-xl border border-stone-700 bg-stone-800/60 p-3">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-xs font-medium text-stone-300">
