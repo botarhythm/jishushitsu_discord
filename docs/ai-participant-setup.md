@@ -151,6 +151,19 @@ ChatGPT [出力 = CABLE Input] → CABLE Output → アプリ「AI 音声ソー�
    音量ミキサーを開く）で ChatGPT の行を展開し、
    - **出力デバイス** = `CABLE Input (VB-Audio Virtual Cable)`
    - **入力デバイス** = `Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)`
+
+   ここで実機でつまずいた点が3つある。
+
+   - **ChatGPT Classic は複数の行に分かれて表示されることがある。**
+     その場合は**すべての行に同じ設定**を入れる（どの行が音声を鳴らすか
+     分からないため）。
+   - **各行の音量が 0〜1 やミュートになっていないか確認する。** 既定デバイスを
+     切り替えた拍子に絞られることがあり、そのままだとケーブルにほとんど音が
+     流れず、アプリのレベルメーターが振れない。
+   - ⚠ **出力デバイスに `Voicemeeter Input` を選ばないこと。** そこは
+     こちらの声を ChatGPT へ送るための経路で、入力デバイス
+     (`Voicemeeter Out B1`) と組み合わさると ChatGPT が自分の声を
+     聞き続ける暴走になる。ChatGPT の出力は必ず `CABLE Input`。
 7. アプリ側の設定は下の「アプリ側の設定」へ。
    - AI 音声ソース = `CABLE Output`
    - ChatGPT への送出先 = `VoiceMeeter Input`
