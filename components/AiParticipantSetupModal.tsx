@@ -176,18 +176,27 @@ export function AiParticipantSetupModal({
   }, [config.sourceDeviceId]);
 
   // ── 物理マイク誤選択（二重取り込み）の検知 ──
-  const micCollision = useMemo(() => {
-    if (!room || !config.sourceDeviceId || config.sourceDeviceId === 'fake') return false;
-    const micTrack = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.track
+  // 通話に使っているマイクの実体（診断表示にも使う）
+  const micInfo = useMemo(() => {
+    const t = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track
       ?.mediaStreamTrack;
-    if (!micTrack) return false;
-    const settings = micTrack.getSettings();
-    if (settings.deviceId && settings.deviceId === config.sourceDeviceId) return true;
-    // 同一物理デバイスの別エンドポイントも groupId で検知する
+    if (!t) return null;
+    const st = t.getSettings();
+    return { label: t.label, deviceId: st.deviceId ?? "", groupId: st.groupId ?? "" };
+  }, [room]);
+
+  // ── 物理マイク誤選択（二重取り込み）の検知 ──
+  const micCollision = useMemo(() => {
+    if (!config.sourceDeviceId || config.sourceDeviceId === "fake" || !micInfo) return false;
+    // deviceId 一致は決定的
+    if (micInfo.deviceId && micInfo.deviceId === config.sourceDeviceId) return true;
     const selected = inputs.find((d) => d.deviceId === config.sourceDeviceId);
-    if (settings.groupId && selected?.groupId && settings.groupId === selected.groupId) return true;
-    return false;
-  }, [room, config.sourceDeviceId, inputs]);
+    if (!selected) return false;
+    // 同一物理デバイスの別エンドポイントを groupId で検知する。ただし仮想ケーブルは
+    // 物理マイクではありえないので対象外にする（誤検知で有効化がブロックされるのを防ぐ）
+    if (selected.recommended) return false;
+    return !!micInfo.groupId && !!selected.groupId && micInfo.groupId === selected.groupId;
+  }, [config.sourceDeviceId, inputs, micInfo]);
 
   // ループ検査ループから最新のプレビュー状態を読むための ref
   const previewActiveRef = useRef(false);
@@ -424,8 +433,10 @@ export function AiParticipantSetupModal({
         </select>
         {micCollision && (
           <p className="mb-2 rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-200">
-            ⚠ 選択中のデバイスは通話マイクと同一です。あなたの声が二重に録音されます。
-            仮想ケーブル (CABLE Output 等) を選択してください。
+            ⚠ 選択中のデバイスは通話に使っているマイク
+            {micInfo?.label ? `（${micInfo.label}）` : ""}
+            と同一です。あなたの声が二重に録音されます。仮想ケーブル
+            (CABLE Output 等) を選択してください。
           </p>
         )}
         {sourceIsSinkMonitor && (
