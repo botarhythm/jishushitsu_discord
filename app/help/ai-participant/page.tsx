@@ -136,7 +136,7 @@ export default function AiParticipantHelpPage() {
           />
           <Shot
             src="/help/ai-participant/sound-playback.png"
-            caption="無効化が済んだ再生タブ（一覧はスクロールするので全部は写っていません）"
+            caption="無効化が済んだ再生タブ（一覧はスクロールするので全部は写っていません）。なお CABLE Input に付いている受話器アイコンは手順4で外します"
           />
           <Shot
             src="/help/ai-participant/sound-recording.png"
@@ -464,6 +464,7 @@ function RoleTable() {
     ['録音', '既定のデバイス', 'マイク配列（物理マイク）'],
     ['録音', '既定の通信デバイス', 'Voicemeeter Out B1'],
     ['再生', '既定のデバイス', 'ヘッドホン'],
+    ['再生', '既定の通信デバイス', 'ヘッドホン'],
   ];
   return (
     <div className="overflow-x-auto">
