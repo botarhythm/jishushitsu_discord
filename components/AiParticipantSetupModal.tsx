@@ -690,14 +690,26 @@ export function AiParticipantSetupModal({
               </p>
             )}
             {mixerDiag && (
-              <p className="mt-1.5 text-[11px] leading-relaxed text-stone-500">
-                送出経路: 音声処理={mixerDiag.contextState} / 相手の声={mixerDiag.remoteCount}件 /
-                {mixerDiag.localMic
-                  ? ` あなたのマイク=${mixerDiag.localMic.label || "(名前不明)"}` +
-                    `${mixerDiag.localMic.enabled ? "" : " ※アプリでミュート中"}` +
-                    `${mixerDiag.localMic.muted ? " ※音が来ていません" : ""}`
-                  : " あなたのマイク=未接続"}
-              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-stone-400">
+                <span>
+                  音声処理:{" "}
+                  <b className={mixerDiag.contextState === "running" ? "text-emerald-400" : "text-red-300"}>
+                    {mixerDiag.contextState}
+                  </b>
+                </span>
+                <span>
+                  あなたのマイク:{" "}
+                  <b className={mixerDiag.localMic ? "text-stone-200" : "text-red-300"}>
+                    {mixerDiag.localMic?.label || (config.sendLocalMic === false ? "送らない設定" : "未接続")}
+                  </b>
+                </span>
+                <span>
+                  相手の声:{" "}
+                  <b className={mixerDiag.remoteCount > 0 ? "text-emerald-400" : "text-stone-500"}>
+                    {mixerDiag.remoteCount}人
+                  </b>
+                </span>
+              </div>
             )}
           </div>
         )}
