@@ -23,6 +23,7 @@ interface AiParticipantSetupModalProps {
   getInputMixerDiagnostics: () => {
     contextState: string;
     localMic: { label: string; enabled: boolean; muted: boolean } | null;
+    blockedMicLabel: string | null;
     remoteCount: number;
   } | null;
   onReconnect: () => void;
@@ -614,6 +615,15 @@ export function AiParticipantSetupModal({
             {inputMixerError && (
               <p className="mt-1.5 rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-200">
                 ⚠ 送出経路を開けませんでした: {inputMixerError}
+              </p>
+            )}
+            {mixerDiag?.blockedMicLabel && (
+              <p className="mt-1.5 rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-200">
+                ⚠ 通話マイクが録音デバイス「{mixerDiag.blockedMicLabel}」になっています。
+                これは再生音をそのまま録るもので、あなたの声は入らず AI の声が
+                ChatGPT へ戻ってハウリングします。安全のため送出を止めました。
+                Windows の既定の録音デバイスを<strong>物理マイク（マイク配列など）</strong>
+                に変更してください。
               </p>
             )}
             {mixerDiag && (

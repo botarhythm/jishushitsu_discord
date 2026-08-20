@@ -1,5 +1,5 @@
 import { Track, RoomEvent, type Room, type RemoteTrackPublication, type RemoteTrack, type RemoteParticipant } from 'livekit-client';
-import { classifyAudioPublication } from '@/lib/studio-participants';
+import { classifyAudioPublication, isLoopbackCaptureLabel } from '@/lib/studio-participants';
 import { registerAudioContext } from '@/lib/audio-runtime';
 
 /**
@@ -25,6 +25,7 @@ export class ChatGptInputMixer {
   private localMicNode: { track: MediaStreamTrack; source: MediaStreamAudioSourceNode } | null = null;
   private detach: (() => void) | null = null;
   private started = false;
+  private blockedMicLabel: string | null = null;
 
   /**
    * @param room   接続済みの LiveKit Room
@@ -64,6 +65,14 @@ export class ChatGptInputMixer {
       if (!pub || classifyAudioPublication(pub) !== 'human') return;
       const mst = pub.track?.mediaStreamTrack;
       if (!mst || !this.ctx || !this.dest) return;
+      // ループバック録音デバイス(ステレオミキサー等)は再生音をそのまま拾うため、
+      // AI モニタの音声が ChatGPT の耳へ戻り自己ループ(ハウリング)になる。
+      // しかも本人の声は入らない。接続を拒否して UI に理由を出す。
+      if (isLoopbackCaptureLabel(mst.label)) {
+        this.blockedMicLabel = mst.label;
+        return;
+      }
+      this.blockedMicLabel = null;
       if (this.localMicNode?.track === mst) return;
       if (this.localMicNode) {
         try {
@@ -140,12 +149,14 @@ export class ChatGptInputMixer {
   getDiagnostics(): {
     contextState: string;
     localMic: { label: string; enabled: boolean; muted: boolean } | null;
+    blockedMicLabel: string | null;
     remoteCount: number;
   } {
     const t = this.localMicNode?.track ?? null;
     return {
       contextState: this.ctx?.state ?? "none",
       localMic: t ? { label: t.label, enabled: t.enabled, muted: t.muted } : null,
+      blockedMicLabel: this.blockedMicLabel,
       remoteCount: this.nodes.size,
     };
   }

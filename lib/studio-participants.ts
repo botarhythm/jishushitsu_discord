@@ -102,6 +102,20 @@ export interface AiTileState {
  * - 'screen': 画面共有音声
  * - 'unknown': 上記以外の Unknown ソース（未分類。新規 consumer は既定で除外すること）
  */
+/**
+ * ループバック録音デバイス（再生音をそのまま録るもの）か判定する。
+ *
+ * これをマイクとして使うと、アプリが再生している AI の声・リモート参加者の声を
+ * そのまま拾ってしまい、ChatGPT の耳へ送り返してハウリングになる。
+ * また自分の声は一切入らない（再生音しか録らないため）。
+ */
+export function isLoopbackCaptureLabel(label: string): boolean {
+  const normalized = label.toLowerCase().split(" ").join("").split("　").join("");
+  return ["stereomix", "ステレオミキサー", "whatuhear", "waveout", "loopback"].some((k) =>
+    normalized.includes(k)
+  );
+}
+
 export function classifyAudioPublication(pub: {
   trackName?: string;
   source?: Track.Source;
