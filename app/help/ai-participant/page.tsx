@@ -253,6 +253,17 @@ export default function AiParticipantHelpPage() {
             手順5・7で VoiceMeeter と Windows に任せた分を、アプリ側で二重に鳴らさないための設定です。
           </p>
           <Shot src="/help/ai-participant/app-settings.png" caption="設定が済んだ状態" />
+          <Callout tone="warn" title="この設定はサイトごとに保存されます">
+            設定はブラウザの localStorage に保存されるため、
+            <strong className="text-stone-200">URL が変わると引き継がれません</strong>。
+            開発用の localhost で合わせても本番では未設定のままです。
+            実際に収録するアドレスで一度設定してください。別のPCやブラウザ、
+            シークレットウィンドウでも同様に設定し直しが必要です。
+          </Callout>
+          <Callout tone="note" title="開いた直後は「無効」と出ます">
+            状態表示の「無効」は AI 参加者がまだ OFF という意味で、異常ではありません。
+            デバイスを選んでから有効化してください。
+          </Callout>
         </Section>
 
         <Section n={9} title="動作を確認する">
