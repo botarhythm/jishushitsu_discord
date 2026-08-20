@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 /**
  * 手順書に差し込むスクリーンショット。
@@ -11,6 +11,14 @@ import { useState } from 'react';
  */
 export function Shot({ src, caption }: { src: string; caption: string }) {
   const [failed, setFailed] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  // SSR された img はハイドレーション前に読み込みが終わる（＝失敗する）ことがあり、
+  // その場合 onError を拾えない。マウント後に読み込み結果を直接確かめる。
+  useEffect(() => {
+    const el = imgRef.current;
+    if (el && el.complete && el.naturalWidth === 0) setFailed(true);
+  }, []);
 
   if (failed) {
     return (
@@ -29,10 +37,11 @@ export function Shot({ src, caption }: { src: string; caption: string }) {
       {/* 手順書の挿絵。実寸が環境によって違うため next/image ではなく素の img で扱う */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
+        ref={imgRef}
         src={src}
         alt={caption}
         onError={() => setFailed(true)}
-        className="w-full rounded-lg border border-stone-800"
+        className="mx-auto max-w-full rounded-lg border border-stone-800"
       />
       <figcaption className="mt-2 text-center text-xs text-stone-400">{caption}</figcaption>
     </figure>

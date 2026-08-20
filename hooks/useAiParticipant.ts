@@ -88,7 +88,11 @@ export function useAiParticipant({
   const [status, setStatus] = useState<AiProviderStatus>('disconnected');
   const [publishFailed, setPublishFailed] = useState(false);
   const [inputMixerError, setInputMixerError] = useState<string | null>(null);
-  const [speaking, setSpeaking] = useState({ isSpeaking: false, level: 0 });
+  // isSpeaking だけ state。level は 100ms ごとに変わるので ref に置き、
+  // 描画ループから読ませて再レンダリングを起こさない。
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const levelRef = useRef(0);
+  const getLevel = useCallback(() => levelRef.current, []);
 
   const providerRef = useRef<AiParticipantProvider | null>(null);
   const mixerRef = useRef<ChatGptInputMixer | null>(null);
@@ -193,7 +197,10 @@ export function useAiParticipant({
     });
     const offSpeaking = provider.onSpeaking((s) => {
       if (cancelled) return;
-      setSpeaking({ isSpeaking: s.isSpeaking, level: s.level });
+      levelRef.current = s.level;
+      // 同じ真偽値なら React 側で bail out されるため、再レンダリングは
+      // 発話の開始/終了の瞬間だけになる。
+      setIsSpeaking(s.isSpeaking);
       if (s.isSpeaking !== wasSpeakingRef.current) {
         wasSpeakingRef.current = s.isSpeaking;
         recordSessionEvent({
@@ -229,7 +236,8 @@ export function useAiParticipant({
       }
       setStatus('disconnected');
       setPublishFailed(false);
-      setSpeaking({ isSpeaking: false, level: 0 });
+      levelRef.current = 0;
+      setIsSpeaking(false);
     };
     // config の deviceId 変更は reconnect で反映する（有効中の自動再接続はしない）
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -276,8 +284,8 @@ export function useAiParticipant({
   const tile: AiTileState | null = enabled
     ? {
         info,
-        visualState: status === 'error' ? 'error' : speaking.isSpeaking ? 'speaking' : 'idle',
-        level: speaking.level,
+        visualState: status === 'error' ? 'error' : isSpeaking ? 'speaking' : 'idle',
+        getLevel,
       }
     : null;
 
@@ -332,7 +340,11 @@ export function useRemoteAiTile(
   room: Room | null,
   descriptor: StudioAiDescriptor | null
 ): AiTileState | null {
-  const [speaking, setSpeaking] = useState({ isSpeaking: false, level: 0 });
+  // isSpeaking だけ state。level は 100ms ごとに変わるので ref に置き、
+  // 描画ループから読ませて再レンダリングを起こさない。
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const levelRef = useRef(0);
+  const getLevel = useCallback(() => levelRef.current, []);
   const [trackFound, setTrackFound] = useState(false);
 
   const descriptorKey = descriptor
@@ -365,14 +377,18 @@ export function useRemoteAiTile(
       if (track && track.id !== attachedTrackId) {
         detector?.stop();
         detector = new RmsSpeakingDetector(track);
-        detector.start((s) => setSpeaking({ isSpeaking: s.isSpeaking, level: s.level }));
+        detector.start((s) => {
+          levelRef.current = s.level;
+          setIsSpeaking(s.isSpeaking);
+        });
         attachedTrackId = track.id;
         setTrackFound(true);
       } else if (!track && attachedTrackId) {
         detector?.stop();
         detector = null;
         attachedTrackId = null;
-        setSpeaking({ isSpeaking: false, level: 0 });
+        levelRef.current = 0;
+        setIsSpeaking(false);
         setTrackFound(false);
       } else if (!track) {
         setTrackFound(false);
@@ -390,7 +406,8 @@ export function useRemoteAiTile(
       room.off(RoomEvent.ParticipantConnected, sync);
       room.off(RoomEvent.ParticipantDisconnected, sync);
       detector?.stop();
-      setSpeaking({ isSpeaking: false, level: 0 });
+      levelRef.current = 0;
+      setIsSpeaking(false);
       setTrackFound(false);
     };
     // descriptor はオブジェクトなので内容キーで比較する
@@ -405,7 +422,7 @@ export function useRemoteAiTile(
       avatar: descriptor.avatar,
     },
     // トラック未解決 (ホスト側エラーで unpublish された等) は idle 表示に留める
-    visualState: trackFound && speaking.isSpeaking ? 'speaking' : 'idle',
-    level: speaking.level,
+    visualState: trackFound && isSpeaking ? 'speaking' : 'idle',
+    getLevel,
   };
 }

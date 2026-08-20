@@ -1,3 +1,4 @@
+import { livekitIdentityFor } from '@/lib/session';
 import { NextRequest, NextResponse } from 'next/server';
 import { AccessToken } from 'livekit-server-sdk';
 import { requireSession } from '@/lib/auth-guard';
@@ -31,9 +32,7 @@ export async function POST(request: NextRequest) {
 
   const { session } = auth;
 
-  // identity は kind に応じて prefix。guest の discordId は既に `guest:<jti>` 形式。
-  const identity =
-    session.kind === 'guest' ? session.discordId : `discord:${session.discordId}`;
+  const identity = livekitIdentityFor(session);
   const displayName = session.displayName.substring(0, 32);
 
   const at = new AccessToken(apiKey, apiSecret, {

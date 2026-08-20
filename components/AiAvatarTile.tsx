@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import type { AiTileState } from '@/lib/studio-participants';
 
 /**
@@ -10,10 +11,27 @@ import type { AiTileState } from '@/lib/studio-participants';
  * - error: グレーアウト + 小さな警告バッジ（録画に映る前提で控えめに）
  */
 export function AiAvatarTile({ state, compact = false }: { state: AiTileState; compact?: boolean }) {
-  const { info, visualState, level } = state;
+  const { info, visualState } = state;
   const speaking = visualState === 'speaking';
   const error = visualState === 'error';
-  const scale = speaking ? 1 + Math.min(level, 1) * 0.12 : 1;
+  // RMS は state に載せていない（再レンダリング多発を避けるため）。
+  // リングの拡大は描画フレーム側で transform だけ書き換える。
+  const ringRef = useRef<HTMLSpanElement>(null);
+  const getLevel = state.getLevel;
+  useEffect(() => {
+    const el = ringRef.current;
+    if (!el || !speaking) return;
+    let raf = 0;
+    const tick = () => {
+      // 背景タブでは描く意味が無いので止める
+      if (!document.hidden) {
+        el.style.transform = `scale(${1 + Math.min(getLevel(), 1) * 0.12})`;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [speaking, getLevel]);
 
   return (
     <div
@@ -24,21 +42,17 @@ export function AiAvatarTile({ state, compact = false }: { state: AiTileState; c
       <div className="relative flex items-center justify-center">
         {/* speaking リング */}
         <span
+          ref={ringRef}
           aria-hidden
           className={`absolute rounded-full transition-transform duration-100 ${
             compact ? 'h-10 w-10' : 'h-28 w-28'
           } ${speaking ? 'bg-emerald-400/25 ring-2 ring-emerald-400/70' : 'bg-transparent'}`}
-          style={{ transform: `scale(${scale})` }}
         />
         <span
           className={`relative flex items-center justify-center rounded-full bg-stone-700 ${
             compact ? 'h-8 w-8 text-lg' : 'h-24 w-24 text-5xl'
           }`}
-          style={
-            speaking
-              ? { boxShadow: `0 0 ${12 + level * 24}px rgba(52, 211, 153, 0.45)` }
-              : undefined
-          }
+          style={speaking ? { boxShadow: '0 0 24px rgba(52, 211, 153, 0.45)' } : undefined}
           role="img"
           aria-label={info.displayName}
         >

@@ -11,48 +11,10 @@ import {
   recordSessionEvent,
   summarizeSessionEvents,
 } from '@/lib/session-clock';
-
-/**
- * ts-ebml (と Buffer polyfill) をロードする。
- * ts-ebml は Node の Buffer グローバルに依存しているため、ブラウザでは事前に polyfill する。
- *
- * 注意: ts-ebml が依存する ebml パッケージはブラウザ向けエントリが壊れており、
- * next.config.ts の turbopack.resolveAlias で ESM ビルドへ張り替えないと
- * この import 自体がモジュール評価時に throw する (その場合 Duration/Cues の無い
- * 「編集ソフトで開けない WebM」が保存されてしまう)。録画開始時に preload して
- * 失敗を早期に検知する。
- */
-async function loadTsEbml() {
-  if (typeof window !== 'undefined' && typeof (window as unknown as { Buffer?: unknown }).Buffer === 'undefined') {
-    const { Buffer } = await import('buffer');
-    (window as unknown as { Buffer: typeof Buffer }).Buffer = Buffer;
-  }
-  return import('ts-ebml');
-}
-
-/**
- * MediaRecorder の WebM 出力に SeekHead / Cues / Duration を注入して
- * 編集ソフトで開ける「シーク可能な WebM」に変換する。
- */
-async function injectWebmSeekMetadata(blob: Blob): Promise<Blob> {
-  const { Decoder, tools, Reader } = await loadTsEbml();
-  const decoder = new Decoder();
-  const reader = new Reader();
-  reader.logging = false;
-  const buf = await blob.arrayBuffer();
-  const elms = decoder.decode(buf);
-  elms.forEach((elm) => reader.read(elm));
-  reader.stop();
-  const refinedMetadataBuf = tools.makeMetadataSeekable(
-    reader.metadatas,
-    reader.duration,
-    reader.cues
-  );
-  // 長尺録画は数百 MB になるため、本体は ArrayBuffer.slice (即コピー) ではなく
-  // Blob.slice (遅延参照) で切り出してメモリピークを倍増させない。
-  const body = blob.slice(reader.metadataSize);
-  return new Blob([refinedMetadataBuf, body], { type: blob.type });
-}
+import { injectWebmSeekMetadata, loadTsEbml } from '@/lib/webm-seek-metadata';
+import { buildRecordingFilename, downloadBlobAs } from '@/lib/recording-file';
+import { estimateStorageHeadroom, RecordingChunkWriter } from '@/lib/recording-store';
+import { describeRecordingHealth, RecordingHealthMonitor } from '@/lib/recording-health';
 
 export type RecordingQuality = 'streaming' | 'standard' | 'high';
 
@@ -121,6 +83,8 @@ interface RecordingResources {
    * 停止しても finalize は1回だけ走り、全経路がこの Promise に合流する。
    */
   finalizePromise: Promise<Blob | null>;
+  /** IndexedDB へのチャンク逐次保存 (クラッシュ復旧用)。使えない環境では null */
+  chunkWriterPromise: Promise<RecordingChunkWriter | null>;
 }
 
 /**
@@ -164,10 +128,12 @@ export function useLocalRecording({
   // excludeTabAudio / extraAudioTracks は録画開始時点の最新値を使う（stale closure 回避）
   const excludeTabAudioRef = useRef(excludeTabAudio);
   const extraTracksRef = useRef(extraAudioTracks);
+  const filePrefixRef = useRef(filePrefix);
   useEffect(() => {
     excludeTabAudioRef.current = excludeTabAudio;
     extraTracksRef.current = extraAudioTracks;
-  }, [excludeTabAudio, extraAudioTracks]);
+    filePrefixRef.current = filePrefix;
+  }, [excludeTabAudio, extraAudioTracks, filePrefix]);
 
   const cleanup = useCallback(() => {
     const r = resourcesRef.current;
@@ -188,27 +154,10 @@ export function useLocalRecording({
     stopSessionClock();
   }, []);
 
+  /** 録画開始時刻を名前に使う。復旧ファイルと同じ規則。 */
   const downloadBlob = useCallback(
-    (blob: Blob) => {
-      const now = new Date();
-      const pad = (n: number) => String(n).padStart(2, '0');
-      const ts =
-        `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
-        `_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-      const ext = blob.type.includes('webm')
-        ? 'webm'
-        : blob.type.includes('mp4')
-          ? 'mp4'
-          : 'webm';
-      const fname = `${filePrefix}_${ts}.${ext}`;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fname;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    (blob: Blob, at: Date) => {
+      downloadBlobAs(blob, buildRecordingFilename(filePrefix, blob.type, at));
     },
     [filePrefix]
   );
@@ -233,12 +182,13 @@ export function useLocalRecording({
 
   stopRef.current = stop;
 
-  // 録画中のタブ閉じ/リロードを警告する (メモリ内チャンクは失われるため)
+  // 録画中のタブ閉じ/リロードを警告する。IndexedDB のバックアップから復旧はできるが、
+  // 手間がかかるうえ最後の1秒分は欠けるため、まず止めるよう促す。
   useEffect(() => {
     if (!isRecording) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
-      e.returnValue = '録画中です。タブを閉じると録画データが失われます。';
+      e.returnValue = '録画中です。先に録画を停止してください。このまま閉じると、次回起動時に復旧操作が必要になります。';
       return e.returnValue;
     };
     window.addEventListener('beforeunload', handler);
@@ -343,7 +293,15 @@ export function useLocalRecording({
     const extraRegistry = extraTracksRef.current;
     const willMixAudio = includeMicrophone || !!room || !!extraRegistry;
     if (willMixAudio) {
-      audioContext = new AudioContext();
+      // 48kHz 固定。WebRTC・MediaRecorder ともに 48kHz 前提で、途中に
+      // サンプルレート変換が挟まると無駄な負荷になる。
+      // なお解析系と違い、この context は録画専用として分けたままにする
+      // （収録のオーディオスレッドを他の処理と取り合わせない）。
+      try {
+        audioContext = new AudioContext({ sampleRate: 48000 });
+      } catch {
+        audioContext = new AudioContext();
+      }
       audioDestination = audioContext.createMediaStreamDestination();
 
       // 接続済みトラックの重複排除 (同じ MediaStreamTrack を複数経路で二重ミックスしない)
@@ -572,8 +530,40 @@ export function useLocalRecording({
     }
 
     const chunks: Blob[] = [];
+    // チャンクはメモリ(正本)と IndexedDB(保険)の両方へ積む。
+    // IndexedDB 側はブラウザごと落ちたときに収録を全損させないためのバックアップで、
+    // 書けなくても録画は続行する (writer 側で自己無効化する)。
+    const recordingStartedAt = new Date();
+    // 収録中に音声処理が詰まっていないかを測る（「音が飛び飛び」の原因切り分け用）
+    const health = new RecordingHealthMonitor(audioContext);
+    const chunkWriterPromise = RecordingChunkWriter.begin(
+      { mimeType: recorder.mimeType, filePrefix: filePrefixRef.current, startedAt: recordingStartedAt.getTime() },
+      (err) => {
+        console.error('[useLocalRecording] 録画バックアップの保存に失敗', err);
+        setError(
+          '録画は継続していますが、自動バックアップを保存できませんでした。この録画中にブラウザが強制終了すると復旧できません。'
+        );
+      }
+    );
+    // 空き容量が少ないと長時間の収録の途中でバックアップが止まる。
+    // 止まってから気付いても手遅れなので、開始時点で「何分ぶん残っているか」を伝える。
+    void estimateStorageHeadroom().then((h) => {
+      if (!h) return;
+      const bytesPerSecond = ((preset?.videoBitsPerSecond ?? 2_500_000) + 128_000) / 8;
+      const minutes = Math.floor((h.quota - h.usage) / bytesPerSecond / 60);
+      if (minutes < 60) {
+        setError(
+          `録画の自動バックアップに使える空き容量は約${minutes}分ぶんです。これを超える収録ではバックアップが途中で止まります（録画そのものは続きます）。`
+        );
+      }
+    });
+
     recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
+      if (e.data.size === 0) return;
+      health.noteChunk();
+      chunks.push(e.data);
+      // 同一 Promise への then は登録順に実行されるため、チャンクの順序は保たれる。
+      void chunkWriterPromise.then((w) => w?.append(e.data));
     };
 
     // ── 冪等な確定処理 ──
@@ -587,6 +577,8 @@ export function useLocalRecording({
     });
     const finalize = async (reason: 'stop' | 'error') => {
       if (finalized) return;
+      const healthReport = health.stop();
+      console.info('[recording-health]', healthReport);
       recordSessionEvent({ type: "recording_stopped", reason });
       console.info("[session-clock]", summarizeSessionEvents());
       if (finalized) return;
@@ -610,7 +602,10 @@ export function useLocalRecording({
                 return rawBlob;
               })
             : rawBlob;
-          downloadBlob(seekable);
+          downloadBlob(seekable, recordingStartedAt);
+          const healthMessage = describeRecordingHealth(healthReport);
+          // 既に出ている警告（インデックス付与失敗など）のほうが具体的なので上書きしない
+          if (healthMessage) setError((prev) => prev ?? healthMessage);
           result = seekable;
           if (reason === 'error') {
             setError('録画中にエラーが発生したため停止しました。ここまでの録画は保存済みです。');
@@ -619,6 +614,11 @@ export function useLocalRecording({
           setError('録画中にエラーが発生しました。保存できるデータがありませんでした。');
         }
       } finally {
+        // 保存できたときだけバックアップを破棄する。保存に失敗した場合は
+        // 次回起動時に復旧を促せるよう、あえて IndexedDB に残す。
+        if (result || chunks.length === 0) {
+          void chunkWriterPromise.then((w) => w?.discard());
+        }
         cleanup();
         setIsRecording(false);
         setStartedAt(null);
@@ -653,6 +653,7 @@ export function useLocalRecording({
       remoteAudioNodes,
       detachListeners,
       finalizePromise,
+      chunkWriterPromise,
     };
 
     displayStream.getVideoTracks()[0]?.addEventListener('ended', () => {
@@ -673,6 +674,7 @@ export function useLocalRecording({
     // (MediaRecorder.start() の直前。要件 FR-008 / NFR-005)
     startSessionClock();
     recordSessionEvent({ type: "recording_started" });
+    health.start();
     recorder.start(1000);
     setStartedAt(Date.now());
     setIsRecording(true);

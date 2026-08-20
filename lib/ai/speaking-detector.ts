@@ -1,4 +1,4 @@
-import { registerAudioContext } from '@/lib/audio-runtime';
+import { getSharedAudioContext } from '@/lib/audio-runtime';
 
 /**
  * 音量ベース (RMS) の発話検出。
@@ -36,7 +36,6 @@ export interface RmsSpeakingDetectorOptions {
 
 export class RmsSpeakingDetector {
   private ctx: AudioContext | null = null;
-  private unregister: (() => void) | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private analyser: AnalyserNode | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -62,8 +61,7 @@ export class RmsSpeakingDetector {
   start(cb: (s: SpeakingState) => void): void {
     if (this.timer) return;
     try {
-      this.ctx = new AudioContext();
-      this.unregister = registerAudioContext(this.ctx);
+      this.ctx = getSharedAudioContext();
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = 1024;
       this.buf = new Float32Array(this.analyser.fftSize);
@@ -118,11 +116,14 @@ export class RmsSpeakingDetector {
       // ignore
     }
     this.source = null;
+    // 共有 context は close しない。自分が繋いだノードを外すだけ。
+    try {
+      this.analyser?.disconnect();
+    } catch {
+      // ignore
+    }
     this.analyser = null;
     this.buf = null;
-    this.unregister?.();
-    this.unregister = null;
-    this.ctx?.close().catch(() => {});
     this.ctx = null;
     this.isSpeaking = false;
     this.belowSince = null;

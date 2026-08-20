@@ -127,16 +127,30 @@ export default function AiParticipantHelpPage() {
           <DeviceTable
             caption="再生タブ"
             rows={[
-              ['ヘッドホン', 'keep'],
+              ['スピーカー / ヘッドホン（普段聴くもの）', 'keep'],
               ['CABLE Input', 'keep'],
               ['Voicemeeter Input', 'keep'],
               ['CABLE In 16ch', 'disable'],
               ['Voicemeeter In 3〜5 / AUX / VAIO3', 'disable'],
             ]}
           />
-          <Shot src="/help/ai-participant/devices.png" caption="無効化が済んだ録音タブ" />
+          <Shot
+            src="/help/ai-participant/sound-playback-top.png"
+            caption="再生タブの上部。スピーカーが既定、Bluetooth や未接続のヘッドホンはそのまま残してよい"
+          />
+          <Shot
+            src="/help/ai-participant/sound-playback.png"
+            caption="同じ再生タブの下部。CABLE Input が「準備完了」で受話器アイコンが付いていなければ正しい"
+          />
+          <Shot
+            src="/help/ai-participant/sound-recording.png"
+            caption="無効化が済んだ録音タブ。Voicemeeter Out B1 に受話器アイコンが付いている"
+          />
           <Check>
-            録音タブに残るのが3つ、再生タブに残るのが3つになっていれば成功です。
+            録音タブに「マイク配列 / CABLE Output / Voicemeeter Out B1」の3つ、再生タブに
+            「普段聴くデバイス / CABLE Input / Voicemeeter Input」が残っていれば成功です。
+            Bluetooth や未接続のヘッドホンが並んでいるのは構いません（紛らわしいのは
+            名前が似た仮想デバイスだけです）。
           </Check>
         </Section>
 
@@ -171,7 +185,16 @@ export default function AiParticipantHelpPage() {
             A を点灯させると、あなたと相手の声がスピーカーから流れます。
             その音をマイクが拾って ChatGPT へ戻り、ハウリングします。
           </Callout>
-          <Shot src="/help/ai-participant/voicemeeter.png" caption="正しい状態の VoiceMeeter" />
+          <Shot
+            src="/help/ai-participant/voicemeeter.png"
+            caption="正しい状態の VoiceMeeter。左のマイクも右の Virtual Input も B だけが点灯している"
+          />
+          <p className="mt-1 text-pretty text-xs leading-relaxed text-stone-400">
+            スクリーンショットではマイクのストリップで{' '}
+            <code className="rounded bg-stone-800 px-1">mono</code>{' '}
+            も点灯しています。マイク1本なら左右に振れないほうが素直なので点けてあるだけで、
+            必須ではありません。
+          </p>
           <Check>
             話すと右側の「B VIRTUAL OUT」メーターが振れれば成功です。
           </Check>
@@ -188,6 +211,10 @@ export default function AiParticipantHelpPage() {
               '設定 → システム → サウンド → 音量ミキサー を開く',
               'ChatGPT の行を展開し、出力デバイスを「CABLE Input」にする',
             ]}
+          />
+          <Shot
+            src="/help/ai-participant/volume-mixer.png"
+            caption="ChatGPT の行を展開したところ。出力 = CABLE Input、入力 = Voicemeeter Out B1"
           />
           <Callout tone="note" title="行が複数あるとき">
             音量ミキサーはアプリ単位ではなく音声セッション単位の一覧です。ChatGPT が
@@ -232,7 +259,21 @@ export default function AiParticipantHelpPage() {
             <strong className="text-stone-200">両方オン</strong>にしてください。
             手順5・7で VoiceMeeter と Windows に任せた分を、アプリ側で二重に鳴らさないための設定です。
           </p>
-          <Shot src="/help/ai-participant/app-settings.png" caption="設定が済んだ状態" />
+          <Shot
+            src="/help/ai-participant/app-settings.jpg"
+            caption="開いた直後の設定画面。①・通話マイク・② の3か所を上の表のとおりに選ぶ"
+          />
+          <Callout tone="warn" title="この設定はサイトごとに保存されます">
+            設定はブラウザの localStorage に保存されるため、
+            <strong className="text-stone-200">URL が変わると引き継がれません</strong>。
+            開発用の localhost で合わせても本番では未設定のままです。
+            実際に収録するアドレスで一度設定してください。別のPCやブラウザ、
+            シークレットウィンドウでも同様に設定し直しが必要です。
+          </Callout>
+          <Callout tone="note" title="開いた直後は「無効」と出ます">
+            状態表示の「無効」は AI 参加者がまだ OFF という意味で、異常ではありません。
+            デバイスを選んでから有効化してください。
+          </Callout>
         </Section>
 
         <Section n={9} title="動作を確認する">
@@ -272,6 +313,22 @@ export default function AiParticipantHelpPage() {
             <Trouble q="PC の音が急に聞こえなくなった">
               VoiceMeeter がインストール時に既定の再生デバイスを奪っています。
               設定 → システム → サウンド → 出力 でヘッドホンを選び直してください。
+            </Trouble>
+            <Trouble q="収録以外のアプリのために Windows の既定を変えたくない">
+              変える必要はありません。Discord・Zoom などは
+              <strong className="text-stone-200">アプリ内で出力/入力デバイスを指定できます</strong>。
+              一度そこで実物（スピーカー、マイク配列）を選べば、Windows の既定が何であっても
+              影響を受けません。ChatGPT も手順6でアプリ別に固定済みです。Windows の既定は
+              「自分でデバイスを選ばないアプリのための保険」と考え、
+              <strong className="text-stone-200">CABLE と Voicemeeter だけは既定に出さない</strong>
+              ことだけ守ってください。
+            </Trouble>
+            <Trouble q="Bluetooth のヘッドホンを使いたい">
+              聴くだけなら問題ありません。ただし
+              <strong className="text-stone-200">その内蔵マイクは絶対に選ばないでください</strong>。
+              Bluetooth はマイクを使った瞬間にハンズフリー通話モードへ切り替わり、
+              音質が電話並みに落ちます（デバイス一覧に「〜 Hands-Free」として別に並んでいるのがそれです）。
+              収録に使う声は物理マイク（マイク配列）から録ってください。
             </Trouble>
             <Trouble q="設定が壊れて何をしても直らない">
               音量ミキサー最下部の「リセット」でアプリ別設定を全消去してから、
@@ -430,6 +487,7 @@ function RoleTable() {
     ['録音', '既定のデバイス', 'マイク配列（物理マイク）'],
     ['録音', '既定の通信デバイス', 'Voicemeeter Out B1'],
     ['再生', '既定のデバイス', 'ヘッドホン'],
+    ['再生', '既定の通信デバイス', 'ヘッドホン'],
   ];
   return (
     <div className="overflow-x-auto">

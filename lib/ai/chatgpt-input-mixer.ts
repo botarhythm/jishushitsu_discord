@@ -1,6 +1,6 @@
 import { Track, RoomEvent, type Room, type RemoteTrackPublication, type RemoteTrack, type RemoteParticipant } from 'livekit-client';
 import { classifyAudioPublication, isLoopbackCaptureLabel } from '@/lib/studio-participants';
-import { registerAudioContext } from '@/lib/audio-runtime';
+import { getSharedAudioContext } from '@/lib/audio-runtime';
 
 /**
  * ChatGPT 入力専用ミキサー。
@@ -18,7 +18,6 @@ import { registerAudioContext } from '@/lib/audio-runtime';
  */
 export class ChatGptInputMixer {
   private ctx: AudioContext | null = null;
-  private unregister: (() => void) | null = null;
   private dest: MediaStreamAudioDestinationNode | null = null;
   private gain: GainNode | null = null;
   private audioEl: HTMLAudioElement | null = null;
@@ -41,9 +40,8 @@ export class ChatGptInputMixer {
     if (this.started) return;
     this.started = true;
 
-    const ctx = new AudioContext();
+    const ctx = getSharedAudioContext();
     this.ctx = ctx;
-    this.unregister = registerAudioContext(ctx);
     this.dest = ctx.createMediaStreamDestination();
     // 全ソースはこの gain を経由して destination へ送る。自己ループ検査中に
     // 送出だけ止めて「OS 側の漏れ」だけを測れるようにするため。
@@ -211,9 +209,13 @@ export class ChatGptInputMixer {
       this.audioEl.remove();
       this.audioEl = null;
     }
-    this.unregister?.();
-    this.unregister = null;
-    this.ctx?.close().catch(() => {});
+    // 共有 context は close しない。自分のノードだけ切り離す。
+    try {
+      this.gain?.disconnect();
+      this.dest?.disconnect();
+    } catch {
+      // ignore
+    }
     this.ctx = null;
     this.gain = null;
     this.dest = null;
