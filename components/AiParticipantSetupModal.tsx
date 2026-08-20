@@ -20,6 +20,11 @@ interface AiParticipantSetupModalProps {
   aiStatus: AiProviderStatus;
   publishFailed: boolean;
   inputMixerError: string | null;
+  getInputMixerDiagnostics: () => {
+    contextState: string;
+    localMic: { label: string; enabled: boolean; muted: boolean } | null;
+    remoteCount: number;
+  } | null;
   onReconnect: () => void;
   /** 録画中は有効化を許可しない（録画開始前に有効化しないとタブ音声二重化が起きるため） */
   isRecording: boolean;
@@ -83,6 +88,7 @@ export function AiParticipantSetupModal({
   aiStatus,
   publishFailed,
   inputMixerError,
+  getInputMixerDiagnostics,
   onReconnect,
   isRecording,
   onClose,
@@ -204,6 +210,16 @@ export function AiParticipantSetupModal({
     if (selected.recommended) return false;
     return !!micInfo.groupId && !!selected.groupId && micInfo.groupId === selected.groupId;
   }, [config.sourceDeviceId, inputs, micInfo]);
+
+  // ── 送出経路の内部状態を定期取得（切り分け用）──
+  const [mixerDiag, setMixerDiag] = useState<ReturnType<
+    AiParticipantSetupModalProps["getInputMixerDiagnostics"]
+  >>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    const t = setInterval(() => setMixerDiag(getInputMixerDiagnostics()), 500);
+    return () => clearInterval(t);
+  }, [enabled, getInputMixerDiagnostics]);
 
   // ── 送出モニタ ──
   // 送出先(ChatGPTの耳)の対になる録音側を監視し、こちらの声が実際に
@@ -598,6 +614,16 @@ export function AiParticipantSetupModal({
             {inputMixerError && (
               <p className="mt-1.5 rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-200">
                 ⚠ 送出経路を開けませんでした: {inputMixerError}
+              </p>
+            )}
+            {mixerDiag && (
+              <p className="mt-1.5 text-[11px] leading-relaxed text-stone-500">
+                送出経路: 音声処理={mixerDiag.contextState} / 相手の声={mixerDiag.remoteCount}件 /
+                {mixerDiag.localMic
+                  ? ` あなたのマイク=${mixerDiag.localMic.label || "(名前不明)"}` +
+                    `${mixerDiag.localMic.enabled ? "" : " ※アプリでミュート中"}` +
+                    `${mixerDiag.localMic.muted ? " ※音が来ていません" : ""}`
+                  : " あなたのマイク=未接続"}
               </p>
             )}
           </div>

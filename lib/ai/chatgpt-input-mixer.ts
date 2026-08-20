@@ -136,6 +136,20 @@ export class ChatGptInputMixer {
     };
   }
 
+  /** 送出経路が実際に成立しているかの内部状態（切り分け用） */
+  getDiagnostics(): {
+    contextState: string;
+    localMic: { label: string; enabled: boolean; muted: boolean } | null;
+    remoteCount: number;
+  } {
+    const t = this.localMicNode?.track ?? null;
+    return {
+      contextState: this.ctx?.state ?? "none",
+      localMic: t ? { label: t.label, enabled: t.enabled, muted: t.muted } : null,
+      remoteCount: this.nodes.size,
+    };
+  }
+
   stop(): void {
     this.detach?.();
     this.detach = null;
