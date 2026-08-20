@@ -16,6 +16,7 @@ import { DesktopChatGPTProvider } from '@/lib/ai/desktop-chatgpt-provider';
 import { FakeAiProvider } from '@/lib/ai/fake-provider';
 import { ChatGptInputMixer } from '@/lib/ai/chatgpt-input-mixer';
 import { RmsSpeakingDetector } from '@/lib/ai/speaking-detector';
+import { recordSessionEvent } from '@/lib/session-clock';
 
 /** AI 参加者の固定 ID。再接続・トラック差し替えでも不変（要件§26） */
 export const AI_PARTICIPANT_ID = 'chatgpt';
@@ -91,6 +92,7 @@ export function useAiParticipant({
   const mixerRef = useRef<ChatGptInputMixer | null>(null);
   const monitorElRef = useRef<HTMLAudioElement | null>(null);
   const publishedTrackRef = useRef<MediaStreamTrack | null>(null);
+  const wasSpeakingRef = useRef(false);
 
   const configRef = useRef(config);
 
@@ -176,6 +178,7 @@ export function useAiParticipant({
       if (cancelled) return;
       setStatus(s);
       if (s === 'error') {
+        recordSessionEvent({ type: "participant_error", participantId: AI_PARTICIPANT_ID });
         // 障害分離: 録画ミキサー/リモート配信から外すだけ。収録は継続する。
         void detachTrack();
       }
@@ -183,6 +186,13 @@ export function useAiParticipant({
     const offSpeaking = provider.onSpeaking((s) => {
       if (cancelled) return;
       setSpeaking({ isSpeaking: s.isSpeaking, level: s.level });
+      if (s.isSpeaking !== wasSpeakingRef.current) {
+        wasSpeakingRef.current = s.isSpeaking;
+        recordSessionEvent({
+          type: s.isSpeaking ? "speaking_started" : "speaking_stopped",
+          participantId: AI_PARTICIPANT_ID,
+        });
+      }
     });
 
     (async () => {
@@ -243,6 +253,7 @@ export function useAiParticipant({
       await provider.connect();
       const track = provider.getAudioTrack();
       if (track) await attachTrack(track);
+      recordSessionEvent({ type: "track_replaced", participantId: AI_PARTICIPANT_ID });
       setStatus(provider.status);
     } catch (e) {
       console.error('[useAiParticipant] 再接続に失敗', e);

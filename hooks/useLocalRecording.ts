@@ -5,6 +5,12 @@ import type { Room, RemoteParticipant, RemoteTrack, RemoteTrackPublication } fro
 import { RoomEvent, Track } from 'livekit-client';
 import { describeDisplayMediaFailure, isDisplayMediaSupported } from '@/lib/media-device-error';
 import type { AudioTrackRegistry } from '@/lib/audio-track-registry';
+import {
+  startSessionClock,
+  stopSessionClock,
+  recordSessionEvent,
+  summarizeSessionEvents,
+} from '@/lib/session-clock';
 
 /**
  * ts-ebml (と Buffer polyfill) をロードする。
@@ -179,6 +185,7 @@ export function useLocalRecording({
     r.remoteAudioNodes.clear();
     r.audioContext?.close().catch(() => {});
     resourcesRef.current = null;
+    stopSessionClock();
   }, []);
 
   const downloadBlob = useCallback(
@@ -580,6 +587,9 @@ export function useLocalRecording({
     });
     const finalize = async (reason: 'stop' | 'error') => {
       if (finalized) return;
+      recordSessionEvent({ type: "recording_stopped", reason });
+      console.info("[session-clock]", summarizeSessionEvents());
+      if (finalized) return;
       finalized = true;
       let result: Blob | null = null;
       try {
@@ -659,6 +669,10 @@ export function useLocalRecording({
       );
     });
 
+    // 収録ファイルの先頭を 0 とする単調増加クロックをここで確定する
+    // (MediaRecorder.start() の直前。要件 FR-008 / NFR-005)
+    startSessionClock();
+    recordSessionEvent({ type: "recording_started" });
     recorder.start(1000);
     setStartedAt(Date.now());
     setIsRecording(true);
