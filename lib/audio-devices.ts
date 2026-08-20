@@ -80,7 +80,8 @@ export function findCablePlaybackForCapture(
 export async function detectSignal(
   deviceId: string,
   durationMs: number,
-  threshold = 0.02
+  threshold = 0.015,
+  onProgress?: (level: number, remainingMs: number) => void
 ): Promise<{ detected: boolean; peak: number; error?: string }> {
   let stream: MediaStream | null = null;
   try {
@@ -93,10 +94,10 @@ export async function detectSignal(
       },
     });
     const track = stream.getAudioTracks()[0];
-    if (!track) return { detected: false, peak: 0, error: 'トラックを取得できませんでした' };
+    if (!track) return { detected: false, peak: 0, error: "トラックを取得できませんでした" };
 
     const ctx = new AudioContext();
-    if (ctx.state !== 'running') await ctx.resume().catch(() => {});
+    if (ctx.state !== "running") await ctx.resume().catch(() => {});
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
     const src = ctx.createMediaStreamSource(new MediaStream([track]));
@@ -105,11 +106,16 @@ export async function detectSignal(
 
     let peak = 0;
     const started = performance.now();
+    // 検出したら即座に打ち切る。利用者を待たせないことと、
+    // 反応時間で測定窓を食い潰して誤検出になるのを防ぐため。
     while (performance.now() - started < durationMs) {
       analyser.getFloatTimeDomainData(buf as Float32Array<ArrayBuffer>);
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-      peak = Math.max(peak, Math.sqrt(sum / buf.length));
+      const rms = Math.sqrt(sum / buf.length);
+      peak = Math.max(peak, rms);
+      onProgress?.(rms, Math.max(0, durationMs - (performance.now() - started)));
+      if (peak >= threshold) break;
       await new Promise((r) => setTimeout(r, 100));
     }
     src.disconnect();

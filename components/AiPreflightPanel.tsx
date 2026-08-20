@@ -69,6 +69,12 @@ export function AiPreflightPanel({
   const [checks, setChecks] = useState<Record<CheckId, CheckResult>>(INITIAL);
   const [running, setRunning] = useState(false);
   const [prompt, setPrompt] = useState<string | null>(null);
+  const [probeLevel, setProbeLevel] = useState(0);
+  const [probeLeft, setProbeLeft] = useState(0);
+  const onProbe = (level: number, remainingMs: number) => {
+    setProbeLevel(level);
+    setProbeLeft(Math.ceil(remainingMs / 1000));
+  };
 
   const set = (id: CheckId, r: CheckResult) =>
     setChecks((prev) => ({ ...prev, [id]: r }));
@@ -138,8 +144,8 @@ export function AiPreflightPanel({
 
       // 4. ChatGPT の声がアプリに届くか（ユーザー操作が要る）
       set('receive', { status: 'running' });
-      setPrompt('ChatGPT に「10秒くらい何か話して」とテキストで打ち込んでください');
-      const recv = await detectSignal(sourceDeviceId, 10000);
+      setPrompt('ChatGPT にテキストで「何か話して」と打ち込んでください（検出した時点で次へ進みます）');
+      const recv = await detectSignal(sourceDeviceId, 15000, 0.015, onProbe);
       setPrompt(null);
       if (!recv.detected) {
         set('receive', {
@@ -171,8 +177,8 @@ export function AiPreflightPanel({
 
         // 5. あなたの声が ChatGPT へ届くか
         set('send', { status: 'running' });
-        setPrompt('5秒間、何か話してください');
-        const sent = await detectSignal(monitor.deviceId, 5000);
+        setPrompt('声が届いているか測ります。何か話してください（検出した時点で次へ進みます）');
+        const sent = await detectSignal(monitor.deviceId, 15000, 0.015, onProbe);
         setPrompt(null);
         if (!sent.detected) {
           set('send', {
@@ -188,7 +194,7 @@ export function AiPreflightPanel({
         set('loop', { status: 'running' });
         setPrompt('もう一度 ChatGPT に話させてください。あなたは黙っていてください');
         setSendEnabled(false);
-        const leak = await detectSignal(monitor.deviceId, 8000, 0.015);
+        const leak = await detectSignal(monitor.deviceId, 8000, 0.015, onProbe);
         setSendEnabled(true);
         setPrompt(null);
         if (leak.detected) {
@@ -268,6 +274,21 @@ export function AiPreflightPanel({
         <p className="mt-2 rounded-lg bg-amber-900/40 px-3 py-2 text-xs text-amber-100">
           {prompt}
         </p>
+      )}
+
+      {running && prompt && (
+        <div className="mt-1">
+          <div className="mb-1 flex items-center justify-between text-[11px] text-stone-400">
+            <span>検出レベル</span>
+            <span>残り {probeLeft} 秒</span>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded bg-stone-800">
+            <div
+              className="h-full rounded bg-emerald-500 transition-[width] duration-100"
+              style={{ width: `${Math.round(Math.min(probeLevel * 4, 1) * 100)}%` }}
+            />
+          </div>
+        </div>
       )}
     </div>
   );
