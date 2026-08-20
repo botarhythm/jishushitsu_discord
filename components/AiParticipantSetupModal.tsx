@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Track, type Room } from 'livekit-client';
 import {
-  AI_AVATAR_PRESETS,
   aiWiringFingerprint,
   isLoopbackCaptureLabel,
   type AiParticipantConfig,
@@ -409,10 +408,8 @@ export function AiParticipantSetupModal({
     return findCableMonitorInput(sink, inputs)?.deviceId === config.sourceDeviceId;
   }, [config.sinkDeviceId, config.sourceDeviceId, inputs, outputs]);
 
-  const loopSafe =
-    !config.sinkDeviceId || loopCheck.state === 'passed' || manualConfirm;
   const canEnable =
-    !!config.sourceDeviceId && loopSafe && !micCollision && !sourceIsSinkMonitor && !isRecording;
+    !!config.sourceDeviceId && !micCollision && !sourceIsSinkMonitor && !isRecording;
 
   // ボタンが押せない理由を明示する（グレーアウトの理由が分からない状態を作らない）
   const enableBlockReason = !config.sourceDeviceId
@@ -421,9 +418,7 @@ export function AiParticipantSetupModal({
       ? "上の警告を解消してください"
       : isRecording
         ? "録画中は有効化できません（録画を止めてから）"
-        : !loopSafe
-          ? "先に「検査を実行」で自己ループ検査を通してください"
-          : null;
+        : null;
 
   const set = (patch: Partial<AiParticipantConfig>) => {
     const wiringChanged = 'sourceDeviceId' in patch || 'sinkDeviceId' in patch;
@@ -498,38 +493,17 @@ export function AiParticipantSetupModal({
           )}
         </div>
 
-        {/* 表示名・アバター */}
-        <div className="mb-4 grid grid-cols-2 gap-3">
-          <label className="block text-xs text-stone-400">
-            表示名
-            <input
-              type="text"
-              value={config.displayName}
-              maxLength={32}
-              onChange={(e) => set({ displayName: e.target.value })}
-              className="mt-1 w-full rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-sm text-stone-100"
-            />
-          </label>
-          <div className="block text-xs text-stone-400">
-            アバター
-            <div className="mt-1 flex gap-1">
-              {AI_AVATAR_PRESETS.map((a) => (
-                <button
-                  key={a}
-                  onClick={() => set({ avatar: a })}
-                  className={`flex h-8 w-8 items-center justify-center rounded-lg text-lg ${
-                    config.avatar === a
-                      ? 'bg-amber-600/60 ring-1 ring-amber-400'
-                      : 'bg-stone-800 hover:bg-stone-700'
-                  }`}
-                  aria-label={`アバター ${a}`}
-                >
-                  {a}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
+        {/* 表示名。アバターは中央のエネルギー球で表現するため選択欄は持たない */}
+        <label className="mb-4 block text-xs text-stone-400">
+          表示名
+          <input
+            type="text"
+            value={config.displayName}
+            maxLength={32}
+            onChange={(e) => set({ displayName: e.target.value })}
+            className="mt-1 w-full rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-sm text-stone-100"
+          />
+        </label>
 
         {/* 音声ソース選択 */}
         <label className="mb-1 block text-xs text-stone-400">
