@@ -1,4 +1,5 @@
 import { getSharedAudioContext } from '@/lib/audio-runtime';
+import { isLoopbackCaptureLabel } from '@/lib/studio-participants';
 /**
  * 音声デバイスの列挙と判定のユーティリティ。
  *
@@ -131,4 +132,43 @@ export async function detectSignal(
   } finally {
     stream?.getTracks().forEach((t) => t.stop());
   }
+}
+
+/* ── 「何を選べばよいか」を名指しするための推定 ──────────────────
+ * 収録前チェックが失敗したとき「選んでください」ではなく
+ * 「〈このデバイス〉を選んでください」と言えるようにする。
+ * 確実に当てられるとは限らないので、見つからなければ呼び出し側が
+ * 従来どおりの一般的な説明にフォールバックする。
+ */
+
+/** AI 音声ソース（ChatGPT の声の入口）の推奨。定番は CABLE Output */
+export function suggestAiSourceInput(inputs: DeviceOption[]): DeviceOption | null {
+  const cableOutput = inputs.find((d) => normalizeLabel(d.label).startsWith('cable output'));
+  if (cableOutput) return cableOutput;
+  // Voicemeeter Out B1 は「こちらの声を ChatGPT へ送る」経路の監視用であり、
+  // AI 音声ソースとして選ぶと自分の声を AI の声として録ってしまう。
+  return (
+    inputs.find(
+      (d) => d.recommended && !normalizeLabel(d.label).includes('voicemeeter out b')
+    ) ?? null
+  );
+}
+
+/** 通話マイクの推奨。仮想デバイスでも録音ループバックでもない最初の入力 */
+export function suggestPhysicalMicInput(inputs: DeviceOption[]): DeviceOption | null {
+  return (
+    inputs.find(
+      (d) =>
+        !isVirtualCableLabel(d.label) &&
+        !isLoopbackCaptureLabel(d.label) &&
+        !normalizeLabel(d.label).startsWith('default')
+    ) ?? null
+  );
+}
+
+/** ChatGPT への送出先の推奨。定番は Voicemeeter Input */
+export function suggestSendSinkOutput(outputs: DeviceOption[]): DeviceOption | null {
+  const vm = outputs.find((d) => normalizeLabel(d.label).startsWith('voicemeeter input'));
+  if (vm) return vm;
+  return outputs.find((d) => d.recommended) ?? null;
 }

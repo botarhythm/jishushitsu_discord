@@ -5,6 +5,9 @@ import {
   detectSignal,
   findCableMonitorInput,
   findCablePlaybackForCapture,
+  suggestAiSourceInput,
+  suggestPhysicalMicInput,
+  suggestSendSinkOutput,
   type DeviceOption,
 } from '@/lib/audio-devices';
 import { isLoopbackCaptureLabel } from '@/lib/studio-participants';
@@ -92,10 +95,13 @@ export function AiPreflightPanel({
       // 1. AI 音声ソースを開けるか
       set('source', { status: 'running' });
       if (!sourceDeviceId) {
+        const suggested = suggestAiSourceInput(inputs);
         set('source', {
           status: 'fail',
           detail: '未選択',
-          fix: '① で AI 音声ソースを選んでください',
+          fix: suggested
+            ? `① で「${suggested.label}」を選んでください`
+            : '① で AI 音声ソースを選んでください（ChatGPT の出力先に指定した仮想ケーブルの録音側）',
         });
         return;
       }
@@ -116,7 +122,9 @@ export function AiPreflightPanel({
         set('mic', {
           status: 'fail',
           detail: '未取得',
-          fix: '通話マイクを選び直してください（マイクが OFF になっていませんか）',
+          fix: suggestPhysicalMicInput(inputs)
+            ? `通話マイクに「${suggestPhysicalMicInput(inputs)!.label}」を選び直してください（マイクが OFF になっていませんか）`
+            : '通話マイクを選び直してください（マイクが OFF になっていませんか）',
         });
         return;
       }
@@ -124,7 +132,9 @@ export function AiPreflightPanel({
         set('mic', {
           status: 'fail',
           detail: micLabel,
-          fix: '録音デバイスが選ばれています。物理マイク（マイク配列など）に変更してください',
+          fix: suggestPhysicalMicInput(inputs)
+            ? `録音デバイスが選ばれています。「${suggestPhysicalMicInput(inputs)!.label}」に変更してください`
+            : '録音デバイスが選ばれています。物理マイク（マイク配列など）に変更してください',
         });
         return;
       }
@@ -138,7 +148,11 @@ export function AiPreflightPanel({
         set('mixer', { status: 'skip', detail: '有効化後に確認します' });
       } else
       if (!sinkDeviceId) {
-        set('mixer', { status: 'skip', detail: '送出先が未設定' });
+        const suggested = suggestSendSinkOutput(outputs);
+        set('mixer', {
+          status: 'skip',
+          detail: suggested ? `送出先が未設定（② で「${suggested.label}」）` : '送出先が未設定',
+        });
       } else if (!mixerRunning || !mixerHasMic) {
         set('mixer', {
           status: 'fail',
@@ -178,7 +192,9 @@ export function AiPreflightPanel({
           set('send', {
             status: 'fail',
             detail: '監視入力を特定できません',
-            fix: '送出先の選択を確認してください',
+            fix: suggestSendSinkOutput(outputs)
+              ? `② の送出先に「${suggestSendSinkOutput(outputs)!.label}」を選んでください`
+              : '送出先の選択を確認してください',
           });
           return;
         }
