@@ -783,8 +783,19 @@ export function AiParticipantSetupModal({
                 </span>
                 <span>
                   あなたのマイク:{" "}
-                  <b className={mixerDiag.localMic ? "text-stone-200" : "text-red-300"}>
-                    {mixerDiag.localMic?.label || (config.sendLocalMic === false ? "送らない設定" : "未接続")}
+                  <b
+                    className={
+                      mixerDiag.localMic
+                        ? "text-stone-200"
+                        : config.sendLocalMic === false
+                          ? "text-stone-400"
+                          : "text-red-300"
+                    }
+                  >
+                    {mixerDiag.localMic?.label ||
+                      (config.sendLocalMic === false
+                        ? "VoiceMeeter が送信中 (アプリからは送らない)"
+                        : "未接続")}
                   </b>
                 </span>
                 <span>

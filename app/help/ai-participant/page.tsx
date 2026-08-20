@@ -281,11 +281,26 @@ export default function AiParticipantHelpPage() {
             （AI 参加者の設定）を開きます。
           </p>
           <AppSettingsTable />
-          <p className="mt-4 text-sm text-stone-400">
-            さらに、下にある2つのチェックボックスを
-            <strong className="text-stone-200">両方オン</strong>にしてください。
-            手順5・7で VoiceMeeter と Windows に任せた分を、アプリ側で二重に鳴らさないための設定です。
+          <p className="mt-4 text-pretty text-sm leading-relaxed text-stone-400">
+            下に2つのチェックボックスがあります。手順5・7で VoiceMeeter と Windows に
+            任せた分を、アプリ側で二重にやらないための設定です。
+            <strong className="text-stone-200">手で触る必要はほとんどありません</strong>。
           </p>
+          <ul className="mt-3 space-y-2 text-sm text-stone-300">
+            <Item>
+              <strong>1つ目（あなたの声）</strong>は
+              <strong className="text-stone-200">手順9の検査が自動で判定・設定します</strong>。
+              放っておいてください。
+            </Item>
+            <Item>
+              <strong>2つ目（ChatGPT の声）</strong>だけ手動です。
+              <strong className="text-stone-200">♪試聴テスト</strong>を押して音が聞こえたら、
+              手順7のモニタが効いているのでオンにします。聞こえなければオフのままにします。
+              <br />
+              このボタンは AI 参加者が OFF のときだけ押せます — ON のままだと
+              アプリ自身の再生と聞き分けられないためです。
+            </Item>
+          </ul>
           <Shot
             src="/help/ai-participant/app-settings.png"
             caption="設定が済んだ状態。★印は自動で見つけた推奨デバイス、状態が🟢接続済みなら成立している"
@@ -297,30 +312,81 @@ export default function AiParticipantHelpPage() {
             実際に収録するアドレスで一度設定してください。別のPCやブラウザ、
             シークレットウィンドウでも同様に設定し直しが必要です。
           </Callout>
+          <Callout tone="note" title="「VoiceMeeter が送信中」は正常です">
+            AI を有効にすると、送出モニタの下に「音声処理 / あなたのマイク / 相手の声」
+            という診断行が出ます。
+            <strong className="text-stone-200">
+              あなたのマイクが「VoiceMeeter が送信中 (アプリからは送らない)」
+            </strong>
+            なのは正しい状態です。あなたの声は手順5の配線で ChatGPT に届いており、
+            アプリから送ると二重になるので止めてあります。「相手の声: 0人」も、
+            リモート参加者がいなければ 0 で正常です。
+          </Callout>
           <Callout tone="note" title="開いた直後は「無効」と出ます">
             状態表示の「無効」は AI 参加者がまだ OFF という意味で、異常ではありません。
             デバイスを選んでから有効化してください。
           </Callout>
         </Section>
 
-        <Section n={9} title="動作を確認する">
+        <Section n={9} title="収録前チェックを通す">
           <p className="mb-4 text-pretty text-sm leading-relaxed text-stone-400">
             設定画面の<strong className="text-stone-200">「すべて確認」</strong>
-            を押すと、6項目を順に検査して、崩れている箇所と対処法を表示します。
-            収録を始める前に毎回押す運用をおすすめします。
+            を押すと、経路を6項目に分けて順に検査し、崩れている箇所と対処法を
+            デバイス名つきで表示します。ほとんどが自動で、あなたがすることは2つだけです。
           </p>
           <Steps
             items={[
-              'コントロールバーの 🤖 を押して AI 参加者を ON にする',
-              'ステージ下部にエネルギー球が現れることを確認',
-              'ChatGPT に話しかけ、返答で球が揺らぐことを確認',
-              '🎥 で録画し、保存された動画に両方の声が入っていることを確認',
+              '「すべて確認」を押す',
+              '「8秒ほど話し続けてください」と出たら、普通の声で話し続ける（声の経路を実測しています）',
+              '「お静かに」と出たら、7秒ほど黙る（自己ループを自動検査しています）',
             ]}
           />
+          <Callout tone="note" title="ChatGPT を喋らせる必要はありません">
+            自己ループの検査は、アプリがテスト用の音を仮想ケーブルへ流して自動で判定します。
+            ChatGPT の音声利用の上限を消費しません。
+            <br />
+            声の経路の検査では、マイクの音量と送出先の音を照合して
+            <strong className="text-stone-200">本当にあなたの声かどうか</strong>を確かめます。
+            確かめられなかったときは設定を変えずに不合格にするので、
+            静かな場所で、はっきり話し続けてください。
+          </Callout>
+          <Check>
+            6項目すべてに ✔ が付けば設定完了です。この配線が「検証済み」として記録され、
+            次回からは講師ダッシュボードの
+            <strong className="text-stone-200">「🤖 ChatGPTつきで収録モードへ」</strong>
+            のワンクリックで起動できます。
+          </Check>
+          <Callout tone="warn" title="「−」が付いた項目があれば未完了です">
+            「−」は検査を飛ばした印で、合格ではありません。②の送出先が未設定だと
+            後半3項目が飛ばされ、検証済みにもなりません。表示された対処法のとおりに
+            設定してから、もう一度「すべて確認」を押してください。
+          </Callout>
+        </Section>
+
+        <Section n={10} title="収録する">
+          <Steps
+            items={[
+              'ダッシュボードの「🤖 ChatGPTつきで収録モードへ」で収録モードに入る',
+              'ステージ下部にエネルギー球が現れることを確認',
+              'ChatGPT に話しかけ、返答で球が揺らぐことを確認',
+              'コントロールバーの 🎥 を押して録画を開始する',
+            ]}
+          />
+          <Callout tone="warn" title="AI の ON/OFF は録画を始める前に">
+            録画中は AI 参加者の切替も収録前チェックもできません（操作すると理由が表示されます）。
+            録画開始時点の音声経路で固定されるため、途中で AI を足すと
+            <strong className="text-stone-200">音声が二重に録音されてしまう</strong>からです。
+            AI を出すかどうかは、🎥 を押す前に決めてください。
+          </Callout>
+          <Callout tone="note" title="ボタンを押しても録画は始まりません">
+            「🤖 ChatGPTつきで収録モードへ」は
+            <strong className="text-stone-200">収録用のレイアウトに入るだけ</strong>です。
+            録画の開始は常に 🎥 です。録画中は 🎥 が赤く点滅します。
+          </Callout>
           <Check>ここまで通れば収録可能です。</Check>
         </Section>
 
-        <Section n={10} title="うまくいかないときは">
+        <Section n={11} title="うまくいかないときは">
           <dl className="space-y-5">
             <Trouble q="ChatGPT がこちらの声に反応しない">
               マイクボタンにカーソルを合わせると、ChatGPT が実際に使っているデバイス名が出ます。
@@ -356,6 +422,12 @@ export default function AiParticipantHelpPage() {
               Bluetooth はマイクを使った瞬間にハンズフリー通話モードへ切り替わり、
               音質が電話並みに落ちます（デバイス一覧に「〜 Hands-Free」として別に並んでいるのがそれです）。
               収録に使う声は物理マイク（マイク配列）から録ってください。
+            </Trouble>
+            <Trouble q="「声が届いていません」と出るが、実際は届いている気がする">
+              検査は音の有無ではなく、マイクの波形と送出先の波形を照合しています。
+              ChatGPT の返答・動画・他アプリの音が鳴っていると照合できず不合格になります。
+              それらを止めて、静かな場所で8秒間はっきり話し続けてください。
+              なお不合格でも<strong className="text-stone-200">設定は変更されません</strong>。
             </Trouble>
             <Trouble q="設定が壊れて何をしても直らない">
               音量ミキサー最下部の「リセット」でアプリ別設定を全消去してから、
