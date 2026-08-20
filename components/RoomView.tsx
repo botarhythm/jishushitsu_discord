@@ -898,6 +898,7 @@ function RoomInner({
           aiEnabled={aiEnabled}
           aiError={aiEnabled && (aiStatus === 'error' || aiPublishFailed)}
           onOpenAiSetup={() => setAiSetupOpen(true)}
+          onOpenDeviceSettings={openDeviceSettings}
           recordingUnsupported={!isLocalRecordingSupported}
           recordingQuality={recordingQuality}
           layout={studioLayout}

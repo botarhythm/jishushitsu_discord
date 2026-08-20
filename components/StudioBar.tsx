@@ -25,6 +25,8 @@ interface StudioBarProps {
   aiError?: boolean;
   /** AI 参加者セットアップモーダルを開く */
   onOpenAiSetup?: () => void;
+  /** マイク/カメラのデバイス設定を開く（収録中に入力デバイスを直すため） */
+  onOpenDeviceSettings?: () => void;
   /** true の間は録画ボタンを無効化する (iPhone等 getDisplayMedia 非対応環境向け) */
   recordingUnsupported?: boolean;
   recordingQuality: RecordingQuality;
@@ -70,6 +72,7 @@ export function StudioBar(props: StudioBarProps) {
     aiEnabled = false,
     aiError = false,
     onOpenAiSetup,
+    onOpenDeviceSettings,
     recordingUnsupported = false,
     recordingQuality,
     layout,
@@ -244,6 +247,12 @@ export function StudioBar(props: StudioBarProps) {
             </select>
           );
         })}
+
+        {onOpenDeviceSettings && (
+          <BarButton label="マイク/カメラのデバイス設定" onClick={onOpenDeviceSettings}>
+            ⚙️
+          </BarButton>
+        )}
 
         {/* AI 参加者 (ChatGPT) セットアップ */}
         {onOpenAiSetup && (
