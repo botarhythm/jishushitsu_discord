@@ -127,7 +127,7 @@ export default function AiParticipantHelpPage() {
           <DeviceTable
             caption="再生タブ"
             rows={[
-              ['ヘッドホン', 'keep'],
+              ['スピーカー / ヘッドホン（普段聴くもの）', 'keep'],
               ['CABLE Input', 'keep'],
               ['Voicemeeter Input', 'keep'],
               ['CABLE In 16ch', 'disable'],
@@ -135,15 +135,22 @@ export default function AiParticipantHelpPage() {
             ]}
           />
           <Shot
+            src="/help/ai-participant/sound-playback-top.png"
+            caption="再生タブの上部。スピーカーが既定、Bluetooth や未接続のヘッドホンはそのまま残してよい"
+          />
+          <Shot
             src="/help/ai-participant/sound-playback.png"
-            caption="無効化が済んだ再生タブ（一覧はスクロールするので全部は写っていません）。なお CABLE Input に付いている受話器アイコンは手順4で外します"
+            caption="同じ再生タブの下部。CABLE Input が「準備完了」で受話器アイコンが付いていなければ正しい"
           />
           <Shot
             src="/help/ai-participant/sound-recording.png"
             caption="無効化が済んだ録音タブ。Voicemeeter Out B1 に受話器アイコンが付いている"
           />
           <Check>
-            録音タブに残るのが3つ、再生タブに残るのが3つになっていれば成功です。
+            録音タブに「マイク配列 / CABLE Output / Voicemeeter Out B1」の3つ、再生タブに
+            「普段聴くデバイス / CABLE Input / Voicemeeter Input」が残っていれば成功です。
+            Bluetooth や未接続のヘッドホンが並んでいるのは構いません（紛らわしいのは
+            名前が似た仮想デバイスだけです）。
           </Check>
         </Section>
 
