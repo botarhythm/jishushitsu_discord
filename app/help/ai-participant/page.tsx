@@ -238,13 +238,27 @@ export default function AiParticipantHelpPage() {
             items={[
               'mmsys.cpl → 録音タブ → CABLE Output → プロパティ',
               '「聴く」タブを開く',
-              '「このデバイスを聴く」にチェックし、再生先にヘッドホンを選ぶ',
+              '「このデバイスを聴く」にチェックし、再生先に「既定の再生デバイス」を選ぶ',
             ]}
           />
+          <Callout tone="warn" title="再生先はデバイス名で指定しないこと">
+            ここでヘッドホンなど特定のデバイスを名指しすると、
+            <strong className="text-stone-200">
+              そのデバイスを外したときに ChatGPT の声が完全に聞こえなくなります
+            </strong>
+            。存在しない出口へ流し続けるためで、原因も分かりにくいです。
+            「既定の再生デバイス」にしておけば、そのとき使っている出力へ自動で追随します。
+          </Callout>
           <Check>
-            ChatGPT の声がヘッドホンから聞こえるようになれば成功です。
+            ChatGPT の声が聞こえるようになれば成功です。
             収録していなくても ChatGPT を普段どおり使えます。
           </Check>
+          <Callout tone="note" title="スピーカーで会話はしないこと">
+            聴くだけなら構いませんが、スピーカーのまま ChatGPT と音声会話すると、
+            ChatGPT の声を物理マイクが拾って ChatGPT 自身へ返ります
+            （マイクは手順5で常時 B1 = ChatGPT の耳につながっているため）。
+            ChatGPT が自分の声に反応して話を止めます。会話するときはヘッドホンを使ってください。
+          </Callout>
         </Section>
 
         <Section n={8} title="自習室アプリ側を設定する">
