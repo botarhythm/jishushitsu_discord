@@ -293,6 +293,14 @@ export default function InstructorDashboard({
                     ? '前回の音声設定で AI 参加者をそのまま呼び出します。'
                     : '初回のみ音声デバイスの設定画面が開きます。'}
                 </p>
+                <a
+                  href="/help/ai-participant"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 block text-[11px] font-medium text-amber-500 underline-offset-4 hover:underline"
+                >
+                  初めて設定する方へ — セットアップ手順を開く
+                </a>
               </>
             )}
           </section>
