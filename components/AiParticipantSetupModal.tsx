@@ -28,7 +28,7 @@ interface AiParticipantSetupModalProps {
    * 古い state で他フィールドを巻き戻す事故の恒久対策)。
    * @returns localStorage へ保存できたか
    */
-  onPatchConfig: (patch: Partial<AiParticipantConfig>) => boolean;
+  onPatchConfig: (patch: Partial<AiParticipantConfig>) => Promise<boolean>;
   enabled: boolean;
   onChangeEnabled: (enabled: boolean) => void;
   aiStatus: AiProviderStatus;
@@ -87,6 +87,13 @@ export function AiParticipantSetupModal({
   const [manualConfirm, setManualConfirm] = useState(false);
   // localStorage へ書けなかった (プライベートモード等)。設定がタブ限りになる警告
   const [persistFailed, setPersistFailed] = useState(false);
+  // プリフライト完了時に「検査した配線」と「今の配線」の一致を確かめるための現在値
+  const configRef = useRef(config);
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
+  // 音を出す・測る検査は同時に1つだけ (送出ミュートの取り合い防止。Codex 第2巡 #5)
+  const [probeBusy, setProbeBusy] = useState(false);
   // 「試聴テスト」(Windows 常時モニタの確認) の再生中フラグ
   const [listenTestPlaying, setListenTestPlaying] = useState(false);
 
@@ -294,6 +301,10 @@ export function AiParticipantSetupModal({
   // この検査中は ChatGPT 入力ミキサーはまだ動いていないため、送出先で音が観測されたら
   // それは OS 側の配線 (「このデバイスを聴く」等) による漏れを意味する。
   const runLoopCheck = useCallback(async () => {
+    // UI の disabled に頼らない論理ガード (Codex 第2巡 #6: 録画中のトーンは
+    // 収録と LiveKit 配信に混入する)
+    if (isRecording || probeBusy) return;
+    setProbeBusy(true);
     void resumeAllAudioContexts();
     const sink = outputs.find((d) => d.deviceId === config.sinkDeviceId);
     if (!sink) {
@@ -373,8 +384,9 @@ export function AiParticipantSetupModal({
     } finally {
       setInputMixerSendEnabled(true);
       stream?.getTracks().forEach((t) => t.stop());
+      setProbeBusy(false);
     }
-  }, [inputs, outputs, config.sinkDeviceId, config.sourceDeviceId, setInputMixerSendEnabled]);
+  }, [inputs, outputs, config.sinkDeviceId, config.sourceDeviceId, setInputMixerSendEnabled, isRecording, probeBusy]);
 
   // 送出先(ChatGPTの耳)の経路をAI音声ソースに選んでしまう取り違えの検出。
   // これをやると自分たちの声を「AIの声」として取り込むことになる。
@@ -399,12 +411,14 @@ export function AiParticipantSetupModal({
 
   const set = (patch: Partial<AiParticipantConfig>) => {
     const wiringChanged = 'sourceDeviceId' in patch || 'sinkDeviceId' in patch;
-    const persisted = onPatchConfig({
+    // sendLocalMic は送出経路そのものを切り替えるため、変更したら検証済みを
+    // 落として再検証に戻す (Codex 第2巡 #8。monitorAiLocally は聞こえ方だけ
+    // なので落とさない)
+    const invalidates = wiringChanged || 'sendLocalMic' in patch;
+    void onPatchConfig({
       ...patch,
-      // 配線が変わったら検証済みフラグを落とす（次回もセットアップ必須に戻す）
-      ...(wiringChanged ? { validatedFingerprint: null } : {}),
-    });
-    setPersistFailed(!persisted);
+      ...(invalidates ? { validatedFingerprint: null } : {}),
+    }).then((persisted) => setPersistFailed(!persisted));
     if (wiringChanged) {
       setLoopCheck({ state: 'idle' });
       setManualConfirm(false);
@@ -417,13 +431,19 @@ export function AiParticipantSetupModal({
    * (チェックは任意という運用) が、その場合は次回のワンクリック起動を許可しない
    * — 検証していない配線を「検証済み」として記録しない (Codex レビュー #6)。
    */
-  const handleEnable = () => {
+  const handleEnable = async () => {
     void resumeAllAudioContexts();
     const verified = manualConfirm || loopCheck.state === 'passed';
-    onPatchConfig({
+    const persisted = await onPatchConfig({
       validatedFingerprint: verified ? aiWiringFingerprint(config) : null,
     });
     onChangeEnabled(true);
+    if (!persisted) {
+      // 有効化はする (今この場では使える) が、保存できていないことを見せてから
+      // 閉じてもらう。黙って閉じると次回「設定が消えた」に見える
+      setPersistFailed(true);
+      return;
+    }
     // 設定完了なのでそのまま閉じる（状態は StudioBar の 🤖 ボタンとステージのタイルで分かる）
     onClose();
   };
@@ -662,7 +682,9 @@ export function AiParticipantSetupModal({
             <br />
             <button
               type="button"
-              disabled={listenTestPlaying || !config.sourceDeviceId}
+              disabled={
+                listenTestPlaying || !config.sourceDeviceId || enabled || isRecording || probeBusy
+              }
               onClick={() => {
                 // AI 音声ソース (CABLE Output 等) の再生側へテストトーンを流す。
                 // Windows の「このデバイスを聴く」が生きていれば音が聞こえるはず。
@@ -680,7 +702,9 @@ export function AiParticipantSetupModal({
               {listenTestPlaying ? '♪ 再生中…' : '♪ 試聴テスト (2秒)'}
             </button>{' '}
             <span className="text-stone-500">
-              音が聞こえたら Windows 側モニタは生きています → チェックON
+              {enabled
+                ? '試聴テストは AI を OFF にしてから（アプリ自身の再生と聞き分けられないため）'
+                : '音が聞こえたら Windows 側モニタは生きています → チェックON'}
             </span>
           </span>
         </label>
@@ -754,9 +778,22 @@ export function AiParticipantSetupModal({
             mixerRunning={mixerDiag?.contextState === "running"}
             mixerHasMic={!!mixerDiag?.localMic}
             aiEnabled={enabled}
+            micDeviceId={micInfo?.deviceId ?? null}
             setSendEnabled={setInputMixerSendEnabled}
             onAutoConfig={(patch) => set(patch)}
-            onAllPassed={() => setManualConfirm(true)}
+            disabledReason={
+              isRecording
+                ? '録画中は検査できません（テストトーンが収録と配信に入るため）'
+                : probeBusy
+                  ? '別の検査が実行中です'
+                  : null
+            }
+            onBusyChange={setProbeBusy}
+            onAllPassed={(wiringFp) => {
+              // 検査中に配線が変わっていたら (別タブ・select 操作)、その結果で
+              // 新しい配線を検証済みにしない (Codex 第2巡 #4)
+              if (wiringFp === aiWiringFingerprint(configRef.current)) setManualConfirm(true);
+            }}
           />
         </div>
         <div className="mb-4 rounded-xl border border-stone-700 bg-stone-800/60 p-3">
@@ -766,7 +803,9 @@ export function AiParticipantSetupModal({
             </span>
             <button
               onClick={() => void runLoopCheck()}
-              disabled={loopCheck.state === 'running' || !config.sinkDeviceId}
+              disabled={
+                loopCheck.state === 'running' || !config.sinkDeviceId || isRecording || probeBusy
+              }
               className="rounded-lg bg-stone-700 px-3 py-1 text-xs text-stone-200 hover:bg-stone-600 disabled:opacity-40"
             >
               {loopCheck.state === 'running'
@@ -851,7 +890,7 @@ export function AiParticipantSetupModal({
             </button>
           ) : (
             <button
-              onClick={handleEnable}
+              onClick={() => void handleEnable()}
               disabled={!canEnable}
               className="ml-auto rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-40"
             >

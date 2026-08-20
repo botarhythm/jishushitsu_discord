@@ -277,20 +277,41 @@ export function saveAiConfig(config: AiParticipantConfig): boolean {
 }
 
 /**
+ * 保存に失敗したとき (プライベートモード等) のメモリ上の正本。
+ * localStorage が使えない環境でも、同一タブ内の連続編集が
+ * 「古い保存値との再マージ」で消えないようにする (Codex 第2巡 #9)。
+ */
+let unpersistedConfig: AiParticipantConfig | null = null;
+
+/**
  * 設定の唯一の書き込み経路。
  *
- * 保存済みの最新値を読み直してから patch だけを重ねる。呼び出し側の
+ * 保存済みの最新値 (保存不能時はメモリ正本) へ patch だけを重ねる。呼び出し側の
  * スナップショット (React の props / 別タブの古い state) が何であっても、
  * patch に含まれないフィールドは巻き戻らない。
  *
+ * load→merge→save を Web Locks で同一オリジン全タブにわたり直列化する
+ * (Codex 第2巡 #3: 同期実行だけではタブ間の交錯書き込みを防げない)。
+ * Web Locks 非対応環境 (このアプリは Region Capture の都合で Chromium 前提
+ * なので実質無い) では直列化なしで実行する。
+ *
  * @returns { config, persisted } — マージ後の全体と、localStorage へ書けたか
  */
-export function patchAiConfig(
+export async function patchAiConfig(
   patch: Partial<AiParticipantConfig>
-): { config: AiParticipantConfig; persisted: boolean } {
-  const merged = sanitizeAiConfig({ ...loadAiConfig(), ...patch });
-  const persisted = saveAiConfig(merged);
-  return { config: merged, persisted };
+): Promise<{ config: AiParticipantConfig; persisted: boolean }> {
+  const apply = (): { config: AiParticipantConfig; persisted: boolean } => {
+    const base = unpersistedConfig ?? loadAiConfig();
+    const merged = sanitizeAiConfig({ ...base, ...patch });
+    const persisted = saveAiConfig(merged);
+    unpersistedConfig = persisted ? null : merged;
+    return { config: merged, persisted };
+  };
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  if (locks?.request) {
+    return locks.request('jishushitsu.aiParticipant.v2', async () => apply());
+  }
+  return apply();
 }
 
 /** 別タブでの保存を購読する。cb には保存後の最新 config が渡る */

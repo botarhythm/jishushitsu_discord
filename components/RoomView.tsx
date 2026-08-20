@@ -256,11 +256,14 @@ function RoomInner({
    * (スナップショット全体保存による設定消失の恒久対策。Codex レビュー #3/#4)。
    * @returns localStorage へ書けたか
    */
-  const handlePatchAiConfig = useCallback((patch: Partial<AiParticipantConfig>): boolean => {
-    const { config, persisted } = patchAiConfig(patch);
-    setAiConfig(config);
-    return persisted;
-  }, []);
+  const handlePatchAiConfig = useCallback(
+    async (patch: Partial<AiParticipantConfig>): Promise<boolean> => {
+      const { config, persisted } = await patchAiConfig(patch);
+      setAiConfig(config);
+      return persisted;
+    },
+    []
+  );
   // 別タブで保存されたら読み直す (古い state のまま上書きし合う競合の遮断)
   useEffect(() => subscribeAiConfig(setAiConfig), []);
 

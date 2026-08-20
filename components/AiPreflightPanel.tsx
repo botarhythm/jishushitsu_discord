@@ -3,7 +3,9 @@
 import { useCallback, useState } from 'react';
 import {
   detectSignal,
-  playToneProbe,
+  envelopeCorrelation,
+  measureEnvelope,
+  startToneProbe,
   findCableMonitorInput,
   findCablePlaybackForCapture,
   suggestAiSourceInput,
@@ -54,10 +56,20 @@ interface Props {
   /** AI 参加者が有効か。無効時は送出経路が動いていないので該当項目を飛ばす */
   aiEnabled: boolean;
   setSendEnabled: (on: boolean) => void;
+  /** 通話マイクの deviceId (声の相関判定に使う。null なら相関判定は行わない) */
+  micDeviceId: string | null;
   /** 検査から導けた設定を自動で反映する (sendLocalMic の自動判定) */
   onAutoConfig: (patch: Partial<AiParticipantConfig>) => void;
-  /** skip を含まず全項目 pass のときだけ呼ばれる */
-  onAllPassed: () => void;
+  /** 検査を実行できない理由 (録画中・他検査の実行中)。null 以外なら実行を拒否する */
+  disabledReason: string | null;
+  /** 音を出す・測る区間の占有を親へ通知する (検査の相互排他) */
+  onBusyChange: (busy: boolean) => void;
+  /**
+   * skip を含まず全項目 pass のときだけ呼ばれる。
+   * 引数は「検査した配線」の指紋 — 呼ばれた側は現在の配線と一致するときだけ
+   * 検証済みとして扱う (検査中の配線変更で新配線を誤って検証済みにしない)
+   */
+  onAllPassed: (wiringFingerprint: string) => void;
 }
 
 /**
@@ -76,8 +88,11 @@ export function AiPreflightPanel({
   mixerRunning,
   mixerHasMic,
   aiEnabled,
+  micDeviceId,
   setSendEnabled,
   onAutoConfig,
+  disabledReason,
+  onBusyChange,
   onAllPassed,
 }: Props) {
   const [checks, setChecks] = useState<Record<CheckId, CheckResult>>(INITIAL);
@@ -96,9 +111,16 @@ export function AiPreflightPanel({
   const run = useCallback(async () => {
     const srcDev = inputs.find((d) => d.deviceId === sourceDeviceId) ?? null;
     const expectedChatGptOutput = srcDev ? findCablePlaybackForCapture(srcDev, outputs) : null;
+    // UI の disabled に頼らない論理ガード。録画中のテストトーンは収録と
+    // LiveKit 配信に混入するため、入口で拒否する (Codex 第2巡 #6)
+    if (disabledReason) return;
+    onBusyChange(true);
     setRunning(true);
     setChecks(INITIAL);
     void resumeAllAudioContexts();
+    // この実行が検査する配線。完了時にこの指紋を渡し、途中で配線が変わって
+    // いたら結果を無効にする (Codex 第2巡 #4)
+    const wiringFp = `${sourceDeviceId ?? ''}|${sinkDeviceId ?? ''}`;
     // skip を含む「全通過」は検証済みとして扱わない (skip は pass ではない。Codex レビュー #6)
     let skipped = false;
     try {
@@ -184,16 +206,38 @@ export function AiPreflightPanel({
       // 別々に名指しできる (Codex レビュー #9)。
       set('receive', { status: 'running', detail: '自動: 仮想ケーブルの疎通を確認中…' });
       if (expectedChatGptOutput) {
-        const toneP = playToneProbe(expectedChatGptOutput.deviceId, 2500);
-        const pipe = await detectSignal(sourceDeviceId, 3000, 0.02, onProbe);
-        await toneP;
-        if (!pipe.detected) {
-          set('receive', {
-            status: 'fail',
-            detail: pipe.error ?? 'テストトーンが AI 音声ソースに届きません',
-            fix: '仮想ケーブル自体が疎通していません。PC を再起動するか、VB-CABLE を再インストールしてください',
-          });
-          return;
+        // トーンが「実際に鳴り始めてから」測る。開始を待たずに測ると、
+        // トーンより先に計測が終わって偽陰性になる (Codex 第2巡 #1)
+        const probe = startToneProbe(expectedChatGptOutput.deviceId);
+        try {
+          const startedResult = await probe.started;
+          if (!startedResult.ok) {
+            set('receive', {
+              status: 'fail',
+              detail: `テストトーンを出せません: ${startedResult.error ?? '不明'}`,
+              fix: `再生デバイス「${expectedChatGptOutput.label}」が無効化されていないか確認してください`,
+            });
+            return;
+          }
+          const pipe = await detectSignal(sourceDeviceId, 3000, 0.02, onProbe);
+          if (pipe.error) {
+            set('receive', {
+              status: 'fail',
+              detail: `AI 音声ソースを開けません: ${pipe.error}`,
+              fix: '① のデバイスが他のアプリに占有されていないか確認してください',
+            });
+            return;
+          }
+          if (!pipe.detected) {
+            set('receive', {
+              status: 'fail',
+              detail: 'テストトーンが AI 音声ソースに届きません',
+              fix: '仮想ケーブル自体が疎通していません。PC を再起動するか、VB-CABLE を再インストールしてください',
+            });
+            return;
+          }
+        } finally {
+          probe.stop();
         }
       }
       setPrompt('ChatGPT にテキストで「何か話して」と打ち込んでください（検出した時点で次へ進みます）');
@@ -232,50 +276,78 @@ export function AiPreflightPanel({
 
         // 5. あなたの声が ChatGPT へ届くか + 送出経路の自動判定
         //
-        // まずアプリからの送出を止めた状態で話してもらう。それでも届いていれば
-        // VoiceMeeter が既に送っている構成なので、アプリからの送出は自動で OFF に
-        // する (二重送出の防止)。届かなければアプリ経路を試し、届けば ON にする。
-        // 「どちらの経路か」を利用者に申告させない (自己申告チェックの自動化)。
+        // まずアプリからの送出を止めた状態で話してもらい、監視入力と物理マイクの
+        // 音量包絡線の相関を取る。相関が高ければ「本人の声が VoiceMeeter 経由で
+        // 届いている」と確定でき、sendLocalMic を自動で OFF にする。
+        // 音の有無 (RMS 閾値) だけでは ChatGPT の返答・他人の声・環境音と
+        // 区別できないため、相関が取れないときは設定を自動変更しない
+        // (Codex 第2巡 #7)。
         set('send', { status: 'running' });
         setSendEnabled(false);
-        setPrompt('声の経路を判定します。何か話してください（検出した時点で次へ進みます）');
-        const viaExternal = await detectSignal(monitor.deviceId, 12000, 0.015, onProbe);
-        if (viaExternal.error) {
+        setPrompt('声の経路を判定します。8秒ほど話し続けてください（静かな場所で）');
+        const micEnvP = micDeviceId ? measureEnvelope(micDeviceId, 8000) : Promise.resolve(null);
+        const monEnvA = await measureEnvelope(monitor.deviceId, 8000, onProbe);
+        const micEnvA = await micEnvP;
+        if (monEnvA.error) {
           setPrompt(null);
           set('send', {
             status: 'fail',
-            detail: `監視入力を開けません: ${viaExternal.error}`,
+            detail: `監視入力を開けません: ${monEnvA.error}`,
             fix: 'Windows のサウンド設定で監視入力が無効化されていないか確認してください',
           });
           return;
         }
-        if (viaExternal.detected) {
+        const reachedExternal = monEnvA.peak >= 0.015;
+        const corrExternal =
+          reachedExternal && micEnvA && !micEnvA.error
+            ? envelopeCorrelation(micEnvA.env, monEnvA.env)
+            : 0;
+        if (reachedExternal && corrExternal >= 0.5) {
           onAutoConfig({ sendLocalMic: false });
           setPrompt(null);
           set('send', {
             status: 'pass',
-            detail: 'VoiceMeeter 経由で届いています（アプリからの送出は自動で OFF にしました）',
+            detail: `VoiceMeeter 経由で届いています (相関 ${corrExternal.toFixed(2)}。アプリからの送出は自動で OFF にしました)`,
           });
+        } else if (reachedExternal) {
+          // 音はあるが本人の声と確認できない。設定は変えず、判定不能として続行
+          setPrompt(null);
+          set('send', {
+            status: 'fail',
+            detail: `監視入力に音がありますが、あなたの声との相関を確認できません (相関 ${corrExternal.toFixed(2)})`,
+            fix: 'ChatGPT や他の音源を止め、静かな環境でもう一度実行してください。設定は変更していません',
+          });
+          return;
         } else if (aiEnabled) {
+          // 外部経路では届いていない。アプリ経由を試す。
           // 保存済み設定が sendLocalMic=false のままだとミキサーがマイクを
           // 含めず、アプリ経路が正しくても検出できない。テストの前に ON を
-          // 反映させる (稼働中反映の effect が数十ms で追従し、検出窓は12秒ある)
+          // 反映させる (稼働中反映の effect が数十ms で追従する)
           onAutoConfig({ sendLocalMic: true });
           setSendEnabled(true);
-          setPrompt('アプリ経由を試します。もう一度話してください');
-          const viaApp = await detectSignal(monitor.deviceId, 12000, 0.015, onProbe);
+          setPrompt('アプリ経由を試します。もう一度8秒ほど話し続けてください');
+          const micEnvP2 = micDeviceId ? measureEnvelope(micDeviceId, 8000) : Promise.resolve(null);
+          const monEnvB = await measureEnvelope(monitor.deviceId, 8000, onProbe);
+          const micEnvB = await micEnvP2;
           setPrompt(null);
-          if (!viaApp.detected) {
+          const reachedApp = monEnvB.peak >= 0.015;
+          const corrApp =
+            reachedApp && micEnvB && !micEnvB.error
+              ? envelopeCorrelation(micEnvB.env, monEnvB.env)
+              : 0;
+          if (!reachedApp || (micEnvB && !micEnvB.error && corrApp < 0.5)) {
             set('send', {
               status: 'fail',
-              detail: '声が届いていません',
+              detail: reachedApp
+                ? `音はありますが、あなたの声と確認できません (相関 ${corrApp.toFixed(2)})`
+                : '声が届いていません',
               fix: `VoiceMeeter を起動し Virtual Input の B を点灯させてください。あわせて ChatGPT の入力(既定の通信デバイス)が「${monitor.label}」になっているか確認してください`,
             });
             return;
           }
           set('send', {
             status: 'pass',
-            detail: 'アプリ経由で届いています（アプリからの送出は自動で ON にしました）',
+            detail: `アプリ経由で届いています (相関 ${corrApp.toFixed(2)}。アプリからの送出は自動で ON にしました)`,
           });
         } else {
           setPrompt(null);
@@ -308,9 +380,33 @@ export function AiPreflightPanel({
         }
         let during = { detected: false, peak: 0 } as Awaited<ReturnType<typeof detectSignal>>;
         if (expectedChatGptOutput) {
-          const toneP = playToneProbe(expectedChatGptOutput.deviceId, 5000);
-          during = await detectSignal(monitor.deviceId, 4500, 999, onProbe);
-          await toneP;
+          const probe = startToneProbe(expectedChatGptOutput.deviceId);
+          try {
+            const startedResult = await probe.started;
+            if (!startedResult.ok) {
+              // トーンを出せないまま「漏れ無し」を出すと、鳴っていないだけの
+              // 偽合格になる (Codex 第2巡 #1)。判定不能として止める
+              setPrompt(null);
+              set('loop', {
+                status: 'fail',
+                detail: `テストトーンを出せません: ${startedResult.error ?? '不明'}`,
+                fix: '検査を続行できません。もう一度実行してください',
+              });
+              return;
+            }
+            during = await detectSignal(monitor.deviceId, 4500, 999, onProbe);
+          } finally {
+            probe.stop();
+          }
+          if (during.error) {
+            setPrompt(null);
+            set('loop', {
+              status: 'fail',
+              detail: `監視入力を開けません: ${during.error}`,
+              fix: 'Windows のサウンド設定で監視入力が無効化されていないか確認してください',
+            });
+            return;
+          }
         } else {
           // 対の再生側が見つからない環境では従来どおり ChatGPT に喋らせて測る
           setPrompt('ChatGPT に話させてください。あなたは黙っていてください');
@@ -331,11 +427,12 @@ export function AiPreflightPanel({
         set('loop', { status: 'pass', detail: `基準 ${baseline.peak.toFixed(3)} / AI発話中 ${during.peak.toFixed(3)}` });
       }
 
-      if (!skipped) onAllPassed();
+      if (!skipped) onAllPassed(wiringFp);
     } finally {
       setSendEnabled(true);
       setPrompt(null);
       setRunning(false);
+      onBusyChange(false);
     }
   }, [
     inputs,
@@ -346,8 +443,11 @@ export function AiPreflightPanel({
     mixerRunning,
     mixerHasMic,
     aiEnabled,
+    micDeviceId,
     setSendEnabled,
     onAutoConfig,
+    disabledReason,
+    onBusyChange,
     onAllPassed,
   ]);
 
@@ -369,7 +469,8 @@ export function AiPreflightPanel({
         <span className="text-xs font-medium text-stone-300">収録前チェック</span>
         <button
           onClick={() => void run()}
-          disabled={running}
+          disabled={running || !!disabledReason}
+          title={disabledReason ?? undefined}
           className="rounded-lg bg-stone-700 px-3 py-1 text-xs text-stone-200 hover:bg-stone-600 disabled:opacity-40"
         >
           {running ? '確認中…' : 'すべて確認'}
