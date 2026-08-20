@@ -14,6 +14,7 @@ import {
 import { injectWebmSeekMetadata, loadTsEbml } from '@/lib/webm-seek-metadata';
 import { buildRecordingFilename, downloadBlobAs } from '@/lib/recording-file';
 import { estimateStorageHeadroom, RecordingChunkWriter } from '@/lib/recording-store';
+import { describeRecordingHealth, RecordingHealthMonitor } from '@/lib/recording-health';
 
 export type RecordingQuality = 'streaming' | 'standard' | 'high';
 
@@ -292,7 +293,15 @@ export function useLocalRecording({
     const extraRegistry = extraTracksRef.current;
     const willMixAudio = includeMicrophone || !!room || !!extraRegistry;
     if (willMixAudio) {
-      audioContext = new AudioContext();
+      // 48kHz 固定。WebRTC・MediaRecorder ともに 48kHz 前提で、途中に
+      // サンプルレート変換が挟まると無駄な負荷になる。
+      // なお解析系と違い、この context は録画専用として分けたままにする
+      // （収録のオーディオスレッドを他の処理と取り合わせない）。
+      try {
+        audioContext = new AudioContext({ sampleRate: 48000 });
+      } catch {
+        audioContext = new AudioContext();
+      }
       audioDestination = audioContext.createMediaStreamDestination();
 
       // 接続済みトラックの重複排除 (同じ MediaStreamTrack を複数経路で二重ミックスしない)
@@ -525,6 +534,8 @@ export function useLocalRecording({
     // IndexedDB 側はブラウザごと落ちたときに収録を全損させないためのバックアップで、
     // 書けなくても録画は続行する (writer 側で自己無効化する)。
     const recordingStartedAt = new Date();
+    // 収録中に音声処理が詰まっていないかを測る（「音が飛び飛び」の原因切り分け用）
+    const health = new RecordingHealthMonitor(audioContext);
     const chunkWriterPromise = RecordingChunkWriter.begin(
       { mimeType: recorder.mimeType, filePrefix: filePrefixRef.current, startedAt: recordingStartedAt.getTime() },
       (err) => {
@@ -549,6 +560,7 @@ export function useLocalRecording({
 
     recorder.ondataavailable = (e) => {
       if (e.data.size === 0) return;
+      health.noteChunk();
       chunks.push(e.data);
       // 同一 Promise への then は登録順に実行されるため、チャンクの順序は保たれる。
       void chunkWriterPromise.then((w) => w?.append(e.data));
@@ -565,6 +577,8 @@ export function useLocalRecording({
     });
     const finalize = async (reason: 'stop' | 'error') => {
       if (finalized) return;
+      const healthReport = health.stop();
+      console.info('[recording-health]', healthReport);
       recordSessionEvent({ type: "recording_stopped", reason });
       console.info("[session-clock]", summarizeSessionEvents());
       if (finalized) return;
@@ -589,6 +603,9 @@ export function useLocalRecording({
               })
             : rawBlob;
           downloadBlob(seekable, recordingStartedAt);
+          const healthMessage = describeRecordingHealth(healthReport);
+          // 既に出ている警告（インデックス付与失敗など）のほうが具体的なので上書きしない
+          if (healthMessage) setError((prev) => prev ?? healthMessage);
           result = seekable;
           if (reason === 'error') {
             setError('録画中にエラーが発生したため停止しました。ここまでの録画は保存済みです。');
@@ -657,6 +674,7 @@ export function useLocalRecording({
     // (MediaRecorder.start() の直前。要件 FR-008 / NFR-005)
     startSessionClock();
     recordSessionEvent({ type: "recording_started" });
+    health.start();
     recorder.start(1000);
     setStartedAt(Date.now());
     setIsRecording(true);

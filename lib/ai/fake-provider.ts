@@ -1,7 +1,7 @@
 import type { AiParticipantInfo } from '@/lib/studio-participants';
 import { BaseAiProvider } from '@/lib/ai/provider';
 import { RmsSpeakingDetector } from '@/lib/ai/speaking-detector';
-import { registerAudioContext } from '@/lib/audio-runtime';
+import { getSharedAudioContext } from '@/lib/audio-runtime';
 
 /**
  * テスト用の AI Provider（AC-006 の契約テスト手段）。
@@ -12,7 +12,10 @@ import { registerAudioContext } from '@/lib/audio-runtime';
  */
 export class FakeAiProvider extends BaseAiProvider {
   private ctx: AudioContext | null = null;
-  private unregister: (() => void) | null = null;
+  // 共有 context を使うようになったので、鳴らしたノードは自分で止める必要がある
+  private osc: OscillatorNode | null = null;
+  private gain: GainNode | null = null;
+  private dest: MediaStreamAudioDestinationNode | null = null;
   private track: MediaStreamTrack | null = null;
   private detector: RmsSpeakingDetector | null = null;
   private pulseTimer: ReturnType<typeof setTimeout> | null = null;
@@ -32,9 +35,8 @@ export class FakeAiProvider extends BaseAiProvider {
     this.setStatus('connecting');
     await this.disconnectInternals();
     try {
-      const ctx = new AudioContext();
+      const ctx = getSharedAudioContext();
       this.ctx = ctx;
-      this.unregister = registerAudioContext(ctx);
       const osc = ctx.createOscillator();
       osc.frequency.value = this.frequency;
       const gain = ctx.createGain();
@@ -43,6 +45,9 @@ export class FakeAiProvider extends BaseAiProvider {
       osc.connect(gain);
       gain.connect(dest);
       osc.start();
+      this.osc = osc;
+      this.gain = gain;
+      this.dest = dest;
 
       // onMs 鳴って offMs 黙るパルスを自己再スケジュールで刻む
       let on = false;
@@ -89,11 +94,19 @@ export class FakeAiProvider extends BaseAiProvider {
       }
       this.track = null;
     }
-    this.unregister?.();
-    this.unregister = null;
-    if (this.ctx) {
-      await this.ctx.close().catch(() => {});
-      this.ctx = null;
+    // 共有 context は close しない（他の検出器やミキサーが使っている）ので、
+    // 自分が作ったノードは明示的に止めて切り離す。放置すると発振器が鳴り続ける。
+    try {
+      this.osc?.stop();
+      this.osc?.disconnect();
+      this.gain?.disconnect();
+      this.dest?.disconnect();
+    } catch {
+      // ignore
     }
+    this.osc = null;
+    this.gain = null;
+    this.dest = null;
+    this.ctx = null;
   }
 }

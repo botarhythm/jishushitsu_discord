@@ -1,3 +1,4 @@
+import { getSharedAudioContext } from '@/lib/audio-runtime';
 /**
  * 音声デバイスの列挙と判定のユーティリティ。
  *
@@ -96,7 +97,7 @@ export async function detectSignal(
     const track = stream.getAudioTracks()[0];
     if (!track) return { detected: false, peak: 0, error: "トラックを取得できませんでした" };
 
-    const ctx = new AudioContext();
+    const ctx = getSharedAudioContext();
     if (ctx.state !== "running") await ctx.resume().catch(() => {});
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
@@ -119,7 +120,7 @@ export async function detectSignal(
       await new Promise((r) => setTimeout(r, 100));
     }
     src.disconnect();
-    await ctx.close().catch(() => {});
+    analyser.disconnect();
     return { detected: peak >= threshold, peak };
   } catch (e) {
     return {

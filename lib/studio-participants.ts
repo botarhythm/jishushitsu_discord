@@ -89,8 +89,15 @@ export interface StudioAiDescriptor {
 export interface AiTileState {
   info: AiParticipantInfo;
   visualState: AiVisualState;
-  /** RMS 音量 0..1（speaking アニメーション用） */
-  level: number;
+  /**
+   * RMS 音量 0..1（speaking アニメーション用）を読み出す。
+   *
+   * 値そのものではなく getter で渡す。RMS は 100ms 間隔で更新されるため、
+   * state として持つと AI が居るだけで画面全体が毎秒10回再レンダリングされ、
+   * 収録中のメインスレッドを圧迫して音声の取りこぼしを招く。
+   * 描画ループ（AiEnergyOrb）から直接引く。
+   */
+  getLevel: () => number;
 }
 
 /**

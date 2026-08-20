@@ -32,13 +32,13 @@ const ORB_CENTER_Y_RATIO = 0.8;
 export function AiEnergyOrb({ state }: { state: AiTileState }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // 描画ループから最新値を読むための箱（再レンダリングでループを切らさない）
-  const levelRef = useRef(0);
+  const getLevelRef = useRef(state.getLevel);
   const stateRef = useRef(state.visualState);
 
   useEffect(() => {
-    levelRef.current = state.level;
+    getLevelRef.current = state.getLevel;
     stateRef.current = state.visualState;
-  }, [state.level, state.visualState]);
+  }, [state.getLevel, state.visualState]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -77,7 +77,7 @@ export function AiEnergyOrb({ state }: { state: AiTileState }) {
       const t = (performance.now() - start) / 1000;
 
       // レベルの平滑化。立ち上がりは速く、消えるのはゆっくり（火が消え残る感じ）
-      const target = stateRef.current === 'speaking' ? levelRef.current : 0;
+      const target = stateRef.current === 'speaking' ? getLevelRef.current() : 0;
       const k = target > smooth ? 0.4 : 0.07;
       smooth += (target - smooth) * k;
       const lv = Math.min(1, smooth * 2.2);
@@ -162,9 +162,17 @@ export function AiEnergyOrb({ state }: { state: AiTileState }) {
 
       raf = requestAnimationFrame(draw);
     };
+    // 背景タブでは描画を止める。収録中は前面にあるので影響しないが、
+    // 裏に回した講師のPCで無駄に GPU/CPU を焼かないため。
+    const onVisibility = () => {
+      cancelAnimationFrame(raf);
+      if (!document.hidden) raf = requestAnimationFrame(draw);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     raf = requestAnimationFrame(draw);
 
     return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
