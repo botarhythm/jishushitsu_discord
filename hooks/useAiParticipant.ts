@@ -251,17 +251,24 @@ export function useAiParticipant({
       }
     : null;
 
-  const descriptor: StudioAiDescriptor | null =
-    enabled && room
-      ? {
-          id: AI_PARTICIPANT_ID,
-          ownerIdentity: room.localParticipant.identity,
-          trackName,
-          displayName: info.displayName,
-          avatar: info.avatar,
-          providerKind: 'desktop',
-        }
-      : null;
+  // descriptor は room metadata 配信の effect 依存に入るため、必ずメモ化する。
+  // 毎レンダリング新しいオブジェクトを作ると、発話検出(100ms周期)の再描画ごとに
+  // 配信APIが呼ばれ、LiveKit へ毎秒10回級のリクエストを投げてしまう。
+  const localIdentity = room?.localParticipant.identity ?? null;
+  const descriptor = useMemo<StudioAiDescriptor | null>(
+    () =>
+      enabled && localIdentity
+        ? {
+            id: AI_PARTICIPANT_ID,
+            ownerIdentity: localIdentity,
+            trackName,
+            displayName: info.displayName,
+            avatar: info.avatar,
+            providerKind: "desktop",
+          }
+        : null,
+    [enabled, localIdentity, trackName, info.displayName, info.avatar]
+  );
 
   return { status, publishFailed, tile, descriptor, reconnect };
 }

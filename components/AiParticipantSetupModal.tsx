@@ -337,6 +337,8 @@ export function AiParticipantSetupModal({
     const validated = { ...config, validatedFingerprint: aiWiringFingerprint(config) };
     onChangeConfig(validated);
     onChangeEnabled(true);
+    // 設定完了なのでそのまま閉じる（状態は StudioBar の 🤖 ボタンとステージのタイルで分かる）
+    onClose();
   };
 
   const statusLabel: Record<AiProviderStatus, string> = {
