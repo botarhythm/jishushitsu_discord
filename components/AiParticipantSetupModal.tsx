@@ -555,8 +555,15 @@ export function AiParticipantSetupModal({
             help={
               <>
                 例: <Code>CABLE Output</Code> / <Code>CABLE-A Output</Code>
+                。★ が付くものは、名前から自動で見つけた推奨デバイスです。
                 <br />
-                ★ が付くものは、名前から自動で見つけた推奨デバイスです。
+                レベルメーターは ChatGPT が実際に喋ったときだけ振れます。ChatGPT
+                に話しかけても反応しないのは正常です（あなたの声は「AI 参加者を
+                有効にする」を押した時点から届きます）。ここでの確認は
+                <strong className="font-medium text-stone-200">
+                  ChatGPT にテキストで話しかけて
+                </strong>
+                音声で返答させてください。
               </>
             }
           >
@@ -611,14 +618,6 @@ export function AiParticipantSetupModal({
               }
             />
             {previewError && <Alert tone="error">このデバイスを開けませんでした: {previewError}</Alert>}
-            <Help>
-              ChatGPT に話しかけても反応しないのは正常です。あなたの声は「AI
-              参加者を有効にする」を押した時点から届きます。ここでの確認は
-              <strong className="font-medium text-stone-200">
-                ChatGPT にテキストで話しかけて
-              </strong>
-              音声で返答させてください。
-            </Help>
           </Field>
 
           <Field
@@ -684,66 +683,66 @@ export function AiParticipantSetupModal({
               ))}
             </select>
 
-            <div className="mt-3 space-y-2.5 rounded-lg border border-stone-800 bg-stone-950/40 p-3">
-              <p className="text-xs text-stone-400">
-                二重送出・二重再生を避けるための設定です。
-                <strong className="font-medium text-stone-300">
-                  1つ目は収録前チェックが自動で設定します
-                </strong>
-                。
-              </p>
-
-              <CheckLine
-                checked={config.sendLocalMic === false}
-                onChange={(v) => set({ sendLocalMic: !v })}
-                title="あなたの声は VoiceMeeter 側で常時 ChatGPT に送っている"
-                sub="アプリからは送らない"
-                help="物理マイクを VoiceMeeter のハードウェア入力から B1 へ流している構成でオンにします。アプリを起動していなくても他の通話アプリが普通にマイクを使えます。オフにすると、あなたの声が ChatGPT に二重に届きます。"
-              />
-
-              <CheckLine
-                checked={config.monitorAiLocally === false}
-                onChange={(v) => set({ monitorAiLocally: !v })}
-                title="ChatGPT の声は Windows 側で常時モニタしている"
-                sub="アプリからは再生しない"
-                help="録音タブで AI 音声ソースの「このデバイスを聴く」を有効にしている場合にオンにします。アプリを起動していなくても ChatGPT の声が聞こえるため、ChatGPT を普段どおり単体で使えます。オフにすると二重に聞こえます。"
-              >
-                <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={
-                      listenTestPlaying ||
-                      !config.sourceDeviceId ||
-                      enabled ||
-                      isRecording ||
-                      probeBusy
-                    }
-                    onClick={() => {
-                      // AI 音声ソース (CABLE Output 等) の再生側へテストトーンを流す。
-                      // Windows の「このデバイスを聴く」が生きていれば音が聞こえるはず。
-                      // ブラウザからはモニタの有無を検出できないため、耳で判定してもらう。
-                      const src = inputs.find((d) => d.deviceId === config.sourceDeviceId);
-                      const playback = src ? findCablePlaybackForCapture(src, outputs) : null;
-                      if (!playback) return;
-                      setListenTestPlaying(true);
-                      void playToneProbe(playback.deviceId, 2000).finally(() =>
-                        setListenTestPlaying(false)
-                      );
-                    }}
-                    className="rounded-lg bg-stone-700 px-2.5 py-1 text-xs font-medium text-stone-200 hover:bg-stone-600 disabled:opacity-40"
-                  >
-                    {listenTestPlaying ? '♪ 再生中…' : '♪ 試聴テスト (2秒)'}
-                  </button>
-                  <span className="text-xs text-stone-400">
-                    {enabled
-                      ? 'AI を OFF にすると使えます'
-                      : '音が聞こえたらオンにしてください'}
-                  </span>
-                </div>
-              </CheckLine>
-            </div>
           </Field>
 
+          <div className="mb-5 space-y-2.5 rounded-lg border border-stone-800 bg-stone-950/40 p-3">
+            <p className="text-xs text-stone-400">
+              二重送出・二重再生を避けるための設定です。
+              <strong className="font-medium text-stone-300">
+                1つ目は収録前チェックが自動で設定します
+              </strong>
+              。
+            </p>
+
+            <CheckLine
+              checked={config.sendLocalMic === false}
+              onChange={(v) => set({ sendLocalMic: !v })}
+              title="あなたの声は VoiceMeeter 側で常時 ChatGPT に送っている"
+              sub="アプリからは送らない"
+              help="物理マイクを VoiceMeeter のハードウェア入力から B1 へ流している構成でオンにします。アプリを起動していなくても他の通話アプリが普通にマイクを使えます。オフにすると、あなたの声が ChatGPT に二重に届きます。"
+            />
+
+            <CheckLine
+              checked={config.monitorAiLocally === false}
+              onChange={(v) => set({ monitorAiLocally: !v })}
+              title="ChatGPT の声は Windows 側で常時モニタしている"
+              sub="アプリからは再生しない"
+              help="録音タブで AI 音声ソースの「このデバイスを聴く」を有効にしている場合にオンにします。アプリを起動していなくても ChatGPT の声が聞こえるため、ChatGPT を普段どおり単体で使えます。オフにすると二重に聞こえます。"
+            >
+              <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={
+                    listenTestPlaying ||
+                    !config.sourceDeviceId ||
+                    enabled ||
+                    isRecording ||
+                    probeBusy
+                  }
+                  onClick={() => {
+                    // AI 音声ソース (CABLE Output 等) の再生側へテストトーンを流す。
+                    // Windows の「このデバイスを聴く」が生きていれば音が聞こえるはず。
+                    // ブラウザからはモニタの有無を検出できないため、耳で判定してもらう。
+                    const src = inputs.find((d) => d.deviceId === config.sourceDeviceId);
+                    const playback = src ? findCablePlaybackForCapture(src, outputs) : null;
+                    if (!playback) return;
+                    setListenTestPlaying(true);
+                    void playToneProbe(playback.deviceId, 2000).finally(() =>
+                      setListenTestPlaying(false)
+                    );
+                  }}
+                  className="rounded-lg bg-stone-700 px-2.5 py-1 text-xs font-medium text-stone-200 hover:bg-stone-600 disabled:opacity-40"
+                >
+                  {listenTestPlaying ? '♪ 再生中…' : '♪ 試聴テスト (2秒)'}
+                </button>
+                <span className="text-xs text-stone-400">
+                  {enabled
+                    ? 'AI を OFF にすると使えます'
+                    : '音が聞こえたらオンにしてください'}
+                </span>
+              </div>
+            </CheckLine>
+          </div>
           <Field htmlFor="ai-name" label="表示名" hint="ステージの名札に出る名前です。">
             <input
               id="ai-name"
