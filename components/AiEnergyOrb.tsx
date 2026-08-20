@@ -3,11 +3,19 @@
 import { useEffect, useRef } from 'react';
 import type { AiTileState } from '@/lib/studio-participants';
 
+/** ステージ高さに対する球の直径の比率 */
+const ORB_DIAMETER_RATIO = 0.6;
+/** ステージ高さに対する球の中心位置（0=上端, 1=下端）。中央やや下に置く */
+const ORB_CENTER_Y_RATIO = 0.62;
+
 /**
  * AI 参加者を表す「浮遊するエネルギー球」。
  *
- * 収録レイアウトを占有せず、人物2名の画面比率を保ったまま中央に重ねて表示する。
+ * 収録レイアウトを占有せず、人物2名の画面比率を保ったまま重ねて表示する。
  * 発話中は外周がめらめらと揺らぎ、発光が強まる。
+ *
+ * キャンバスはステージ全体を覆い、球の位置と大きさは描画側の比率で決める。
+ * こうしておくとコロナやブルームが要素の矩形で切り取られない。
  *
  * 描画は Canvas 2D。録画はブラウザの DOM をそのままキャプチャするため、
  * ここで描いた絵はそのまま収録・配信に乗る。
@@ -62,48 +70,48 @@ export function AiEnergyOrb({ state }: { state: AiTileState }) {
 
       // レベルの平滑化。立ち上がりは速く、消えるのはゆっくり（火が消え残る感じ）
       const target = stateRef.current === 'speaking' ? levelRef.current : 0;
-      const k = target > smooth ? 0.35 : 0.06;
+      const k = target > smooth ? 0.4 : 0.07;
       smooth += (target - smooth) * k;
-      const lv = Math.min(1, smooth * 1.6);
+      const lv = Math.min(1, smooth * 2.2);
 
       const isError = stateRef.current === 'error';
 
       ctx.clearRect(0, 0, w, h);
 
       // ゆっくり浮遊させる
-      const cx = w / 2 + Math.sin(t * 0.31) * w * 0.012;
-      const cy = h / 2 + Math.cos(t * 0.23) * h * 0.018;
+      const cx = w / 2 + Math.sin(t * 0.31) * h * 0.012;
+      const cy = h * ORB_CENTER_Y_RATIO + Math.cos(t * 0.23) * h * 0.016;
 
       // 呼吸 + 発話による膨張
-      const base = Math.min(w, h) * 0.3;
-      const R = base * (1 + Math.sin(t * 0.8) * 0.045 + lv * 0.2);
+      const base = (h * ORB_DIAMETER_RATIO) / 2;
+      const R = base * (1 + Math.sin(t * 0.8) * 0.05 + lv * 0.3);
 
       const hueShift = isError ? 0 : 1;
 
       // ── 外側のブルーム ──
-      const bloom = ctx.createRadialGradient(cx, cy, R * 0.4, cx, cy, R * 2.5);
-      bloom.addColorStop(0, `rgba(90, 190, 255, ${(0.22 + lv * 0.3) * hueShift})`);
-      bloom.addColorStop(0.45, `rgba(120, 110, 255, ${(0.12 + lv * 0.18) * hueShift})`);
+      const bloom = ctx.createRadialGradient(cx, cy, R * 0.4, cx, cy, R * 2.2);
+      bloom.addColorStop(0, `rgba(90, 190, 255, ${(0.22 + lv * 0.4) * hueShift})`);
+      bloom.addColorStop(0.45, `rgba(120, 110, 255, ${(0.12 + lv * 0.26) * hueShift})`);
       bloom.addColorStop(1, 'rgba(60, 60, 160, 0)');
       ctx.fillStyle = bloom;
       ctx.beginPath();
-      ctx.arc(cx, cy, R * 2.5, 0, Math.PI * 2);
+      ctx.arc(cx, cy, R * 2.2, 0, Math.PI * 2);
       ctx.fill();
 
       // ── コロナ（揺らぐ外周）──
       // 2枚重ねて、内側は落ち着き、外側ほど激しく揺れるようにする
       const coronaLayers = [
-        { scale: 1.32, seed: 0.0, alpha: 0.3, amp: 0.1 },
-        { scale: 1.1, seed: 2.7, alpha: 0.5, amp: 0.07 },
+        { scale: 1.3, seed: 0.0, alpha: 0.3, amp: 0.11 },
+        { scale: 1.09, seed: 2.7, alpha: 0.5, amp: 0.08 },
       ];
       for (const layer of coronaLayers) {
         ctx.beginPath();
-        const steps = 160;
+        const steps = 180;
         for (let i = 0; i <= steps; i++) {
           const a = (i / steps) * Math.PI * 2;
           // 発話中ほど高周波成分が増え「めらめら」した縁になる
           const idle = layer.amp * wobble(a, t * 0.5, layer.seed);
-          const flame = lv * 0.34 * wobble(a, t * 2.2, layer.seed + 1.3);
+          const flame = lv * 0.55 * wobble(a, t * 2.6, layer.seed + 1.3);
           const r = R * layer.scale * (1 + idle + flame);
           const x = cx + Math.cos(a) * r;
           const y = cy + Math.sin(a) * r;
@@ -111,8 +119,8 @@ export function AiEnergyOrb({ state }: { state: AiTileState }) {
           else ctx.lineTo(x, y);
         }
         ctx.closePath();
-        const g = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * layer.scale * 1.4);
-        g.addColorStop(0, `rgba(150, 235, 255, ${layer.alpha * (0.5 + lv * 0.5) * hueShift})`);
+        const g = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * layer.scale * 1.5);
+        g.addColorStop(0, `rgba(150, 235, 255, ${layer.alpha * (0.5 + lv * 0.6) * hueShift})`);
         g.addColorStop(0.6, `rgba(80, 150, 255, ${layer.alpha * 0.5 * hueShift})`);
         g.addColorStop(1, 'rgba(110, 80, 255, 0)');
         ctx.fillStyle = g;
@@ -128,7 +136,7 @@ export function AiEnergyOrb({ state }: { state: AiTileState }) {
         cy,
         R
       );
-      core.addColorStop(0, `rgba(255, 255, 255, ${(0.95 - (isError ? 0.5 : 0)) * 1})`);
+      core.addColorStop(0, `rgba(255, 255, 255, ${isError ? 0.45 : 0.95})`);
       core.addColorStop(0.35, `rgba(${isError ? '150,170,190' : '175, 240, 255'}, 0.9)`);
       core.addColorStop(0.75, `rgba(${isError ? '90,100,120' : '70, 150, 250'}, 0.55)`);
       core.addColorStop(1, `rgba(${isError ? '50,55,70' : '80, 70, 220'}, 0.12)`);
@@ -138,8 +146,8 @@ export function AiEnergyOrb({ state }: { state: AiTileState }) {
       ctx.fill();
 
       // ── 縁のハイライト（球としての立体感）──
-      ctx.strokeStyle = `rgba(200, 245, 255, ${(0.25 + lv * 0.45) * hueShift})`;
-      ctx.lineWidth = Math.max(1, R * 0.015);
+      ctx.strokeStyle = `rgba(200, 245, 255, ${(0.25 + lv * 0.5) * hueShift})`;
+      ctx.lineWidth = Math.max(1, R * 0.014);
       ctx.beginPath();
       ctx.arc(cx, cy, R * 0.98, 0, Math.PI * 2);
       ctx.stroke();
@@ -154,14 +162,5 @@ export function AiEnergyOrb({ state }: { state: AiTileState }) {
     };
   }, []);
 
-  return (
-    <div className="relative h-full w-full">
-      <canvas ref={canvasRef} className="h-full w-full" />
-      {state.visualState === 'error' && (
-        <span className="absolute inset-x-0 bottom-0 text-center text-[10px] font-medium text-red-200">
-          ⚠ 音声ソース切断
-        </span>
-      )}
-    </div>
-  );
+  return <canvas ref={canvasRef} className="h-full w-full" />;
 }

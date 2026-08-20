@@ -171,13 +171,18 @@ export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTi
         {/* AI のエネルギー球。スロットを使わず中央に重ねるため、
             人物側のレイアウトと縦横比はそのまま保たれる。 */}
         {aiOrb && (
-          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-            <div className="aspect-square h-[38%]">
-              <AiEnergyOrb state={aiOrb} />
-            </div>
+          <div className="pointer-events-none absolute inset-0">
+            {/* キャンバスはステージ全体。球の位置と大きさは描画側の比率で決めるので、
+                コロナやブルームが要素の矩形で切り取られない。 */}
+            <AiEnergyOrb state={aiOrb} />
             {showNameplates && (
-              <span className="mt-1 rounded-md bg-black/40 px-2 py-0.5 text-sm font-medium text-sky-100 backdrop-blur-sm">
+              <span className="absolute inset-x-0 bottom-[3%] text-center text-base font-medium text-sky-100 drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]">
                 {aiOrb.info.displayName}
+              </span>
+            )}
+            {aiOrb.visualState === 'error' && (
+              <span className="absolute inset-x-0 bottom-[9%] text-center text-xs font-medium text-red-200">
+                ⚠ 音声ソース切断
               </span>
             )}
           </div>
