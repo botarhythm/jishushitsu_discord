@@ -203,7 +203,7 @@ export function StudioBar(props: StudioBarProps) {
           value={recordingQuality}
           onChange={(e) => onChangeRecordingQuality(e.target.value as RecordingQuality)}
           disabled={isLocalRecording}
-          className="rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200 disabled:opacity-50"
+          className="shrink-0 rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200 disabled:opacity-50"
           aria-label="録画品質"
           title="録画開始前に品質を選択"
         >
@@ -218,7 +218,7 @@ export function StudioBar(props: StudioBarProps) {
         <select
           value={layout}
           onChange={(e) => onChangeLayout(e.target.value as StudioLayout)}
-          className="rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200"
+          className="shrink-0 rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200"
           aria-label="レイアウト"
           title="収録レイアウト"
         >
@@ -237,7 +237,7 @@ export function StudioBar(props: StudioBarProps) {
               key={i}
               value={slotIdentities[i] ?? ''}
               onChange={(e) => onChangeSlot(i, e.target.value || null)}
-              className="max-w-[9rem] rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200"
+              className="max-w-[9rem] shrink-0 rounded-lg border border-stone-600 bg-stone-800 px-2 py-1.5 text-xs text-stone-200"
               aria-label={slotName}
               title={slotName}
             >
@@ -257,9 +257,9 @@ export function StudioBar(props: StudioBarProps) {
           </BarButton>
         )}
 
-        {/* AI 参加者: 左が ON/OFF、右が設定 */}
+        {/* AI 参加者: 左が ON/OFF、右が設定。横並びにするため入れ子にしない */}
         {onToggleAi && (
-          <div className="relative">
+          <div className="relative shrink-0">
             <BarButton
               active={aiEnabled}
               label={aiEnabled ? "AI参加者をOFFにする" : "AI参加者をONにする"}
@@ -270,12 +270,12 @@ export function StudioBar(props: StudioBarProps) {
             {aiError && (
               <span className="absolute -right-1 -top-1 flex h-3 w-3 rounded-full bg-red-500" aria-hidden />
             )}
+          </div>
+        )}
         {onOpenAiSetup && (
           <BarButton label="AI参加者の設定" onClick={onOpenAiSetup}>
             🔧
           </BarButton>
-        )}
-          </div>
         )}
 
         <BarButton active={showNameplates} label="名前表示" onClick={onToggleNameplates}>
@@ -300,14 +300,14 @@ export function StudioBar(props: StudioBarProps) {
         {/* 退出系 */}
         <button
           onClick={onExitStudio}
-          className="rounded-lg bg-stone-700 px-3 py-2 text-xs font-medium text-stone-200 hover:bg-stone-600"
+          className="shrink-0 rounded-lg bg-stone-700 px-3 py-2 text-xs font-medium text-stone-200 hover:bg-stone-600"
         >
           収録モード終了
         </button>
         {onEndSession && (
           <button
             onClick={onEndSession}
-            className="rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-500"
+            className="shrink-0 rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-500"
           >
             セッション終了
           </button>
@@ -338,7 +338,7 @@ function BarButton({
       disabled={disabled}
       aria-label={label}
       title={label}
-      className={`flex h-10 min-w-[2.5rem] items-center justify-center rounded-lg px-2 text-base transition-colors ${
+      className={`flex h-10 min-w-[2.5rem] shrink-0 items-center justify-center rounded-lg px-2 text-base transition-colors ${
         disabled
           ? 'cursor-not-allowed bg-stone-800/50 text-stone-600'
           : danger
