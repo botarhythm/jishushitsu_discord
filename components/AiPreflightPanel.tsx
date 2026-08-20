@@ -257,6 +257,10 @@ export function AiPreflightPanel({
             detail: 'VoiceMeeter 経由で届いています（アプリからの送出は自動で OFF にしました）',
           });
         } else if (aiEnabled) {
+          // 保存済み設定が sendLocalMic=false のままだとミキサーがマイクを
+          // 含めず、アプリ経路が正しくても検出できない。テストの前に ON を
+          // 反映させる (稼働中反映の effect が数十ms で追従し、検出窓は12秒ある)
+          onAutoConfig({ sendLocalMic: true });
           setSendEnabled(true);
           setPrompt('アプリ経由を試します。もう一度話してください');
           const viaApp = await detectSignal(monitor.deviceId, 12000, 0.015, onProbe);
@@ -269,7 +273,6 @@ export function AiPreflightPanel({
             });
             return;
           }
-          onAutoConfig({ sendLocalMic: true });
           set('send', {
             status: 'pass',
             detail: 'アプリ経由で届いています（アプリからの送出は自動で ON にしました）',
