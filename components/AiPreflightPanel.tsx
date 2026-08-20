@@ -44,6 +44,8 @@ interface Props {
   micLabel: string | null;
   mixerRunning: boolean;
   mixerHasMic: boolean;
+  /** AI 参加者が有効か。無効時は送出経路が動いていないので該当項目を飛ばす */
+  aiEnabled: boolean;
   setSendEnabled: (on: boolean) => void;
   onAllPassed: () => void;
 }
@@ -63,6 +65,7 @@ export function AiPreflightPanel({
   micLabel,
   mixerRunning,
   mixerHasMic,
+  aiEnabled,
   setSendEnabled,
   onAllPassed,
 }: Props) {
@@ -129,6 +132,11 @@ export function AiPreflightPanel({
 
       // 3. 送出経路が動作しているか
       set('mixer', { status: 'running' });
+      if (!aiEnabled) {
+        // 送出経路は AI 参加者を有効にしてから起動する。無効のまま必須にすると
+        // 「有効化にはチェック通過が必要 / チェック通過には有効化が必要」で詰む。
+        set('mixer', { status: 'skip', detail: '有効化後に確認します' });
+      } else
       if (!sinkDeviceId) {
         set('mixer', { status: 'skip', detail: '送出先が未設定' });
       } else if (!mixerRunning || !mixerHasMic) {
@@ -175,6 +183,9 @@ export function AiPreflightPanel({
           return;
         }
 
+        if (!aiEnabled) {
+          set('send', { status: 'skip', detail: '有効化後に確認します' });
+        } else {
         // 5. あなたの声が ChatGPT へ届くか
         set('send', { status: 'running' });
         setPrompt('声が届いているか測ります。何か話してください（検出した時点で次へ進みます）');
@@ -189,11 +200,12 @@ export function AiPreflightPanel({
           return;
         }
         set('send', { status: 'pass' });
+        }
 
         // 6. AI の声が送出先に漏れていないか（送出を止めて OS 側の漏れだけを測る）
         set('loop', { status: 'running' });
         setPrompt('もう一度 ChatGPT に話させてください。あなたは黙っていてください');
-        setSendEnabled(false);
+        if (aiEnabled) setSendEnabled(false);
         const leak = await detectSignal(monitor.deviceId, 8000, 0.015, onProbe);
         setSendEnabled(true);
         setPrompt(null);
@@ -222,6 +234,7 @@ export function AiPreflightPanel({
     micLabel,
     mixerRunning,
     mixerHasMic,
+    aiEnabled,
     setSendEnabled,
     onAllPassed,
   ]);

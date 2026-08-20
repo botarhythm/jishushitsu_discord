@@ -712,6 +712,7 @@ export function AiParticipantSetupModal({
             micLabel={micInfo?.label ?? null}
             mixerRunning={mixerDiag?.contextState === "running"}
             mixerHasMic={!!mixerDiag?.localMic}
+            aiEnabled={enabled}
             setSendEnabled={setInputMixerSendEnabled}
             onAllPassed={() => setManualConfirm(true)}
           />
