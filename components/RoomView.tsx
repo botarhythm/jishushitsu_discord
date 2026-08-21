@@ -241,7 +241,6 @@ function RoomInner({
   // チャットパネルの開閉。収録モードでは Region Capture が無効化された瞬間に
   // 強制的に閉じる必要があるため (録画タブ全体に映り込んでしまう)、録画フックより先に宣言する。
   const [chatOpen, setChatOpen] = useState(false);
-  const closeChatOnRegionCaptureUnavailable = useCallback(() => setChatOpen(false), []);
 
   // ── AI 参加者 (ChatGPT デスクトップ音声) ──
   // 完全オプトイン。aiEnabled=false の間は録画・publish・metadata いずれの
@@ -249,6 +248,16 @@ function RoomInner({
   const [aiConfig, setAiConfig] = useState<AiParticipantConfig>(() => loadAiConfig());
   const [aiEnabled, setAiEnabled] = useState(false);
   const [aiSetupOpen, setAiSetupOpen] = useState(false);
+  /**
+   * チャットと AI 設定はどちらも収録ステージ (Region Capture のクロップ矩形) の
+   * 外側に flex 兄弟として置くことで「画面には出るが録画には映らない」を実現している。
+   * Region Capture が使えない環境では録画がタブ全体になり両方とも映り込むため、
+   * その瞬間に閉じる。
+   */
+  const closeSidePanelsOnRegionCaptureUnavailable = useCallback(() => {
+    setChatOpen(false);
+    setAiSetupOpen(false);
+  }, []);
   const aiRegistry = useMemo(() => new AudioTrackRegistry(), []);
   /**
    * 設定の書き込みは patch 経路に一本化する。保存済みの最新値へ patch だけを
@@ -278,26 +287,20 @@ function RoomInner({
     isSupported: isLocalRecordingSupported,
   } = useLocalRecording({
     room,
-    // Region Capture (チャットをステージ矩形外に逃がして録画から除外する仕組み) が
-    // 非対応/失敗のブラウザでは、録画はタブ全体になりチャットパネルも映り込んでしまう。
-    // その瞬間に強制的にチャットを閉じる。
-    onRegionCaptureUnavailable: closeChatOnRegionCaptureUnavailable,
+    // Region Capture (チャット・AI設定をステージ矩形外に逃がして録画から除外する仕組み) が
+    // 非対応/失敗のブラウザでは、録画はタブ全体になりサイドパネルも映り込んでしまう。
+    // その瞬間に強制的に閉じる。
+    onRegionCaptureUnavailable: closeSidePanelsOnRegionCaptureUnavailable,
     // AI 参加者の音声は参加者非依存の汎用レジストリ経由で mix する
     extraAudioTracks: aiRegistry,
     // 単一取り込みポリシー: AI 有効時はタブ音声を録画に入れない (AI モニタ音声・
     // リモート再生音声との二重取り込み防止)。AI 無効時は従来経路のまま。
     excludeTabAudio: aiEnabled,
   });
-  const chatHiddenFromRecording = !isLocalRecording || regionCaptureActive !== false;
-
-  // AI設定モーダル (ChatGPTのコントロールパネル) は fixed inset-0 の全画面オーバーレイで、
-  // 開いているとステージの真上に重なって表示される。Region Capture が有効でもクロップは
-  // 画面上の座標範囲そのものを録るため、ステージに重なるこのモーダルは録画に映り込んでしまう
-  // (チャットパネルと違い DOM 位置ではなく画面上の重なりの問題なので、Region Capture の
-  // 成否に関わらず常に閉じる必要がある)。録画開始と同時に開いていたら強制的に閉じる。
-  useEffect(() => {
-    if (isLocalRecording) queueMicrotask(() => setAiSetupOpen(false));
-  }, [isLocalRecording]);
+  // サイドパネル (チャット・AI設定) をステージ矩形の外に置けているか。
+  // false になるのは「録画中かつ Region Capture が失敗している」ときだけで、
+  // このときだけパネルを開けなくする (タブ全体録画なので逃がす場所が無い)。
+  const sidePanelsHiddenFromRecording = !isLocalRecording || regionCaptureActive !== false;
 
   useEffect(() => {
     if (localRecordingError) {
@@ -942,12 +945,33 @@ function RoomInner({
               />
             )}
           </div>
+          {/* 右: AI参加者(ChatGPT)の設定。チャットと同じくステージの flex 兄弟として
+              配置するため、収録中に開いても録画には映り込まない。
+              セッション中の配線調整のため録画中も開ける。 */}
+          {aiSetupOpen && (
+            <AiParticipantSetupModal
+              room={room}
+              config={aiConfig}
+              onPatchConfig={handlePatchAiConfig}
+              enabled={aiEnabled}
+              onChangeEnabled={setAiEnabled}
+              aiStatus={aiStatus}
+              publishFailed={aiPublishFailed}
+              inputMixerError={aiInputMixerError}
+              setInputMixerSendEnabled={aiSetInputMixerSendEnabled}
+              setInputMixerIncludeLocalMic={aiSetInputMixerIncludeLocalMic}
+              getInputMixerDiagnostics={aiGetInputMixerDiagnostics}
+              onReconnect={() => void aiReconnect()}
+              isRecording={isLocalRecording}
+              onClose={() => setAiSetupOpen(false)}
+            />
+          )}
         </div>
         <StudioBar
           chatOpen={chatOpen}
           chatUnreadCount={chatUnread}
           onToggleChat={toggleChat}
-          chatDisabled={!chatHiddenFromRecording}
+          chatDisabled={!sidePanelsHiddenFromRecording}
           isMicOn={isMicOn}
           isCameraOn={isCameraOn}
           isScreenSharing={isScreenSharing}
@@ -957,7 +981,7 @@ function RoomInner({
           aiToggleDisabled={isLocalRecording}
           onToggleAi={toggleAi}
           onOpenAiSetup={() => setAiSetupOpen(true)}
-          aiSetupDisabled={isLocalRecording}
+          aiSetupDisabled={!sidePanelsHiddenFromRecording}
           onOpenDeviceSettings={openDeviceSettings}
           recordingUnsupported={!isLocalRecordingSupported}
           recordingQuality={recordingQuality}
@@ -983,24 +1007,6 @@ function RoomInner({
         {/* デバイス設定 / 招待 / 終了モーダルは収録モードでも利用可能 */}
         {deviceSettingsOpen && <DeviceSettingsModal onClose={closeDeviceSettings} />}
         {inviteOpen && <InviteModal onClose={closeInvite} />}
-        {aiSetupOpen && (
-          <AiParticipantSetupModal
-            room={room}
-            config={aiConfig}
-            onPatchConfig={handlePatchAiConfig}
-            enabled={aiEnabled}
-            onChangeEnabled={setAiEnabled}
-            aiStatus={aiStatus}
-            publishFailed={aiPublishFailed}
-            inputMixerError={aiInputMixerError}
-            setInputMixerSendEnabled={aiSetInputMixerSendEnabled}
-            setInputMixerIncludeLocalMic={aiSetInputMixerIncludeLocalMic}
-            getInputMixerDiagnostics={aiGetInputMixerDiagnostics}
-            onReconnect={() => void aiReconnect()}
-            isRecording={isLocalRecording}
-            onClose={() => setAiSetupOpen(false)}
-          />
-        )}
         {endModalOpen && (
           <EndSessionModal
             isRecording={isRecording}

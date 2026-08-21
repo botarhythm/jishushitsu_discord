@@ -29,7 +29,7 @@ interface StudioBarProps {
   aiToggleDisabled?: boolean;
   /** AI 参加者セットアップモーダルを開く */
   onOpenAiSetup?: () => void;
-  /** true の間はAI設定を開けない (モーダルがステージ全面に重なり録画に映り込むため) */
+  /** true の間はAI設定を開けない (Region Capture 非対応/失敗でタブ全体が録画されるため) */
   aiSetupDisabled?: boolean;
   /** マイク/カメラのデバイス設定を開く（収録中に入力デバイスを直すため） */
   onOpenDeviceSettings?: () => void;
@@ -290,7 +290,7 @@ export function StudioBar(props: StudioBarProps) {
             disabled={aiSetupDisabled}
             label={
               aiSetupDisabled
-                ? '録画中はAI設定を開けません (パネルが録画に映り込むため)'
+                ? 'この環境では録画中にAI設定を開けません (画面全体が録画されるため)'
                 : 'AI参加者の設定'
             }
             onClick={onOpenAiSetup}

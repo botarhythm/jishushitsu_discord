@@ -541,10 +541,13 @@ export function AiParticipantSetupModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    // 収録ステージ (Region Capture のクロップ矩形) の flex 兄弟として配置するサイドパネル。
+    // 全画面オーバーレイにするとステージに重なって録画に映り込むため、
+    // 画面には出るが録画には入らないこの形を保つこと。
+    <aside className="z-30 flex h-full w-[26rem] max-w-[90vw] shrink-0 flex-col border-l border-stone-700 bg-stone-900 shadow-2xl">
       {/* ヘッダーとフッターを固定し、中身だけスクロールさせる。
           長い設定画面でも「今どういう状態か」と「有効化ボタン」を見失わない */}
-      <div className="flex max-h-[90dvh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-stone-700 bg-stone-900 shadow-2xl">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <header className="flex items-start justify-between gap-3 border-b border-stone-800 px-5 py-4">
           <div className="min-w-0">
             <h2 className="text-balance text-base font-semibold text-stone-100">
@@ -1082,7 +1085,7 @@ export function AiParticipantSetupModal({
           )}
         </footer>
       </div>
-    </div>
+    </aside>
   );
 }
 
