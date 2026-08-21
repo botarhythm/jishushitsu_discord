@@ -122,6 +122,15 @@ export function useLocalRecording({
    * - null: cropTarget を渡していない (制約なし、または録画未開始)。
    */
   const [regionCaptureActive, setRegionCaptureActive] = useState<boolean | null>(null);
+  /**
+   * 録画開始処理中 (getDisplayMedia のピッカー表示〜cropTo 確定まで)。
+   * この間は isRecording がまだ false なので、呼び出し側が「録画中」だけを見て
+   * UI を封鎖すると、クロップ矩形が確定する前にレイアウトを動かされる窓が開く。
+   */
+  const [isStarting, setIsStarting] = useState(false);
+  const startingRef = useRef(false);
+  /** 録画中にクロップ対象が伸縮していないか監視する (解像度変動=ファイル破損の検知) */
+  const cropResizeObserverRef = useRef<ResizeObserver | null>(null);
 
   const resourcesRef = useRef<RecordingResources | null>(null);
   const stopRef = useRef<() => Promise<Blob | null>>(() => Promise.resolve(null));
@@ -136,6 +145,8 @@ export function useLocalRecording({
   }, [excludeTabAudio, extraAudioTracks, filePrefix]);
 
   const cleanup = useCallback(() => {
+    cropResizeObserverRef.current?.disconnect();
+    cropResizeObserverRef.current = null;
     const r = resourcesRef.current;
     if (!r) return;
     r.detachListeners();
@@ -205,7 +216,17 @@ export function useLocalRecording({
   ) => {
     setError(null);
     setRegionCaptureActive(null);
-    if (resourcesRef.current) return;
+    if (resourcesRef.current || startingRef.current) return;
+    // 「録画開始処理中」。getDisplayMedia のピッカー〜cropTo 確定までの間は
+    // isRecording がまだ false のため、この窓でサイドパネルを開かれるとクロップ矩形が
+    // 変わる。呼び出し側がこの間もパネル操作を封鎖できるよう公開する。
+    startingRef.current = true;
+    setIsStarting(true);
+    const finishStarting = () => {
+      startingRef.current = false;
+      setIsStarting(false);
+    };
+    try {
 
     // iOS Safari (iPhoneの全ブラウザがWebKitベースで同様) は getDisplayMedia 自体が
     // 存在しない。呼び出せば TypeError になり、生の英語メッセージがそのまま error state に
@@ -255,32 +276,69 @@ export function useLocalRecording({
     // Region Capture: 自タブキャプチャを指定要素の矩形にクロップする (Chromium 系)。
     // 収録ステージ (16:9) を渡すと、ウィンドウサイズに関わらず録画を厳密な 16:9 に固定できる。
     // 関数で渡された場合は getDisplayMedia 解決後の今の時点で評価 (ステージのマウント完了後)。
+    //
+    // fail-closed: クロップ対象を要求されたのに確保できない場合、以前はタブ全体を
+    // 黙って録画していた。その経路では収録バー・チャット・各種モーダル・講師向け情報が
+    // 丸ごと録画に入り、収録物として使えないものが出来上がる。要求が満たせないなら
+    // 録画を開始しない (Codex/Gemini 両レビュー 2026-08-21 の必須条件)。
+    const cropRequested = cropTarget !== undefined && cropTarget !== null;
     const cropEl = typeof cropTarget === 'function' ? cropTarget() : cropTarget;
-    if (cropEl) {
+    if (cropRequested) {
+      const abortStart = (message: string, e?: unknown) => {
+        if (e) console.error('[useLocalRecording] クロップ確保に失敗', e);
+        displayStream.getTracks().forEach((t) => t.stop());
+        setRegionCaptureActive(false);
+        onRegionCaptureUnavailable?.();
+        setError(message);
+      };
       const CropTargetCtor = (globalThis as unknown as {
         CropTarget?: { fromElement(e: Element): Promise<unknown> };
       }).CropTarget;
       const videoTrack = displayStream.getVideoTracks()[0] as
         | (MediaStreamTrack & { cropTo?: (t: unknown) => Promise<void> })
         | undefined;
-      if (CropTargetCtor && videoTrack?.cropTo) {
-        try {
-          const ct = await CropTargetCtor.fromElement(cropEl);
-          await videoTrack.cropTo(ct);
-          setRegionCaptureActive(true);
-        } catch (e) {
-          console.warn(
-            '[useLocalRecording] Region Capture (cropTo) に失敗。タブ全体のまま録画します。',
-            e
-          );
-          setRegionCaptureActive(false);
-          onRegionCaptureUnavailable?.();
-        }
-      } else {
-        // CropTarget / cropTo 非対応ブラウザ (Chromium 系以外)。タブ全体のまま録画される。
-        setRegionCaptureActive(false);
-        onRegionCaptureUnavailable?.();
+      if (!cropEl) {
+        abortStart('収録ステージを取得できなかったため録画を中止しました。もう一度お試しください。');
+        return;
       }
+      if (!CropTargetCtor || !videoTrack?.cropTo) {
+        abortStart(
+          'このブラウザは収録範囲の切り出し (Region Capture) に対応していないため録画を中止しました。パソコンの Chrome または Edge をお使いください。'
+        );
+        return;
+      }
+      try {
+        const ct = await CropTargetCtor.fromElement(cropEl);
+        await videoTrack.cropTo(ct);
+        setRegionCaptureActive(true);
+      } catch (e) {
+        abortStart('収録範囲の切り出しに失敗したため録画を中止しました。もう一度お試しください。', e);
+        return;
+      }
+      // クロップ対象の寸法が録画中に変わると、Region Capture がそれに追従して
+      // 出力解像度が途中で変わり、WebM のトラック宣言寸法と実フレームが食い違う
+      // 壊れたファイルになり得る。UI 側の封鎖をすり抜けた場合 (ウィンドウリサイズ、
+      // OS の表示倍率変更、想定外の UI) の最後の防波堤として検知し、警告する。
+      cropResizeObserverRef.current?.disconnect();
+      const initial = cropEl.getBoundingClientRect();
+      let warned = false;
+      const observer = new ResizeObserver((entries) => {
+        if (warned) return;
+        const r = entries[0]?.contentRect;
+        if (!r) return;
+        // 端数の揺れは無視する (1px 未満の再レイアウト)
+        if (Math.abs(r.width - initial.width) < 1 && Math.abs(r.height - initial.height) < 1) return;
+        warned = true;
+        console.error(
+          '[useLocalRecording] 録画中に収録ステージの寸法が変化しました',
+          { from: { w: initial.width, h: initial.height }, to: { w: r.width, h: r.height } }
+        );
+        setError(
+          '録画中に収録範囲のサイズが変わりました。この収録ファイルは編集ソフトで正しく読み込めない可能性があります。録画を停止して録り直すことを強くおすすめします。'
+        );
+      });
+      observer.observe(cropEl);
+      cropResizeObserverRef.current = observer;
     }
 
     let micStream: MediaStream | null = null;
@@ -678,10 +736,15 @@ export function useLocalRecording({
     recorder.start(1000);
     setStartedAt(Date.now());
     setIsRecording(true);
+    } finally {
+      // 成功・失敗・早期 return のいずれでも starting を解除する
+      finishStarting();
+    }
   }, [includeMicrophone, room, onRegionCaptureUnavailable]);
 
   return {
     isRecording,
+    isStarting,
     startedAt,
     error,
     regionCaptureActive,
