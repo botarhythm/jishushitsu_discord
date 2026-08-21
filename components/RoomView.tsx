@@ -321,12 +321,19 @@ function RoomInner({
       ? 'region'
       : null;
   /**
-   * AI 参加者の ON/OFF は封鎖条件が別。録画ミキサーのタブ音声経路は録画開始時の
-   * スナップショットで固定されるため、途中で足すと音声が二重に録音される。
-   * これはクロップ方式と無関係なので、element モードでも録画中は切替を禁止する
-   * (パネルを開いての配線調整・レベル確認は許可する)。
+   * AI 参加者の ON/OFF は封鎖条件が別で、封鎖されるのは**録画開始処理中だけ**。
+   *
+   * かつては録画中も全面禁止だった。録画ミキサーのタブ音声経路が録画開始時の
+   * スナップショットで固定されており、途中で AI を足すと「タブ再生 + AI トラック」で
+   * 音声が二重に録音されたため。現在は useLocalRecording がタブ音声を常時 GainNode
+   * 経由で繋ぎ、excludeTabAudio の変化にゲイン 0/1 で滑らかに追従する
+   * (T-20260821-03)。AI トラック自体は AudioTrackRegistry が録画中の add/remove に
+   * 追従済みなので、録画中の ON/OFF で二重取り込みも音声欠落も起きない。
+   *
+   * 残る封鎖は isStarting だけ — getDisplayMedia のピッカー〜クロップ確定までは
+   * 録画リソースがまだ存在せず、ゲートを動かす先が無いため。
    */
-  const aiToggleLocked = isLocalRecording || isLocalRecordingStarting;
+  const aiToggleLocked = isLocalRecordingStarting;
 
   /**
    * region フォールバックで録画が始まったら、開いていたオーバーレイを閉じる。
@@ -594,25 +601,28 @@ function RoomInner({
    * 収録前に素早く出し入れできるよう、収録バーから1クリックで切り替えられる。
    */
   const toggleAi = useCallback(() => {
-    // 録画中の切替は全面禁止 (Codex レビュー #2)。録画ミキサーのタブ音声経路は
-    // 録画開始時のスナップショットで固定されるため、途中で AI を足すと
-    // 「タブ再生 + AI トラック」で音声が二重に録音される。外す方向も、
-    // 経路の整合が取れないまま録画が続くので許可しない。
-    // これはクロップ方式と無関係な音声側の制約なので、element モードでも解除しない。
-    if (isLocalRecording) {
-      alert('録画中は AI 参加者を切り替えできません。録画を停止してから操作してください。');
-      return;
-    }
+    // 録画中の切替は解禁済み (T-20260821-03)。タブ音声はゲイン 0/1 のゲートで
+    // 滑らかに開閉され、AI トラックはレジストリ経由で録画中の add/remove に追従する。
     if (aiEnabled) {
       setAiEnabled(false);
       return;
     }
     if (!aiConfig.sourceDeviceId) {
+      // 未設定なら設定画面へ誘導する。ただし region フォールバック録画中は
+      // パネル自体が封鎖されている (開くと収録物に焼き込まれる) ので開かない。
+      // 切替できないのは「設定が済んでいないから」であって録画中だからではない、
+      // と分かる文言にする。
+      if (panelsLocked) {
+        setDeviceError(
+          '録画中は設定画面を開けません。配線設定済みの場合のみ切替できます。'
+        );
+        return;
+      }
       setAiSetupOpen(true);
       return;
     }
     setAiEnabled(true);
-  }, [aiEnabled, aiConfig.sourceDeviceId, isLocalRecording]);
+  }, [aiEnabled, aiConfig.sourceDeviceId, panelsLocked]);
 
   /**
    * ダッシュボードの「AI参加者つきで収録開始」。

@@ -26,11 +26,20 @@
  * 判定を色で行うため、ステージ地は純色 #16a34a、パネルは純色 #ff00ff にしてある。
  * Element Capture が効いていれば、パネルを開いてもキャプチャ映像に #ff00ff は現れず、
  * かつパネルがレイアウトに参加しない（position: fixed）ので出力解像度も動かない。
+ *
+ * 音声側 (録画中の AI 参加者 ON/OFF) も同じ考え方で、色の代わりに**周波数**で判定する:
+ *   - タブ音声 = 440Hz を AudioContext.destination へ鳴らし続ける
+ *     (実 UI の RoomAudioRenderer が再生しているリモート音声に相当)。
+ *     実際にスピーカーから鳴るので `?audio=1` を付けたときだけ有効にする
+ *   - AI 参加者 = 880Hz を MediaStreamAudioDestinationNode へ流し、そのトラックを
+ *     AudioTrackRegistry へ登録 + excludeTabAudio を true にする (実 UI と同じ配線)
+ * 収録された WebM を帯域分析すれば、切替の前後で 440/880 の出入りが機械判定できる。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { notFound } from 'next/navigation';
 import { useLocalRecording } from '@/hooks/useLocalRecording';
+import { AudioTrackRegistry } from '@/lib/audio-track-registry';
 
 /**
  * このページのタブタイトル。
@@ -39,6 +48,27 @@ import { useLocalRecording } from '@/hooks/useLocalRecording';
  * getDisplayMedia のピッカーを自動応答させるので、両者は一致していること。
  */
 const PAGE_TITLE = 'dev-capture-test';
+
+/** タブ音声として鳴らし続けるトーンの周波数 (RoomAudioRenderer の再生音相当) */
+const TAB_TONE_HZ = 440;
+/** AI 参加者トラックのトーン周波数 (ChatGPT の声相当) */
+const AI_TONE_HZ = 880;
+/** どちらのトーンも同じ振幅にする。帯域 RMS を直接比較できるようにするため */
+const TONE_GAIN = 0.25;
+/** レジストリ上の AI トラック id (実 UI の useAiParticipant 相当) */
+const AI_TRACK_ID = 'ai-participant';
+
+/** 検証スクリプトが page.evaluate で読む収録結果の受け渡し口 */
+interface AudioRunHandoff {
+  blob: Blob | null;
+  marks: {
+    /** 録画開始時刻 (Date.now()。収録ファイルの先頭に対応する) */
+    startedAt: number | null;
+    aiOnAt: number | null;
+    aiOffAt: number | null;
+    stopRequestedAt: number | null;
+  };
+}
 
 export default function DevCaptureTestPage() {
   if (process.env.NODE_ENV === 'production') notFound();
@@ -62,12 +92,44 @@ export default function DevCaptureTestPage() {
   /** ステージ内の <video> が実際に再生できているか (ステージ内容の近似が成立しているかの確認) */
   const [videoPlaying, setVideoPlaying] = useState(false);
 
-  const { isRecording, isStarting, error, captureExclusionMode, regionCaptureActive, start, stop } =
+  // ── 音声経路の検証用 (録画中の AI 参加者 ON/OFF) ──
+  /** 実 UI と同じ配線。AI 参加者の音声はこのレジストリ経由で録画ミキサーへ渡る */
+  const aiRegistry = useMemo(() => new AudioTrackRegistry(), []);
+  /** AI 参加者トグルの状態。ON の間はタブ音声を除外する (実 UI の aiEnabled 相当) */
+  const [aiParticipantOn, setAiParticipantOn] = useState(false);
+  const [toneState, setToneState] = useState('none');
+  /** getDisplayMedia が返したタブ音声トラックの状態 (無音の原因切り分け用) */
+  const [captureAudioTracks, setCaptureAudioTracks] = useState('-');
+  const [audioRunReady, setAudioRunReady] = useState(false);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const aiNodesRef = useRef<{
+    osc: OscillatorNode;
+    gain: GainNode;
+    dest: MediaStreamAudioDestinationNode;
+    track: MediaStreamTrack;
+  } | null>(null);
+  const marksRef = useRef<AudioRunHandoff['marks']>({
+    startedAt: null,
+    aiOnAt: null,
+    aiOffAt: null,
+    stopRequestedAt: null,
+  });
+
+  const { isRecording, isStarting, startedAt, error, captureExclusionMode, regionCaptureActive, start, stop } =
     useLocalRecording({
       filePrefix: 'dev-capture-test',
       // マイクを開くと検証環境ごとに挙動が変わる。映像の検証だけなので閉じておく。
       includeMicrophone: false,
+      // AI 参加者の音声経路 (実 UI と同じ: レジストリ + excludeTabAudio の連動)
+      extraAudioTracks: aiRegistry,
+      excludeTabAudio: aiParticipantOn,
     });
+
+  /**
+   * AI 参加者トグルを押せるか。RoomView の aiToggleLocked と同じ式にしてあること
+   * (録画中の ON/OFF は解禁済み。封鎖されるのは録画開始処理中だけ)。
+   */
+  const aiToggleLocked = isStarting;
 
   /**
    * パネルを開閉できるか。RoomView の panelsLocked と同じ式にしてあること
@@ -94,9 +156,25 @@ export default function DevCaptureTestPage() {
     // このページに限り getDisplayMedia を包んでストリームを掴んでおく。
     const md = navigator.mediaDevices;
     const original = md.getDisplayMedia.bind(md);
+    const toneEnabled = new URLSearchParams(window.location.search).has('audio');
     const patched = async (options?: DisplayMediaStreamOptions) => {
-      const stream = await original(options);
+      // 音声ランのときだけタブ音声の音声処理 (AGC/NS/AEC) を切る。
+      // Chrome は audio: true のタブ音声に既定で APM を掛けており、
+      // 純音を「雑音」とみなして数秒かけて 1/3 以下まで削っていく。
+      // 測っているのは**こちらのゲート**であって Chrome の APM ではないので、
+      // 測定系から外す。本番の getDisplayMedia 引数 (audio: true) は変えていない。
+      const stream = await original(
+        toneEnabled
+          ? {
+              ...options,
+              audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+            }
+          : options
+      );
       capturedRef.current = stream;
+      // 検証スクリプトから生のトラックを触れるようにしておく
+      // (タブ音声が実際に載っているかの実測に使う)
+      (window as unknown as Record<string, unknown>).__capturedStream = stream;
       queueMicrotask(() => {
         const v = previewRef.current;
         if (!v) return;
@@ -172,10 +250,120 @@ export default function DevCaptureTestPage() {
     const read = () => {
       const s = isRecording ? capturedRef.current?.getVideoTracks()[0]?.getSettings() : undefined;
       setTrackSize(s?.width && s?.height ? `${s.width}x${s.height}` : '-');
+      // タブ音声トラックが取れているか。取れていなければ帯域判定は必ず無音になるので、
+      // 「切替の失敗」と「そもそもタブ音声を掴めていない」を切り分けられるようにする。
+      const a = capturedRef.current?.getAudioTracks() ?? [];
+      setCaptureAudioTracks(
+        a.length === 0 ? '0' : `${a.length}:${a[0].readyState}:${a[0].muted ? 'muted' : 'unmuted'}`
+      );
     };
     const id = window.setInterval(read, 200);
     return () => window.clearInterval(id);
   }, [isRecording]);
+
+  useEffect(() => {
+    // AudioContext は常に用意する (AI 参加者トラックの生成に要る)。
+    // タブ音声トーン (440Hz) は ?audio=1 のときだけ鳴らす —
+    // 実際にスピーカーから音が出るため、音声を見ないランでは鳴らさない。
+    let ctx: AudioContext;
+    try {
+      ctx = new AudioContext({ sampleRate: 48000 });
+    } catch {
+      ctx = new AudioContext();
+    }
+    audioCtxRef.current = ctx;
+    const toneEnabled = new URLSearchParams(window.location.search).has('audio');
+    let osc: OscillatorNode | null = null;
+    if (toneEnabled) {
+      // タブ音声の代わりに 440Hz を鳴らし続ける。
+      // AudioContext.destination へ出した音はタブの再生音になるので、
+      // getDisplayMedia({ audio: true }) が「タブ音声」として拾う。
+      // 実 UI では RoomAudioRenderer が鳴らしているリモート音声がこれに当たる。
+      osc = ctx.createOscillator();
+      osc.frequency.value = TAB_TONE_HZ;
+      const gain = ctx.createGain();
+      gain.gain.value = TONE_GAIN;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+    }
+    void ctx.resume().catch(() => {});
+    const probe = window.setInterval(
+      () => setToneState(toneEnabled ? ctx.state : 'disabled'),
+      200
+    );
+    return () => {
+      window.clearInterval(probe);
+      try {
+        osc?.stop();
+      } catch {
+        // already stopped
+      }
+      audioCtxRef.current = null;
+      void ctx.close().catch(() => {});
+    };
+  }, []);
+
+  useEffect(() => {
+    // 収録ファイルの先頭に対応する時刻。フェーズ境界はここからの相対で測る。
+    if (isRecording && startedAt) marksRef.current.startedAt = startedAt;
+  }, [isRecording, startedAt]);
+
+  /**
+   * AI 参加者の ON/OFF (実 UI の toggleAi 相当)。
+   * ON: 880Hz を MediaStreamAudioDestinationNode に流し、そのトラックをレジストリへ登録。
+   *     同時に excludeTabAudio を true にする (タブ音声との二重取り込み防止)。
+   * OFF: レジストリから外し、excludeTabAudio を false へ戻す。
+   * 880Hz は ctx.destination へは出さない — 出すとタブ音声にも乗り、帯域判定が壊れる。
+   */
+  const toggleAiParticipant = useCallback(() => {
+    if (aiToggleLocked) return;
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+    if (aiParticipantOn) {
+      aiRegistry.remove(AI_TRACK_ID);
+      const nodes = aiNodesRef.current;
+      if (nodes) {
+        try {
+          nodes.osc.stop();
+        } catch {
+          // already stopped
+        }
+        nodes.osc.disconnect();
+        nodes.gain.disconnect();
+        nodes.track.stop();
+      }
+      aiNodesRef.current = null;
+      marksRef.current.aiOffAt = Date.now();
+      setAiParticipantOn(false);
+      return;
+    }
+    const dest = ctx.createMediaStreamDestination();
+    const osc = ctx.createOscillator();
+    osc.frequency.value = AI_TONE_HZ;
+    const gain = ctx.createGain();
+    gain.gain.value = TONE_GAIN;
+    osc.connect(gain);
+    gain.connect(dest);
+    osc.start();
+    const track = dest.stream.getAudioTracks()[0];
+    aiNodesRef.current = { osc, gain, dest, track };
+    aiRegistry.add(AI_TRACK_ID, track);
+    marksRef.current.aiOnAt = Date.now();
+    setAiParticipantOn(true);
+  }, [aiToggleLocked, aiParticipantOn, aiRegistry]);
+
+  /**
+   * 録画を止め、保存された Blob とフェーズ境界を検証スクリプトへ渡す。
+   * Blob は window 経由でしか渡せない (page.evaluate から読む)。
+   */
+  const stopAndCollect = useCallback(async () => {
+    marksRef.current.stopRequestedAt = Date.now();
+    const blob = await stop();
+    const handoff: AudioRunHandoff = { blob, marks: { ...marksRef.current } };
+    (window as unknown as Record<string, unknown>).__audioRun = handoff;
+    setAudioRunReady(!!blob);
+  }, [stop]);
 
   useEffect(() => {
     // region フォールバック時の強制クローズ (RoomView と同じ挙動)。
@@ -240,7 +428,12 @@ export default function DevCaptureTestPage() {
           <button
             type="button"
             data-testid="start-recording"
-            onClick={() => void start('streaming', () => stageRef.current)}
+            onClick={() => {
+              // 自動再生ポリシーで suspended のまま始まると 440Hz が鳴らず、
+              // タブ音声が無音の収録になる。ユーザー操作のこの場で resume しておく。
+              void audioCtxRef.current?.resume().catch(() => {});
+              void start('streaming', () => stageRef.current);
+            }}
             className="rounded bg-red-600 px-3 py-1 font-medium disabled:opacity-40"
             disabled={isRecording || isStarting}
           >
@@ -249,11 +442,20 @@ export default function DevCaptureTestPage() {
           <button
             type="button"
             data-testid="stop-recording"
-            onClick={() => void stop()}
+            onClick={() => void stopAndCollect()}
             className="rounded bg-stone-700 px-3 py-1 font-medium disabled:opacity-40"
             disabled={!isRecording}
           >
             録画停止
+          </button>
+          <button
+            type="button"
+            data-testid="toggle-ai-participant"
+            onClick={toggleAiParticipant}
+            disabled={aiToggleLocked}
+            className="rounded bg-amber-600 px-3 py-1 font-medium disabled:opacity-40"
+          >
+            AI参加者
           </button>
           <button
             type="button"
@@ -310,6 +512,16 @@ export default function DevCaptureTestPage() {
           <dd data-testid="stage-mounted">{String(stageMounted)}</dd>
           <dt>stage video playing</dt>
           <dd data-testid="stage-video-playing">{String(videoPlaying)}</dd>
+          <dt>audio context</dt>
+          <dd data-testid="tone-state">{toneState}</dd>
+          <dt>capture audio tracks</dt>
+          <dd data-testid="capture-audio-tracks">{captureAudioTracks}</dd>
+          <dt>ai participant</dt>
+          <dd data-testid="ai-participant-state">{String(aiParticipantOn)}</dd>
+          <dt>ai toggle locked</dt>
+          <dd data-testid="ai-toggle-locked">{String(aiToggleLocked)}</dd>
+          <dt>audio run ready</dt>
+          <dd data-testid="audio-run-ready">{String(audioRunReady)}</dd>
           <dt>error</dt>
           <dd data-testid="recording-error">{error ?? ''}</dd>
         </dl>

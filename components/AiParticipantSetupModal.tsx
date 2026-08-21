@@ -46,7 +46,10 @@ interface AiParticipantSetupModalProps {
     remoteCount: number;
   } | null;
   onReconnect: () => void;
-  /** 録画中は有効化を許可しない（録画開始前に有効化しないとタブ音声二重化が起きるため） */
+  /**
+   * 録画中か。有効/無効の切替そのものは録画中でも許可する (T-20260821-03) が、
+   * テストトーンを鳴らす検査系だけは封鎖する（トーンが収録と配信に混入するため）。
+   */
   isRecording: boolean;
   onClose: () => void;
 }
@@ -431,17 +434,16 @@ export function AiParticipantSetupModal({
     return findCableMonitorInput(sink, inputs)?.deviceId === config.sourceDeviceId;
   }, [config.sinkDeviceId, config.sourceDeviceId, inputs, outputs]);
 
-  const canEnable =
-    !!config.sourceDeviceId && !micCollision && !sourceIsSinkMonitor && !isRecording;
+  // 録画中でも有効化できる (T-20260821-03)。録画ミキサーのタブ音声はゲート経由で
+  // 閉じられ、AI トラックはレジストリ経由で録画中に足されるため二重取り込みにならない。
+  const canEnable = !!config.sourceDeviceId && !micCollision && !sourceIsSinkMonitor;
 
   // ボタンが押せない理由を明示する（グレーアウトの理由が分からない状態を作らない）
   const enableBlockReason = !config.sourceDeviceId
     ? "① AI 音声ソースを選んでください"
     : micCollision || sourceIsSinkMonitor
       ? "上の警告を解消してください"
-      : isRecording
-        ? "録画中は有効化できません（録画を止めてから）"
-        : null;
+      : null;
 
   const set = (patch: Partial<AiParticipantConfig>) => {
     const wiringChanged = 'sourceDeviceId' in patch || 'sinkDeviceId' in patch;
@@ -1075,14 +1077,10 @@ export function AiParticipantSetupModal({
             </span>
           )}
           {enabled ? (
+            // 録画中でも無効化できる (T-20260821-03)。タブ音声はゲート経由で
+            // 滑らかに開き直され、AI トラックは録画ミキサーから動的に外れる。
             <button
               onClick={() => onChangeEnabled(false)}
-              disabled={isRecording}
-              title={
-                isRecording
-                  ? '録画中は AI 参加者を無効にできません (録画音声が途中から欠落するため)'
-                  : undefined
-              }
               className="shrink-0 rounded-lg bg-stone-700 px-4 py-2 text-sm font-medium text-stone-200 hover:bg-stone-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
               AI 参加者を無効にする

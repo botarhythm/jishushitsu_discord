@@ -25,7 +25,7 @@ interface StudioBarProps {
   aiError?: boolean;
   /** AI 参加者の ON/OFF を切り替える */
   onToggleAi?: () => void;
-  /** true の間は AI の切替を封鎖する (録画中。音声二重化の防止) */
+  /** true の間は AI の切替を封鎖する (録画の開始処理中のみ。録画中は切替可) */
   aiToggleDisabled?: boolean;
   /** AI 参加者セットアップモーダルを開く */
   onOpenAiSetup?: () => void;
@@ -291,7 +291,7 @@ export function StudioBar(props: StudioBarProps) {
               disabled={aiToggleDisabled}
               label={
                 aiToggleDisabled
-                  ? '録画中は AI を切り替えできません (音声が二重に入るため)'
+                  ? '録画の開始処理中は AI を切り替えできません (録画開始後は切り替えられます)'
                   : aiEnabled
                     ? 'AI参加者をOFFにする'
                     : 'AI参加者をONにする'

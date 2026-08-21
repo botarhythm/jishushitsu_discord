@@ -33,6 +33,13 @@ export type RecordingQuality = 'streaming' | 'standard' | 'high';
  */
 export type CaptureExclusionMode = 'element' | 'region';
 
+/**
+ * タブ音声ゲートの遷移時定数 (秒)。setTargetAtTime は指数的に寄るので、
+ * 実効的な切替時間はこの 4〜5 倍 (= 約 80〜100ms)。
+ * これより短いとクリックノイズが聞こえ始め、長いと切替が収録に「ぼやけて」残る。
+ */
+const TAB_GATE_TIME_CONSTANT = 0.02;
+
 interface QualityPreset {
   width: number;
   height: number;
@@ -66,13 +73,19 @@ interface UseLocalRecordingOptions {
    */
   extraAudioTracks?: AudioTrackRegistry | null;
   /**
-   * true のとき displayStream のタブ音声を録画ミキサーに接続しない（単一取り込みポリシー）。
+   * true のとき displayStream のタブ音声を録画に載せない（単一取り込みポリシー）。
    *
    * タブ音声には RoomAudioRenderer が再生しているリモート音声・AI モニタ音声が含まれ、
    * 明示的にミックスしているリモートトラック/追加トラックと構造的に二重になる。
    * AI 参加者を有効にした収録ではこれを true にし、録画入力を
    * 「ローカルマイク + リモートトラック + extraAudioTracks」の明示トラックに一本化する。
    * false（既定）の場合は従来どおりタブ音声も mix する（既存挙動の保護）。
+   *
+   * 実装は「接続する / しない」ではなく **常時 GainNode 経由で接続してゲインを 0/1 に振る**。
+   * ゲイン 0 は録音内容として「接続しない」と等価（unity gain も透過）でありながら、
+   * 録画中に値が変わっても connect/disconnect をやり直さずに済む
+   * （やり直すと波形が不連続になりクリックノイズが乗る）。
+   * これにより録画中の AI 参加者 ON/OFF を解禁できる。
    */
   excludeTabAudio?: boolean;
 }
@@ -91,6 +104,11 @@ interface RecordingResources {
   micStream: MediaStream | null;
   audioContext: AudioContext | null;
   audioDestination: MediaStreamAudioDestinationNode | null;
+  /**
+   * タブ音声の開閉ゲート。タブ音声トラックが無い（音声を共有していない）ときだけ null。
+   * 録画中の excludeTabAudio 変化はこのノードのゲインを滑らかに 0/1 へ動かすことで反映する。
+   */
+  tabGain: GainNode | null;
   remoteAudioNodes: Map<string, RemoteAudioNode>;
   detachListeners: () => void;
   /**
@@ -158,6 +176,11 @@ export function useLocalRecording({
   const stopRef = useRef<() => Promise<Blob | null>>(() => Promise.resolve(null));
   // excludeTabAudio / extraAudioTracks は録画開始時点の最新値を使う（stale closure 回避）
   const excludeTabAudioRef = useRef(excludeTabAudio);
+  /**
+   * タブ音声ゲートに現在指示している目標値 (1=開 / 0=閉)。
+   * GainNode.gain.value は遷移中の途中値を返すので、判定にはこちらを使う。
+   */
+  const tabGateTargetRef = useRef<0 | 1>(excludeTabAudio ? 0 : 1);
   const extraTracksRef = useRef(extraAudioTracks);
   const filePrefixRef = useRef(filePrefix);
   useEffect(() => {
@@ -165,6 +188,33 @@ export function useLocalRecording({
     extraTracksRef.current = extraAudioTracks;
     filePrefixRef.current = filePrefix;
   }, [excludeTabAudio, extraAudioTracks, filePrefix]);
+
+  /**
+   * 録画中に excludeTabAudio が変わったら、タブ音声ゲートを滑らかに開閉する。
+   *
+   * AI 参加者を録画の途中で ON/OFF できるようにするための経路。ノードの
+   * connect/disconnect はやり直さない — 波形が不連続になり、収録物にクリックノイズ
+   * (プツッという音) が焼き付くため。時定数 20ms の setTargetAtTime で
+   * 実質 100ms 程度かけて 0/1 へ寄せる。
+   */
+  useEffect(() => {
+    const r = resourcesRef.current;
+    const gain = r?.tabGain;
+    const ctx = r?.audioContext;
+    if (!r || !gain || !ctx) return;
+    const target = excludeTabAudio ? 0 : 1;
+    if (tabGateTargetRef.current === target) return;
+    tabGateTargetRef.current = target;
+    try {
+      gain.gain.setTargetAtTime(target, ctx.currentTime, TAB_GATE_TIME_CONSTANT);
+    } catch (e) {
+      // 自動化が使えない環境では即値で切り替える (クリックノイズより無音のほうが害が小さい)
+      console.warn('[useLocalRecording] タブ音声ゲートの遷移に失敗', e);
+      gain.gain.value = target;
+    }
+    // 事後診断用。「この収録のどこでタブ音声を閉じた/開いたか」を収録先頭 0 の時計で残す。
+    recordSessionEvent({ type: 'tab_audio_gate', open: target === 1 });
+  }, [excludeTabAudio]);
 
   const cleanup = useCallback(() => {
     cropResizeObserverRef.current?.disconnect();
@@ -404,6 +454,8 @@ export function useLocalRecording({
     let micStream: MediaStream | null = null;
     let audioContext: AudioContext | null = null;
     let audioDestination: MediaStreamAudioDestinationNode | null = null;
+    /** タブ音声の開閉ゲート (録画中の excludeTabAudio 変化をここで反映する) */
+    let tabGain: GainNode | null = null;
     const remoteAudioNodes = new Map<string, RemoteAudioNode>();
     let finalStream = displayStream;
     let detachListeners: () => void = () => {};
@@ -425,22 +477,30 @@ export function useLocalRecording({
       // 接続済みトラックの重複排除 (同じ MediaStreamTrack を複数経路で二重ミックスしない)
       const connectedTrackIds = new Set<string>();
 
-      // タブ音声があれば足す。
-      // ただし excludeTabAudio (単一取り込みポリシー) のときは接続しない —
-      // タブ音声には RoomAudioRenderer が再生中のリモート音声等が含まれ、
-      // 下の明示トラックミックスと構造的に二重になるため。
-      if (!excludeTabAudioRef.current) {
-        const tabAudioTracks = displayStream.getAudioTracks();
-        if (tabAudioTracks.length > 0 && audioContext && audioDestination) {
-          try {
-            const tabSrc = audioContext.createMediaStreamSource(
-              new MediaStream(tabAudioTracks)
-            );
-            tabSrc.connect(audioDestination);
-            tabAudioTracks.forEach((t) => connectedTrackIds.add(t.id));
-          } catch (e) {
-            console.warn('[useLocalRecording] タブ音声接続失敗', e);
-          }
+      // タブ音声は excludeTabAudio の値に関わらず**常に** GainNode 経由で繋いでおき、
+      // 初期ゲインだけを excludeTabAudio ? 0 : 1 にする。
+      // ゲイン 0 は録音内容として「繋がない」と等価（1 は透過）なので既存挙動は変わらないが、
+      // 録画中に excludeTabAudio が変わったときノードを繋ぎ直さずに開閉できる
+      // （繋ぎ直しは波形の不連続 = クリックノイズになる）。
+      // タブ音声には RoomAudioRenderer が再生中のリモート音声・AI モニタ音声が含まれるため、
+      // AI 参加者を有効にしている間は閉じて明示トラック側と二重にならないようにする。
+      const tabAudioTracks = displayStream.getAudioTracks();
+      if (tabAudioTracks.length > 0 && audioContext && audioDestination) {
+        try {
+          const tabSrc = audioContext.createMediaStreamSource(
+            new MediaStream(tabAudioTracks)
+          );
+          tabGain = audioContext.createGain();
+          tabGain.gain.value = excludeTabAudioRef.current ? 0 : 1;
+          // 開始時の実ゲインと、追従 effect が見る目標値を一致させる
+          // (前回の録画で振った値が残っていると初回の変化を取りこぼす)
+          tabGateTargetRef.current = excludeTabAudioRef.current ? 0 : 1;
+          tabSrc.connect(tabGain);
+          tabGain.connect(audioDestination);
+          tabAudioTracks.forEach((t) => connectedTrackIds.add(t.id));
+        } catch (e) {
+          tabGain = null;
+          console.warn('[useLocalRecording] タブ音声接続失敗', e);
         }
       }
 
@@ -768,6 +828,7 @@ export function useLocalRecording({
       micStream,
       audioContext,
       audioDestination,
+      tabGain,
       remoteAudioNodes,
       detachListeners,
       finalizePromise,

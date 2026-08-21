@@ -22,6 +22,12 @@
  *      新しいエラーも出ない（= 録画中の封鎖を解除してよいことの根拠）
  *   g. region モードの録画中はパネル開閉ボタンが DOM 上で disabled であり、
  *      開いていたパネルは強制的に閉じられる（フォールバック時の封鎖維持）
+ *   h. 録画中に AI 参加者を ON/OFF しても録画が壊れず、収録音声の中身が切り替わる。
+ *      タブ音声 440Hz / AI 音声 880Hz を鳴らし分け、保存された WebM を
+ *      OfflineAudioContext + bandpass で帯域 RMS にしてフェーズごとに判定する
+ *      （audioDynamicSwitch）
+ *   i. element / region どちらの録画中でも AI 参加者トグルが DOM 上 disabled でない
+ *      （音声の切替はクロップ方式に依存しない / aiToggleUnlockedWhileRecording）
  *
  * すべて満たせば exit 0。ひとつでも欠ければ exit 1。結果 JSON を stdout に出す。
  */
@@ -199,14 +205,118 @@ const isOverlayColor = ([r, g, b]) =>
   Math.abs(b - OVERLAY_RGB[2]) <= COLOR_TOLERANCE;
 
 /**
+ * 収録された WebM をページ内で復号し、フェーズごとの帯域 RMS を測る。
+ *
+ * 「録画中に AI 参加者を ON/OFF しても音声が二重にならない/欠落しない」は
+ * 目視では確かめられない。タブ音声を 440Hz、AI 音声を 880Hz にしておけば、
+ * 収録物のどの区間にどちらの音が入っているかを数値で判定できる。
+ *
+ * 境界の前後 guardMs は測定から外す。ゲートの遷移 (時定数 20ms) と、
+ * ページ側の時刻 (Date.now) と収録タイムラインの微小なずれを吸収するため。
+ */
+async function analyzeAudioRun(page, { guardMs = 300, tabHz = 440, aiHz = 880 } = {}) {
+  return page.evaluate(
+    async ({ guardMs, tabHz, aiHz }) => {
+      const run = window.__audioRun;
+      if (!run) return { error: '録画結果がページから受け渡されていません' };
+      if (!run.blob) return { error: '録画 Blob が null です' };
+      const m = run.marks;
+      if (!m.startedAt || !m.aiOnAt || !m.aiOffAt || !m.stopRequestedAt) {
+        return { error: `フェーズ境界が欠けています: ${JSON.stringify(m)}` };
+      }
+      const buf = await run.blob.arrayBuffer();
+      const ctx = new AudioContext();
+      let audio;
+      try {
+        audio = await ctx.decodeAudioData(buf);
+      } catch (e) {
+        return {
+          error: `decodeAudioData に失敗: ${String(e)}`,
+          blobSize: run.blob.size,
+          blobType: run.blob.type,
+        };
+      } finally {
+        void ctx.close();
+      }
+
+      /** 指定区間をモノラルに畳んで bandpass に通し、RMS を返す */
+      const bandRms = async (from, to, freq) => {
+        const sr = audio.sampleRate;
+        const s = Math.max(0, Math.floor(from * sr));
+        const e = Math.min(audio.length, Math.floor(to * sr));
+        const len = e - s;
+        // Q=30 の bandpass はリンギングが長い。短すぎる区間は測らない。
+        if (len < sr * 0.3) return null;
+        const off = new OfflineAudioContext(1, len, sr);
+        const sliced = off.createBuffer(1, len, sr);
+        const out = sliced.getChannelData(0);
+        for (let c = 0; c < audio.numberOfChannels; c++) {
+          const src = audio.getChannelData(c);
+          for (let i = 0; i < len; i++) out[i] += src[s + i] / audio.numberOfChannels;
+        }
+        const node = off.createBufferSource();
+        node.buffer = sliced;
+        const filter = off.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.value = freq;
+        filter.Q.value = 30;
+        node.connect(filter);
+        filter.connect(off.destination);
+        node.start();
+        const rendered = await off.startRendering();
+        const d = rendered.getChannelData(0);
+        // フィルタの立ち上がり (100ms) は捨てる
+        const skip = Math.min(d.length - 1, Math.floor(sr * 0.1));
+        let sum = 0;
+        for (let i = skip; i < d.length; i++) sum += d[i] * d[i];
+        return Math.sqrt(sum / (d.length - skip));
+      };
+
+      const rel = (t) => (t - m.startedAt) / 1000;
+      const guard = guardMs / 1000;
+      const bounds = [
+        { name: 'phase1_aiOff', from: 0, to: rel(m.aiOnAt) },
+        { name: 'phase2_aiOn', from: rel(m.aiOnAt), to: rel(m.aiOffAt) },
+        { name: 'phase3_aiOff', from: rel(m.aiOffAt), to: rel(m.stopRequestedAt) },
+      ];
+      const phases = [];
+      for (const b of bounds) {
+        const from = Math.max(0, b.from + guard);
+        const to = Math.min(audio.duration, b.to - guard);
+        phases.push({
+          name: b.name,
+          from: Number(from.toFixed(3)),
+          to: Number(to.toFixed(3)),
+          tabRms: await bandRms(from, to, tabHz),
+          aiRms: await bandRms(from, to, aiHz),
+        });
+      }
+      return {
+        duration: Number(audio.duration.toFixed(3)),
+        sampleRate: audio.sampleRate,
+        channels: audio.numberOfChannels,
+        blobSize: run.blob.size,
+        phases,
+      };
+    },
+    { guardMs, tabHz, aiHz }
+  );
+}
+
+/**
  * 検証ページを開いたブラウザを用意する。
  * removeRestrictionTarget を立てると Element Capture 非対応環境を再現する。
  */
-async function openPage({ removeRestrictionTarget }) {
+async function openPage({ removeRestrictionTarget, withAudio = false }) {
   const browser = await chromium.launch({
     // 既定の headless shell では getDisplayMedia のタブキャプチャが使えない。
     // channel: 'chromium' はフルビルドの Chromium を新ヘッドレス (headless=new) で起動する。
     channel: 'chromium',
+    // Playwright は headless 起動時に既定で --mute-audio を足す。これが付いていると
+    // タブが音を鳴らしていても getDisplayMedia のタブ音声トラックは**完全な無音**になる
+    // (トラック自体は live:unmuted で取れるので、外から見ると切替の失敗と区別できない)。
+    // 音声ランだけ外す。外すと実際にスピーカーから 440Hz が鳴る。
+    ...(withAudio ? { ignoreDefaultArgs: ['--mute-audio'] } : {}),
     args: [
       // getDisplayMedia のピッカーを、このタイトルのタブで自動応答させる
       `--auto-select-tab-capture-source-by-title=${PAGE_TITLE}`,
@@ -220,7 +330,8 @@ async function openPage({ removeRestrictionTarget }) {
       delete window.RestrictionTarget;
     });
   }
-  await page.goto(`${BASE}${PAGE_PATH}`, { waitUntil: 'domcontentloaded' });
+  // ?audio=1 のときだけページがタブ音声トーンを鳴らす
+  await page.goto(`${BASE}${PAGE_PATH}${withAudio ? '?audio=1' : ''}`, { waitUntil: 'domcontentloaded' });
   await page.locator('[data-testid="start-recording"]').waitFor({ timeout: 60_000 });
   // タイトルはハイドレーション後の effect で設定される (layout の metadata を上書きする)。
   // ここが一致していないと getDisplayMedia のピッカーが自動応答されず必ず詰まるので、
@@ -276,6 +387,10 @@ async function runElementCapture(details) {
 
     const sizeBefore = await waitForStableTrackSize(page);
     details.run1.panelsLocked = (await readState(page, 'panels-locked')).trim();
+    // i: 録画中でも AI 参加者の切替は封鎖しない (音声の話なのでクロップ方式に依存しない)
+    details.run1.aiToggleDisabled = await page
+      .locator('[data-testid="toggle-ai-participant"]')
+      .isDisabled();
     await setPanels(true);
     await sleep(1_000); // 「開いた1秒後」に測る
     const sizeAfter = (await readState(page, 'track-size')).trim();
@@ -369,8 +484,12 @@ async function runRegionFallback(details) {
     const aiDisabled = await page.locator('[data-testid="toggle-ai-panel"]').isDisabled();
     const panelsLockedState = (await readState(page, 'panels-locked')).trim();
     details.run2.chatToggleDisabled = chatDisabled;
-    details.run2.aiToggleDisabled = aiDisabled;
+    details.run2.aiPanelToggleDisabled = aiDisabled;
     details.run2.panelsLocked = panelsLockedState;
+    // i: パネル開閉は封鎖されるが、AI 参加者の ON/OFF は region でも封鎖しない
+    details.run2.aiToggleDisabled = await page
+      .locator('[data-testid="toggle-ai-participant"]')
+      .isDisabled();
 
     // 開いていたパネルが強制的に閉じられていること（region はパネルが収録に焼き込まれる）
     const chatState = (await readState(page, 'chat-panel-state')).trim();
@@ -413,6 +532,79 @@ async function runFailClosed(details) {
   }
 }
 
+/**
+ * ラン4: 録画中の AI 参加者 ON/OFF で音声経路が動的に切り替わるか (h)
+ *
+ * シナリオ: 録画開始 (AI OFF) → 2秒 → AI ON → 2秒 → AI OFF → 2秒 → 停止。
+ * 収録物のフェーズごとに 440Hz (タブ音声) と 880Hz (AI 音声) の RMS を測り、
+ * 「AI ON でタブ音声が閉じ AI 音声が入る」「AI OFF でタブ音声が戻る」を判定する。
+ *
+ * 注意: このランだけ Chromium のミュートを外すため、実行中の約10秒間
+ * 440Hz のトーンが実際にスピーカーから鳴る (音声出力デバイスが必要)。
+ */
+async function runAudioDynamicSwitch(details) {
+  const { browser, page } = await openPage({ removeRestrictionTarget: false, withAudio: true });
+  const aiToggle = page.locator('[data-testid="toggle-ai-participant"]');
+  try {
+    // タブ音声 (440Hz) が実際に鳴っている状態で始める。suspended のまま録ると
+    // 全フェーズ無音になり、判定が「切替の失敗」と区別できなくなる。
+    await waitForState(page, 'tone-state', (v) => v === 'running', 20_000, 'ラン4(タブ音声の再生)');
+    details.run4 = { toneState: 'running' };
+
+    await page.locator('[data-testid="start-recording"]').click();
+    await waitForState(page, 'is-recording', (v) => v === 'true', 30_000, 'ラン4(録画開始)');
+    details.run4.mode = (await readState(page, 'capture-exclusion-mode')).trim();
+
+    await sleep(2_000); // フェーズ1: AI OFF
+    await aiToggle.click({ timeout: 5_000 });
+    await waitForState(page, 'ai-participant-state', (v) => v === 'true', 5_000, 'ラン4(AI ON)');
+    await sleep(2_000); // フェーズ2: AI ON
+    await aiToggle.click({ timeout: 5_000 });
+    await waitForState(page, 'ai-participant-state', (v) => v === 'false', 5_000, 'ラン4(AI OFF)');
+    await sleep(2_000); // フェーズ3: AI OFF
+
+    const stillRecording = (await readState(page, 'is-recording')).trim();
+    const errorDuringRun = (await readState(page, 'recording-error')).trim();
+    details.run4.stillRecording = stillRecording;
+    details.run4.error = errorDuringRun;
+
+    await page.locator('[data-testid="stop-recording"]').click({ timeout: 5_000 });
+    await waitForState(page, 'audio-run-ready', (v) => v === 'true', 60_000, 'ラン4(録画の確定)');
+
+    const analysis = await analyzeAudioRun(page);
+    details.run4.analysis = analysis;
+    if (analysis.error) return { audioDynamicSwitch: false };
+
+    const [p1, p2, p3] = analysis.phases;
+    const base = p1?.tabRms ?? 0;
+    const ratios = {
+      // 各値をフェーズ1のタブ音声 (基準値) との比で見る
+      phase1_ai: base > 0 ? p1.aiRms / base : null,
+      phase2_tab: base > 0 ? p2.tabRms / base : null,
+      phase2_ai: base > 0 ? p2.aiRms / base : null,
+      phase3_tab: base > 0 ? p3.tabRms / base : null,
+      phase3_ai: base > 0 ? p3.aiRms / base : null,
+    };
+    details.run4.base440Rms = base;
+    details.run4.ratios = ratios;
+
+    const audioDynamicSwitch =
+      base > 0 &&
+      stillRecording === 'true' &&
+      errorDuringRun === '' &&
+      ratios.phase1_ai < 0.05 && // フェーズ1: AI 音声は入っていない
+      ratios.phase2_tab < 0.1 && // フェーズ2: タブ音声のゲートが閉じている
+      ratios.phase2_ai > 0.3 && // フェーズ2: AI 音声が基準と同オーダーで入っている
+      ratios.phase2_ai < 3 &&
+      ratios.phase3_tab > 0.5 && // フェーズ3: タブ音声が戻っている
+      ratios.phase3_ai < 0.05; // フェーズ3: AI 音声は抜けている
+
+    return { audioDynamicSwitch };
+  } finally {
+    await browser.close();
+  }
+}
+
 // ── main ──────────────────────────────────────────────────────
 
 const main = async () => {
@@ -433,6 +625,8 @@ const main = async () => {
     panelsLockedInRegionMode: false,
     panelsForceClosedInRegionMode: false,
     failClosedOnMissingTarget: false,
+    audioDynamicSwitch: false,
+    aiToggleUnlockedWhileRecording: false,
   };
   try {
     if (!(await waitForServer())) {
@@ -443,6 +637,11 @@ const main = async () => {
     result = { ...result, ...(await runElementCapture(details)) };
     result = { ...result, ...(await runRegionFallback(details)) };
     result = { ...result, ...(await runFailClosed(details)) };
+    result = { ...result, ...(await runAudioDynamicSwitch(details)) };
+    // i: element / region どちらの録画中でも AI トグルが押せること。
+    // 両ランで DOM を見ているので、ここで突き合わせて 1 項目にまとめる。
+    result.aiToggleUnlockedWhileRecording =
+      details.run1?.aiToggleDisabled === false && details.run2?.aiToggleDisabled === false;
   } catch (e) {
     details.fatal = e instanceof Error ? `${e.message}` : String(e);
   } finally {

@@ -15,7 +15,9 @@ export type SessionEvent =
   | { type: 'speaking_started'; t: number; participantId: string }
   | { type: 'speaking_stopped'; t: number; participantId: string }
   | { type: 'track_replaced'; t: number; participantId: string }
-  | { type: 'participant_error'; t: number; participantId: string };
+  | { type: 'participant_error'; t: number; participantId: string }
+  /** タブ音声ゲートの開閉 (AI 参加者 ON/OFF に伴う録画入力の切替)。open=true で開 */
+  | { type: 'tab_audio_gate'; t: number; open: boolean };
 
 /** 記録時に渡す形（時刻はこのモジュールが付ける） */
 export type SessionEventInput =
@@ -24,7 +26,8 @@ export type SessionEventInput =
   | { type: 'speaking_started'; participantId: string }
   | { type: 'speaking_stopped'; participantId: string }
   | { type: 'track_replaced'; participantId: string }
-  | { type: 'participant_error'; participantId: string };
+  | { type: 'participant_error'; participantId: string }
+  | { type: 'tab_audio_gate'; open: boolean };
 
 let originPerf: number | null = null;
 let originWallClock: number | null = null;
@@ -72,5 +75,6 @@ export function summarizeSessionEvents(): string {
   const speaking = events.filter((e) => e.type === 'speaking_started').length;
   const errors = events.filter((e) => e.type === 'participant_error').length;
   const replaced = events.filter((e) => e.type === 'track_replaced').length;
-  return `events=${events.length} speaking=${speaking} trackReplaced=${replaced} errors=${errors}`;
+  const tabGate = events.filter((e) => e.type === 'tab_audio_gate').length;
+  return `events=${events.length} speaking=${speaking} trackReplaced=${replaced} tabAudioGate=${tabGate} errors=${errors}`;
 }
