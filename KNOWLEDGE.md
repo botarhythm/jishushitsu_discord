@@ -50,7 +50,10 @@ Last synced: 2026-08-21
   1. **イヤホン接続で VoiceMeeter の IN1 が別デバイスへ変わる／開けなくなる**（最頻）。
      2026-08-21 は IN1 が soundcore P40i になっていた。VoiceMeeter は開けないデバイス名を
      **赤文字**で表示する（正常な割当は淡色）
-  2. ChatGPT と ChatGPT Classic の二重起動 — 設定が効くのは片方だけ
+  2. 設定するアプリの取り違え。**この開発 PC では `ChatGPT` = Codex、音声対話は
+     `ChatGPT Classic`。両方起動しているのが正常**で終了させる必要はない。
+     音量ミキサーで出力デバイスを設定するのは音声対話に使っている方の行
+     （スクリプトの既定は `-VoiceApp 'ChatGPT Classic'`）
   3. 録音の「既定の通信デバイス」が `Voicemeeter Out B1` から外れる（ここが ChatGPT の耳）
 - 実装: CoreAudio COM で既定4枠を取得 + VoicemeeterRemote64.dll の Remote API で
   IN1 デバイス名 / A・B / MUTE を実値取得 + `VBVMR_GetLevel` でレベル実測
@@ -92,3 +95,4 @@ Last synced: 2026-08-21
 ### 変更履歴
 - 2026-08-20: 初版作成。AI参加者収録機能（PR #8）の状況を記載
 - 2026-08-21: ChatGPT音声が認識されないときの復旧手順を追加（scripts/check-chatgpt-audio.ps1）。AI参加者機能をマージ済み・本番稼働中に更新
+- 2026-08-21: ChatGPT系アプリの役割を訂正（ChatGPT=Codex / ChatGPT Classic=音声対話。両方起動が正常）

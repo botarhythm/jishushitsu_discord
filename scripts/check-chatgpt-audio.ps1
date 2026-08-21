@@ -16,7 +16,10 @@
 param(
   [switch]$Fix,
   [string]$Mic = 'マイク配列',
-  [int]$LevelSeconds = 4
+  [int]$LevelSeconds = 4,
+  # 音声対話に使っている方のアプリのプロセス名。
+  # この PC では 'ChatGPT' は Codex で、音声対話は 'ChatGPT Classic'。
+  [string]$VoiceApp = 'ChatGPT Classic'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -249,19 +252,27 @@ if ($login -lt 0) {
 # 6. ChatGPT アプリ側
 # ────────────────────────────────────────────────────────────────
 Head "6. ChatGPT アプリ"
-$gpt     = @(Get-Process ChatGPT -ErrorAction SilentlyContinue)
-$classic = @(Get-Process 'ChatGPT Classic' -ErrorAction SilentlyContinue)
-if ($gpt.Count -gt 0 -and $classic.Count -gt 0) {
-  Caution "ChatGPT と ChatGPT Classic が同時起動。設定が効くのは片方だけ — 使わない方は完全終了する"
-} elseif ($gpt.Count -gt 0) {
-  Ok "ChatGPT 起動中"
-} elseif ($classic.Count -gt 0) {
-  Ok "ChatGPT Classic 起動中"
+# この PC には ChatGPT 系アプリが2つ入っている。音声対話に使うのは既定で
+# 'ChatGPT Classic'、'ChatGPT' の方は Codex。**両方起動しているのが正常**で、
+# 事故は「どちらのアプリを設定したか」を取り違えたときに起きる。
+$voice = @(Get-Process -Name $VoiceApp -ErrorAction SilentlyContinue)
+$others = @(
+  Get-Process -Name 'ChatGPT', 'ChatGPT Classic' -ErrorAction SilentlyContinue |
+    Where-Object { $_.ProcessName -ne $VoiceApp } |
+    Select-Object -ExpandProperty ProcessName -Unique
+)
+if ($voice.Count -gt 0) {
+  Ok "$VoiceApp 起動中（音声対話はこちら）"
 } else {
-  Info "ChatGPT は起動していない"
+  Bad "$VoiceApp が起動していない（音声対話に使うアプリ）"
+  Info "別のアプリを使っているなら -VoiceApp '<プロセス名>' を付けて実行する"
+}
+if ($others.Count -gt 0) {
+  Info "同時に起動: $($others -join ', ')（音声とは無関係。終了させる必要はない）"
+  Info "音量ミキサーで出力デバイスを設定するのは『$VoiceApp』の行。別アプリの行を触っても効かない"
 }
 Info "確認: 音声モードのマイクボタンにカーソルを合わせると Communications - <デバイス名> が出る"
-Info "既定の通信デバイスを変えたら ChatGPT はタスクトレイからも完全終了して再起動する"
+Info "既定の通信デバイスを変えたら $VoiceApp はタスクトレイからも完全終了して再起動する"
 
 Write-Host ""
 if ($script:Fail -eq 0 -and $script:Warn -eq 0) {
