@@ -120,10 +120,13 @@ export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTi
   return (
     <div className="flex h-full w-full items-center justify-center overflow-hidden bg-black">
       {/* 16:9 レターボックスステージ。max-width を vh 基準にして縦がはみ出さないよう調整。
-          stageRef は Region Capture のクロップ対象 (この矩形=16:9 が録画範囲になる)。 */}
+          stageRef は録画のクロップ対象 (この矩形=16:9 が録画範囲になる)。
+          `isolate` (isolation: isolate) は Element Capture の必須要件 —
+          対象要素が単一のスタッキングコンテキストを形成していないと
+          RestrictionTarget.fromElement / restrictTo が使えず、Region Capture へ落ちる。 */}
       <div
         ref={stageRef}
-        className="relative aspect-video w-full"
+        className="relative isolate aspect-video w-full"
         style={{ maxWidth: 'calc(100dvh * 16 / 9)', maxHeight: '100%' }}
       >
         {spec.kind === 'screen-main' ? (

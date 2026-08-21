@@ -541,14 +541,16 @@ export function AiParticipantSetupModal({
   };
 
   return (
-    // 収録ステージ (Region Capture のクロップ矩形) の flex 兄弟として配置するサイドパネル。
-    // 全画面オーバーレイにするとステージに重なって録画に映り込むため、
-    // 画面には出るが録画には入らないこの形を保つこと。
-    // 影は左(ステージ側)へ広げない。Region Capture はクロップ矩形を覆うピクセルを
-    // そのまま録るため、内向きの影はステージ右端に混入し得る。
+    // 画面右端・全高の `position: fixed` オーバーレイ。フロー外なので、開閉しても
+    // 収録ステージ (クロップ対象) の bounding box は動かない = 録画解像度が途中で変わらない。
+    // ステージに視覚的に重なるが、Element Capture (restrictTo) はステージのサブツリー
+    // だけを録るのでこのパネルは収録に映らない (影も含めて除外される)。
+    // region フォールバック時は映り込むため、RoomView 側が強制的に閉じる。
+    // z-40: ステージ関連 (z-20/z-30) より上、モーダル (z-50) より下。
     <aside
       aria-labelledby="ai-setup-panel-title"
-      className="z-30 flex h-full w-[26rem] max-w-[90vw] shrink-0 flex-col border-l border-stone-700 bg-stone-900"
+      data-testid="ai-setup-panel"
+      className="fixed inset-y-0 right-0 z-40 flex w-[26rem] max-w-[90vw] flex-col border-l border-stone-700 bg-stone-900 shadow-2xl"
     >
       {/* ヘッダーとフッターを固定し、中身だけスクロールさせる。
           長い設定画面でも「今どういう状態か」と「有効化ボタン」を見失わない */}

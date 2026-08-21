@@ -18,6 +18,21 @@ import { describeRecordingHealth, RecordingHealthMonitor } from '@/lib/recording
 
 export type RecordingQuality = 'streaming' | 'standard' | 'high';
 
+/**
+ * 録画から「対象外の UI」を締め出すのに、実際に確保できた方式。
+ *
+ * - 'element': Element Capture (`RestrictionTarget` + `track.restrictTo`)。
+ *   対象要素の**サブツリーだけ**を録り、視覚的に重なった要素は録画に映らない。
+ *   重ねる側はレイアウトに参加しない (position: fixed 等) ので、
+ *   パネル開閉で対象が伸縮せず、録画中に出力解像度が変わらない。
+ * - 'region': Region Capture (`CropTarget` + `track.cropTo`)。
+ *   対象の**矩形を覆うピクセルをそのまま**録るため、重なった UI は映り込む。
+ *   さらに対象が伸縮すると出力解像度が録画途中で変わる (WebM 破損の原因)。
+ *   呼び出し側はこのモードでは矩形を動かす操作・重なる UI を封鎖すること。
+ * - null: クロップ対象を渡していない (制約なし、または録画未開始)。
+ */
+export type CaptureExclusionMode = 'element' | 'region';
+
 interface QualityPreset {
   width: number;
   height: number;
@@ -123,6 +138,13 @@ export function useLocalRecording({
    */
   const [regionCaptureActive, setRegionCaptureActive] = useState<boolean | null>(null);
   /**
+   * 実際に確保できたクロップ方式 ('element' | 'region' | null)。
+   * regionCaptureActive の真偽だけでは Element Capture と Region Capture を区別できず、
+   * 「重なる UI を出してよいか」の判断ができないため、方式そのものを公開する。
+   * 詳細は CaptureExclusionMode を参照。
+   */
+  const [captureExclusionMode, setCaptureExclusionMode] = useState<CaptureExclusionMode | null>(null);
+  /**
    * 録画開始処理中 (getDisplayMedia のピッカー表示〜cropTo 確定まで)。
    * この間は isRecording がまだ false なので、呼び出し側が「録画中」だけを見て
    * UI を封鎖すると、クロップ矩形が確定する前にレイアウトを動かされる窓が開く。
@@ -216,6 +238,7 @@ export function useLocalRecording({
   ) => {
     setError(null);
     setRegionCaptureActive(null);
+    setCaptureExclusionMode(null);
     if (resourcesRef.current || startingRef.current) return;
     // 「録画開始処理中」。getDisplayMedia のピッカー〜cropTo 確定までの間は
     // isRecording がまだ false のため、この窓でサイドパネルを開かれるとクロップ矩形が
@@ -273,11 +296,18 @@ export function useLocalRecording({
       return;
     }
 
-    // Region Capture: 自タブキャプチャを指定要素の矩形にクロップする (Chromium 系)。
+    // 自タブキャプチャを指定要素に絞り込む (Chromium 系)。
     // 収録ステージ (16:9) を渡すと、ウィンドウサイズに関わらず録画を厳密な 16:9 に固定できる。
     // 関数で渡された場合は getDisplayMedia 解決後の今の時点で評価 (ステージのマウント完了後)。
     //
-    // fail-closed: クロップ対象を要求されたのに確保できない場合、以前はタブ全体を
+    // 確保順序 (前者ほど望ましい):
+    //   1. Element Capture (RestrictionTarget + restrictTo) — 対象要素のサブツリーだけを録り、
+    //      視覚的に重なった要素を除外する。重ねる側がレイアウトに参加しなければ対象は伸縮せず、
+    //      録画中に出力解像度が変わらない。Chrome 132+。
+    //   2. Region Capture (CropTarget + cropTo) — 矩形を覆うピクセルをそのまま録る従来方式。
+    //      重なった UI は映り込み、対象の伸縮で解像度も変わる。互換のためのフォールバック。
+    //
+    // fail-closed: クロップ対象を要求されたのにどちらも確保できない場合、以前はタブ全体を
     // 黙って録画していた。その経路では収録バー・チャット・各種モーダル・講師向け情報が
     // 丸ごと録画に入り、収録物として使えないものが出来上がる。要求が満たせないなら
     // 録画を開始しない (Codex/Gemini 両レビュー 2026-08-21 の必須条件)。
@@ -288,34 +318,64 @@ export function useLocalRecording({
         if (e) console.error('[useLocalRecording] クロップ確保に失敗', e);
         displayStream.getTracks().forEach((t) => t.stop());
         setRegionCaptureActive(false);
+        setCaptureExclusionMode(null);
         onRegionCaptureUnavailable?.();
         setError(message);
       };
+      const RestrictionTargetCtor = (globalThis as unknown as {
+        RestrictionTarget?: { fromElement(e: Element): Promise<unknown> };
+      }).RestrictionTarget;
       const CropTargetCtor = (globalThis as unknown as {
         CropTarget?: { fromElement(e: Element): Promise<unknown> };
       }).CropTarget;
       const videoTrack = displayStream.getVideoTracks()[0] as
-        | (MediaStreamTrack & { cropTo?: (t: unknown) => Promise<void> })
+        | (MediaStreamTrack & {
+            cropTo?: (t: unknown) => Promise<void>;
+            restrictTo?: (t: unknown) => Promise<void>;
+          })
         | undefined;
       if (!cropEl) {
         abortStart('収録ステージを取得できなかったため録画を中止しました。もう一度お試しください。');
         return;
       }
-      if (!CropTargetCtor || !videoTrack?.cropTo) {
-        abortStart(
-          'このブラウザは収録範囲の切り出し (Region Capture) に対応していないため録画を中止しました。パソコンの Chrome または Edge をお使いください。'
-        );
-        return;
+
+      // 1) Element Capture を試す。ここが通れば重なる UI を録画から締め出せる。
+      let mode: CaptureExclusionMode | null = null;
+      if (RestrictionTargetCtor && videoTrack?.restrictTo) {
+        try {
+          const rt = await RestrictionTargetCtor.fromElement(cropEl);
+          await videoTrack.restrictTo(rt);
+          mode = 'element';
+        } catch (e) {
+          // 対象がスタッキングコンテキストを形成していない等。Region Capture へ落とす。
+          console.warn('[useLocalRecording] Element Capture を確保できませんでした', e);
+        }
       }
-      try {
-        const ct = await CropTargetCtor.fromElement(cropEl);
-        await videoTrack.cropTo(ct);
-        setRegionCaptureActive(true);
-      } catch (e) {
-        abortStart('収録範囲の切り出しに失敗したため録画を中止しました。もう一度お試しください。', e);
-        return;
+
+      // 2) 落ちたら従来の Region Capture。
+      if (!mode) {
+        if (!CropTargetCtor || !videoTrack?.cropTo) {
+          abortStart(
+            'このブラウザは収録範囲の切り出し (Region Capture) に対応していないため録画を中止しました。パソコンの Chrome または Edge をお使いください。'
+          );
+          return;
+        }
+        try {
+          const ct = await CropTargetCtor.fromElement(cropEl);
+          await videoTrack.cropTo(ct);
+          mode = 'region';
+        } catch (e) {
+          abortStart('収録範囲の切り出しに失敗したため録画を中止しました。もう一度お試しください。', e);
+          return;
+        }
       }
-      // クロップ対象の寸法が録画中に変わると、Region Capture がそれに追従して
+
+      // regionCaptureActive は「クロップ対象の外を録画から外せたか」という互換フラグ。
+      // element でもその要件は満たしているので true にする (既存の参照側を壊さない)。
+      setRegionCaptureActive(true);
+      setCaptureExclusionMode(mode);
+
+      // クロップ対象の寸法が録画中に変わると、キャプチャがそれに追従して
       // 出力解像度が途中で変わり、WebM のトラック宣言寸法と実フレームが食い違う
       // 壊れたファイルになり得る。UI 側の封鎖をすり抜けた場合 (ウィンドウリサイズ、
       // OS の表示倍率変更、想定外の UI) の最後の防波堤として検知し、警告する。
@@ -748,6 +808,7 @@ export function useLocalRecording({
     startedAt,
     error,
     regionCaptureActive,
+    captureExclusionMode,
     isSupported,
     start,
     stop,

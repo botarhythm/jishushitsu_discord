@@ -238,7 +238,7 @@ function RoomInner({
     setAudioRecordingOn((v) => !v);
   }, []);
 
-  // チャットパネルの開閉。収録モードでは Region Capture が無効化された瞬間に
+  // チャットパネルの開閉。収録モードではクロップが確保できなかった瞬間に
   // 強制的に閉じる必要があるため (録画タブ全体に映り込んでしまう)、録画フックより先に宣言する。
   const [chatOpen, setChatOpen] = useState(false);
 
@@ -249,12 +249,12 @@ function RoomInner({
   const [aiEnabled, setAiEnabled] = useState(false);
   const [aiSetupOpen, setAiSetupOpen] = useState(false);
   /**
-   * チャットと AI 設定はどちらも収録ステージ (Region Capture のクロップ矩形) の
-   * 外側に flex 兄弟として置くことで「画面には出るが録画には映らない」を実現している。
-   * Region Capture が使えない環境では録画がタブ全体になり両方とも映り込むため、
+   * チャットと AI 設定はどちらも収録ステージに重なる `position: fixed` のオーバーレイで、
+   * Element Capture (対象要素のサブツリーだけを録る) によって録画から除外される。
+   * クロップそのものを確保できなかった場合は録画がタブ全体になり両方とも映り込むため、
    * その瞬間に閉じる。
    */
-  const closeSidePanelsOnRegionCaptureUnavailable = useCallback(() => {
+  const closeSidePanels = useCallback(() => {
     setChatOpen(false);
     setAiSetupOpen(false);
   }, []);
@@ -281,15 +281,16 @@ function RoomInner({
   const {
     isRecording: isLocalRecording,
     isStarting: isLocalRecordingStarting,
+    captureExclusionMode,
     start: startLocalRecording,
     stop: stopLocalRecording,
     error: localRecordingError,
     isSupported: isLocalRecordingSupported,
   } = useLocalRecording({
     room,
-    // Region Capture が確保できないときは録画自体を中止する (fail-closed)。
+    // クロップが確保できないときは録画自体を中止する (fail-closed)。
     // その際サイドパネルも閉じておく。
-    onRegionCaptureUnavailable: closeSidePanelsOnRegionCaptureUnavailable,
+    onRegionCaptureUnavailable: closeSidePanels,
     // AI 参加者の音声は参加者非依存の汎用レジストリ経由で mix する
     extraAudioTracks: aiRegistry,
     // 単一取り込みポリシー: AI 有効時はタブ音声を録画に入れない (AI モニタ音声・
@@ -299,19 +300,44 @@ function RoomInner({
   /**
    * サイドパネル (チャット・AI設定) を開閉できるか。
    *
-   * 【暫定措置 2026-08-21 / Codex・Gemini 両レビューの必須条件】
-   * チャットも AI 設定もステージ (Region Capture のクロップ対象) の flex 兄弟であり、
-   * 開閉するとステージの描画サイズが変わる。Region Capture は対象要素の bounding box に
-   * 毎フレーム追従するため、録画の途中で解像度が変わる WebM が生成される。Chromium の
-   * WebM muxer はトラック寸法を最初のフレームで一度しか書かないため、宣言寸法と実フレームが
-   * 食い違うファイルになり得る。これは過去に配信プラットフォームが受理を拒否した破損と
-   * 同じ赤線で、ts-ebml による Duration/Cues 注入では直らない。
+   * 【恒久対策 2026-08-21 / Codex・Gemini 両レビューの必須条件への回答】
+   * 両パネルは `position: fixed` のオーバーレイでタブのレイアウトから外れており、
+   * 開閉してもステージ (クロップ対象) の bounding box は 1px も動かない。
+   * そのうえで Element Capture (`restrictTo`) が確保できていれば、ステージの
+   * サブツリーだけが録画されるのでオーバーレイは映り込まない。
+   * → この2つが揃う `captureExclusionMode === 'element'` では録画中も自由に開閉できる。
    *
-   * よって恒久対策 (パネルをタブのレイアウトから外し、開閉してもステージが動かないようにする)
-   * が入るまでは、録画中および録画開始処理中は両パネルの開閉を封鎖する。
-   * これは既存のチャットパネルにも同じく存在していた不具合の封鎖でもある。
+   * 封鎖が残るのは次の2つだけ:
+   * - `isStarting`: getDisplayMedia のピッカー〜クロップ確定までは方式が未確定
+   * - `region` フォールバック: 矩形を覆うピクセルをそのまま録るので、重なれば映り込む
    */
-  const sidePanelsLocked = isLocalRecording || isLocalRecordingStarting;
+  const panelsLocked =
+    isLocalRecordingStarting ||
+    (isLocalRecording && captureExclusionMode !== 'element');
+  /** ツールチップの文言を分けるための封鎖理由 (null = 封鎖されていない) */
+  const panelLockReason: 'starting' | 'region' | null = isLocalRecordingStarting
+    ? 'starting'
+    : panelsLocked
+      ? 'region'
+      : null;
+  /**
+   * AI 参加者の ON/OFF は封鎖条件が別。録画ミキサーのタブ音声経路は録画開始時の
+   * スナップショットで固定されるため、途中で足すと音声が二重に録音される。
+   * これはクロップ方式と無関係なので、element モードでも録画中は切替を禁止する
+   * (パネルを開いての配線調整・レベル確認は許可する)。
+   */
+  const aiToggleLocked = isLocalRecording || isLocalRecordingStarting;
+
+  /**
+   * region フォールバックで録画が始まったら、開いていたオーバーレイを閉じる。
+   * region は「クロップ矩形を覆うピクセルをそのまま録る」ため、ステージに重なった
+   * オーバーレイはそのまま収録物に焼き込まれてしまう。
+   */
+  useEffect(() => {
+    if (!isLocalRecording || captureExclusionMode !== 'region') return;
+    // effect body 内での同期 setState を避ける (本ファイルの他の箇所と同じ流儀)
+    queueMicrotask(closeSidePanels);
+  }, [isLocalRecording, captureExclusionMode, closeSidePanels]);
 
   useEffect(() => {
     if (localRecordingError) {
@@ -540,13 +566,20 @@ function RoomInner({
   }, [enterStudio, startLocalRecording, recordingQuality]);
 
   /**
-   * 録画開始の共通前処理。サイドパネルが開いたまま録画を始めると、その後に閉じた瞬間に
-   * ステージ (クロップ対象) の寸法が変わって録画が壊れる。開いていたら閉じるだけにして
-   * この操作では録画を開始せず、レイアウトが確定してからの再操作を促す
-   * (sidePanelsLocked の理由を参照)。
+   * 録画開始の共通前処理。
+   *
+   * Element Capture が使えるブラウザ (`RestrictionTarget` が存在する) では、
+   * オーバーレイはステージの寸法に影響せず録画からも除外されるため、
+   * 開いたまま録画を開始してよい。
+   *
+   * 非対応ブラウザでは Region Capture へ落ちることが確定しており、開いたまま始めると
+   * オーバーレイが収録物に焼き込まれ、閉じた瞬間の再レイアウトも避けられない。
+   * その場合だけ「閉じるに留めて再操作を促す」従来の挙動を保つ。
+   * feature-detect は getDisplayMedia のユーザジェスチャ要件を壊さないよう同期で行う。
    * @returns 録画を開始してよいか
    */
   const prepareLayoutForRecording = useCallback((): boolean => {
+    if ('RestrictionTarget' in globalThis) return true;
     if (!chatOpen && !aiSetupOpen) return true;
     setChatOpen(false);
     setAiSetupOpen(false);
@@ -557,17 +590,15 @@ function RoomInner({
   }, [chatOpen, aiSetupOpen]);
 
   /**
-   * ダッシュボードの「AI参加者つきで収録開始」。
-   * 検証済み配線があればワンクリックで収録モード投入 + AI 有効化まで行う。
-  /**
    * AI 参加者の ON/OFF。設定が済んでいなければ設定画面へ誘導する。
-   * 収録中に素早く出し入れできるよう、収録バーから1クリックで切り替えられる。
+   * 収録前に素早く出し入れできるよう、収録バーから1クリックで切り替えられる。
    */
   const toggleAi = useCallback(() => {
     // 録画中の切替は全面禁止 (Codex レビュー #2)。録画ミキサーのタブ音声経路は
     // 録画開始時のスナップショットで固定されるため、途中で AI を足すと
     // 「タブ再生 + AI トラック」で音声が二重に録音される。外す方向も、
     // 経路の整合が取れないまま録画が続くので許可しない。
+    // これはクロップ方式と無関係な音声側の制約なので、element モードでも解除しない。
     if (isLocalRecording) {
       alert('録画中は AI 参加者を切り替えできません。録画を停止してから操作してください。');
       return;
@@ -757,12 +788,12 @@ function RoomInner({
   // ── チャットUI / デバイス設定UI ──
   const [chatUnread, setChatUnread] = useState(0);
   const [deviceSettingsOpen, setDeviceSettingsOpen] = useState(false);
-  // 録画中/開始処理中は開閉しない (sidePanelsLocked の理由を参照)。
+  // 封鎖中は開閉しない (panelsLocked の理由を参照)。
   // ボタンの disabled だけに頼らず、ハンドラ側でも拒否する二重防御。
   const toggleChat = useCallback(() => {
-    if (sidePanelsLocked) return;
+    if (panelsLocked) return;
     setChatOpen((v) => !v);
-  }, [sidePanelsLocked]);
+  }, [panelsLocked]);
   const openDeviceSettings = useCallback(() => setDeviceSettingsOpen(true), []);
   const closeDeviceSettings = useCallback(() => setDeviceSettingsOpen(false), []);
 
@@ -955,18 +986,9 @@ function RoomInner({
         {studioSyncError && (
           <DeviceErrorBanner message={studioSyncError} onDismiss={() => setStudioSyncError(null)} />
         )}
+        {/* 収録ステージ列。サイドパネルは flex 兄弟ではなく position: fixed の
+            オーバーレイなので、開閉してもこの列 (= クロップ対象) は一切動かない。 */}
         <div className="flex h-full w-full">
-          {/* 左: チャット (収録中も参加者の発言を確認できる)。ステージの flex 兄弟として
-              配置するため Region Capture のクロップ矩形に重ならない = 録画には映らない。 */}
-          <StudioChatPanel
-            open={chatOpen}
-            onClose={() => setChatOpen(false)}
-            onUnreadChange={setChatUnread}
-            chatMessages={chat.chatMessages}
-            send={chat.send}
-            isSending={chat.isSending}
-          />
-          {/* 右: 収録ステージ */}
           <div className="flex h-full min-w-0 flex-1 flex-col">
             <div className="min-h-0 flex-1">
               <StudioStage
@@ -985,46 +1007,58 @@ function RoomInner({
               />
             )}
           </div>
-          {/* 右: AI参加者(ChatGPT)の設定。チャットと同じくステージの flex 兄弟として
-              配置するため、収録中に開いても録画には映り込まない。
-              セッション中の配線調整のため録画中も開ける。 */}
-          {aiSetupOpen && (
-            <AiParticipantSetupModal
-              room={room}
-              config={aiConfig}
-              onPatchConfig={handlePatchAiConfig}
-              enabled={aiEnabled}
-              onChangeEnabled={setAiEnabled}
-              aiStatus={aiStatus}
-              publishFailed={aiPublishFailed}
-              inputMixerError={aiInputMixerError}
-              setInputMixerSendEnabled={aiSetInputMixerSendEnabled}
-              setInputMixerIncludeLocalMic={aiSetInputMixerIncludeLocalMic}
-              getInputMixerDiagnostics={aiGetInputMixerDiagnostics}
-              onReconnect={() => void aiReconnect()}
-              isRecording={isLocalRecording}
-              onClose={() => setAiSetupOpen(false)}
-            />
-          )}
         </div>
+
+        {/* 左端: チャット (収録中も参加者の発言を確認できる)。
+            右端: AI参加者(ChatGPT)の設定 (収録中の配線調整・レベル確認用)。
+            どちらもフロー外の全高オーバーレイ。ステージに視覚的に重なるが、
+            Element Capture が確保できていればステージのサブツリー外なので録画に映らない。
+            region フォールバック時は上の effect が強制的に閉じる。 */}
+        <StudioChatPanel
+          open={chatOpen}
+          onClose={() => setChatOpen(false)}
+          onUnreadChange={setChatUnread}
+          chatMessages={chat.chatMessages}
+          send={chat.send}
+          isSending={chat.isSending}
+        />
+        {aiSetupOpen && (
+          <AiParticipantSetupModal
+            room={room}
+            config={aiConfig}
+            onPatchConfig={handlePatchAiConfig}
+            enabled={aiEnabled}
+            onChangeEnabled={setAiEnabled}
+            aiStatus={aiStatus}
+            publishFailed={aiPublishFailed}
+            inputMixerError={aiInputMixerError}
+            setInputMixerSendEnabled={aiSetInputMixerSendEnabled}
+            setInputMixerIncludeLocalMic={aiSetInputMixerIncludeLocalMic}
+            getInputMixerDiagnostics={aiGetInputMixerDiagnostics}
+            onReconnect={() => void aiReconnect()}
+            isRecording={isLocalRecording}
+            onClose={() => setAiSetupOpen(false)}
+          />
+        )}
         <StudioBar
           chatOpen={chatOpen}
           chatUnreadCount={chatUnread}
           onToggleChat={toggleChat}
-          chatDisabled={sidePanelsLocked}
+          chatDisabled={panelsLocked}
+          panelLockReason={panelLockReason}
           isMicOn={isMicOn}
           isCameraOn={isCameraOn}
           isScreenSharing={isScreenSharing}
           isLocalRecording={isLocalRecording}
           aiEnabled={aiEnabled}
           aiError={aiEnabled && (aiStatus === 'error' || aiPublishFailed)}
-          aiToggleDisabled={sidePanelsLocked}
+          aiToggleDisabled={aiToggleLocked}
           onToggleAi={toggleAi}
           onOpenAiSetup={() => {
-            if (sidePanelsLocked) return;
+            if (panelsLocked) return;
             setAiSetupOpen(true);
           }}
-          aiSetupDisabled={sidePanelsLocked}
+          aiSetupDisabled={panelsLocked}
           onOpenDeviceSettings={openDeviceSettings}
           recordingUnsupported={!isLocalRecordingSupported}
           recordingQuality={recordingQuality}

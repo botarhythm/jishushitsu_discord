@@ -19,8 +19,11 @@ interface StudioChatPanelProps {
 /**
  * 収録モード専用のチャットパネル。
  *
- * - ステージ (16:9, Region Capture のクロップ対象) の左に並ぶ flex 兄弟として配置するため、
- *   録画矩形に重ならない = 収録には映らない。
+ * - 画面左端・全高の `position: fixed` オーバーレイ。フロー外なので、開閉しても
+ *   ステージ (クロップ対象) の bounding box は動かない = 録画解像度が途中で変わらない。
+ * - ステージに視覚的に重なるが、Element Capture (`restrictTo`) はステージのサブツリー
+ *   だけを録るのでこのパネルは収録に映らない。region フォールバック時は映り込むため、
+ *   呼び出し側 (RoomView) が録画開始時に強制的に閉じる。
  * - 邪魔なときはヘッダーの「－」で最小化でき、収録バーのチャットボタンから再表示する。
  * - 最小化中もマウントし続けて未読数を数え、バッジへ反映する (ChatPanel と同じ方式)。
  */
@@ -61,11 +64,16 @@ export function StudioChatPanel({
     }
   };
 
-  // 最小化中はレイアウトから外す (ステージが全幅へ広がる)。未読カウントの hook は上で実行済み。
+  // 最小化中は描画しない。未読カウントの hook は上で実行済み。
+  // (フロー外なので、閉じてもステージのレイアウトには何の影響も無い)
   if (!open) return null;
 
   return (
-    <aside className="z-30 flex h-full w-80 max-w-[85vw] shrink-0 flex-col border-r border-stone-700 bg-stone-900/95 shadow-2xl backdrop-blur-sm">
+    // z-40: ステージ関連 (z-20 収録バー / z-30 ステージ内要素) より上、モーダル (z-50) より下。
+    <aside
+      data-testid="studio-chat-panel"
+      className="fixed inset-y-0 left-0 z-40 flex w-80 max-w-[85vw] flex-col border-r border-stone-700 bg-stone-900/95 shadow-2xl backdrop-blur-sm"
+    >
       <div className="flex items-center justify-between border-b border-stone-700 px-4 py-2">
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-semibold text-stone-100">チャット</h2>

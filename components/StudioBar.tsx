@@ -29,8 +29,16 @@ interface StudioBarProps {
   aiToggleDisabled?: boolean;
   /** AI 参加者セットアップモーダルを開く */
   onOpenAiSetup?: () => void;
-  /** true の間はAI設定を開けない (開閉でクロップ矩形が変わり録画解像度が途中で変化するため) */
+  /** true の間はAI設定を開けない (panelLockReason 参照) */
   aiSetupDisabled?: boolean;
+  /**
+   * サイドパネルが開けない理由。ツールチップの文言を分けるためだけに使う。
+   * - 'starting': 録画開始処理中。クロップ方式がまだ確定していない
+   * - 'region': Element Capture が確保できず Region Capture で録画中。
+   *   矩形を覆うピクセルをそのまま録るため、重ねたパネルが収録物に焼き込まれる
+   * - null / 未指定: 封鎖されていない (Element Capture 録画中も含む)
+   */
+  panelLockReason?: 'starting' | 'region' | null;
   /** マイク/カメラのデバイス設定を開く（収録中に入力デバイスを直すため） */
   onOpenDeviceSettings?: () => void;
   /** true の間は録画ボタンを無効化する (iPhone等 getDisplayMedia 非対応環境向け) */
@@ -45,7 +53,7 @@ interface StudioBarProps {
   chatOpen: boolean;
   /** チャット未読数 (最小化中に増加) */
   chatUnreadCount: number;
-  /** true の間はチャットを開けない (開閉でクロップ矩形が変わり録画解像度が途中で変化するため) */
+  /** true の間はチャットを開けない (panelLockReason 参照) */
   chatDisabled?: boolean;
   onToggleChat: () => void;
   onToggleMic: () => void;
@@ -81,6 +89,7 @@ export function StudioBar(props: StudioBarProps) {
     onToggleAi,
     onOpenAiSetup,
     aiSetupDisabled = false,
+    panelLockReason = null,
     onOpenDeviceSettings,
     recordingUnsupported = false,
     recordingQuality,
@@ -134,6 +143,17 @@ export function StudioBar(props: StudioBarProps) {
   const layoutSpec = STUDIO_LAYOUTS[layout] ?? STUDIO_LAYOUTS.split;
   const slotCount = layoutSpec.slots.length;
 
+  /**
+   * サイドパネルが開けないときの理由書き。
+   * パネルは position: fixed のオーバーレイなので、Element Capture が効いている
+   * 通常の録画中は開閉できる。封鎖されるのは「方式が未確定の開始処理中」と
+   * 「Region Capture へ落ちたとき」の2つだけなので、それぞれ別の文言を出す。
+   */
+  const panelLockNote =
+    panelLockReason === 'starting'
+      ? '録画の開始準備中は開閉できません (録画範囲が決まるまでお待ちください)'
+      : 'この環境では録画中に開閉できません (パネルが収録映像に映り込むため)';
+
   return (
     <div
       className={`absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-4 transition-opacity duration-300 ${
@@ -149,16 +169,16 @@ export function StudioBar(props: StudioBarProps) {
       }}
     >
       <div className="flex max-w-full items-center gap-2 overflow-x-auto rounded-2xl border border-stone-700/70 bg-stone-900/85 px-3 py-2 shadow-2xl backdrop-blur-md">
-        {/* チャット表示切替 (左パネル。収録には映らない)。
-            chatDisabled = true の間は録画中/開始処理中で、開閉するとステージ
-            (Region Capture のクロップ対象) が伸縮して録画解像度が途中で変わるため操作不能にする。 */}
+        {/* チャット表示切替 (左端の全高オーバーレイ。Element Capture で収録から除外される)。
+            chatDisabled = true になるのは開始処理中と region フォールバック時だけで、
+            通常の録画中は開閉できる (panelLockNote 参照)。 */}
         <div className="relative">
           <BarButton
             active={chatOpen}
             disabled={chatDisabled}
             label={
               chatDisabled
-                ? '録画中はチャットを開閉できません (録画範囲が変わり収録ファイルが壊れるため)'
+                ? `チャット: ${panelLockNote}`
                 : chatOpen
                   ? 'チャットを最小化'
                   : 'チャットを表示'
@@ -289,9 +309,7 @@ export function StudioBar(props: StudioBarProps) {
           <BarButton
             disabled={aiSetupDisabled}
             label={
-              aiSetupDisabled
-                ? '録画中はAI設定を開けません (録画範囲が変わり収録ファイルが壊れるため)'
-                : 'AI参加者の設定'
+              aiSetupDisabled ? `AI参加者の設定: ${panelLockNote}` : 'AI参加者の設定'
             }
             onClick={onOpenAiSetup}
           >

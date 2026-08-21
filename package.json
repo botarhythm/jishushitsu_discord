@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "capture:help": "node scripts/capture-help-shots.mjs"
+    "capture:help": "node scripts/capture-help-shots.mjs",
+    "verify:element-capture": "node scripts/verify-element-capture.mjs"
   },
   "dependencies": {
     "@livekit/components-react": "^2.9.21",
