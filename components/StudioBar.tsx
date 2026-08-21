@@ -29,6 +29,8 @@ interface StudioBarProps {
   aiToggleDisabled?: boolean;
   /** AI 参加者セットアップモーダルを開く */
   onOpenAiSetup?: () => void;
+  /** true の間はAI設定を開けない (モーダルがステージ全面に重なり録画に映り込むため) */
+  aiSetupDisabled?: boolean;
   /** マイク/カメラのデバイス設定を開く（収録中に入力デバイスを直すため） */
   onOpenDeviceSettings?: () => void;
   /** true の間は録画ボタンを無効化する (iPhone等 getDisplayMedia 非対応環境向け) */
@@ -78,6 +80,7 @@ export function StudioBar(props: StudioBarProps) {
     aiToggleDisabled = false,
     onToggleAi,
     onOpenAiSetup,
+    aiSetupDisabled = false,
     onOpenDeviceSettings,
     recordingUnsupported = false,
     recordingQuality,
@@ -283,7 +286,15 @@ export function StudioBar(props: StudioBarProps) {
           </div>
         )}
         {onOpenAiSetup && (
-          <BarButton label="AI参加者の設定" onClick={onOpenAiSetup}>
+          <BarButton
+            disabled={aiSetupDisabled}
+            label={
+              aiSetupDisabled
+                ? '録画中はAI設定を開けません (パネルが録画に映り込むため)'
+                : 'AI参加者の設定'
+            }
+            onClick={onOpenAiSetup}
+          >
             🔧
           </BarButton>
         )}

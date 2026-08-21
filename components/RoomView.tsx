@@ -290,6 +290,15 @@ function RoomInner({
   });
   const chatHiddenFromRecording = !isLocalRecording || regionCaptureActive !== false;
 
+  // AI設定モーダル (ChatGPTのコントロールパネル) は fixed inset-0 の全画面オーバーレイで、
+  // 開いているとステージの真上に重なって表示される。Region Capture が有効でもクロップは
+  // 画面上の座標範囲そのものを録るため、ステージに重なるこのモーダルは録画に映り込んでしまう
+  // (チャットパネルと違い DOM 位置ではなく画面上の重なりの問題なので、Region Capture の
+  // 成否に関わらず常に閉じる必要がある)。録画開始と同時に開いていたら強制的に閉じる。
+  useEffect(() => {
+    if (isLocalRecording) queueMicrotask(() => setAiSetupOpen(false));
+  }, [isLocalRecording]);
+
   useEffect(() => {
     if (localRecordingError) {
       console.error('[useLocalRecording] error:', localRecordingError);
@@ -948,6 +957,7 @@ function RoomInner({
           aiToggleDisabled={isLocalRecording}
           onToggleAi={toggleAi}
           onOpenAiSetup={() => setAiSetupOpen(true)}
+          aiSetupDisabled={isLocalRecording}
           onOpenDeviceSettings={openDeviceSettings}
           recordingUnsupported={!isLocalRecordingSupported}
           recordingQuality={recordingQuality}
