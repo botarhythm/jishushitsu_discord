@@ -68,9 +68,9 @@ export function AiWiringPlanPanel({
 
   const osRows: { where: string; value: string | null; note?: string }[] = [
     {
-      where: '音量ミキサー → ChatGPT の「出力デバイス」',
+      where: '音量ミキサー → ChatGPT（音声対話に使っている方）の「出力デバイス」',
       value: plan.chatgptOutput?.label ?? null,
-      note: '似た名前の別デバイスに注意（CABLE In 16ch など）',
+      note: 'ChatGPT 系が複数並ぶときは音声モードを開いている方の行（音量 100 の行）。似た名前の別デバイスにも注意（CABLE In 16ch など）',
     },
     {
       where: 'mmsys.cpl → 録音タブ →「既定の通信デバイス」',

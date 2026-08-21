@@ -457,9 +457,16 @@ export default function AiParticipantHelpPage() {
               に使い、収録する声は物理マイク（マイク配列）から録ってください。
             </Trouble>
             <Trouble q="ChatGPT と ChatGPT Classic が両方入っている">
-              設定が効くのは実際に音声モードを開いている方だけです。両方起動していると
-              「設定は正しいのに認識しない」状態になります。使わない方はタスクトレイからも
-              完全に終了してください。診断スクリプトはこの二重起動も検出します。
+              <strong className="text-stone-200">両方あるのは正常です。終了させる必要はありません</strong>
+              （開発 PC では
+              <code className="mx-1 rounded bg-stone-800 px-1.5 py-0.5 text-xs">ChatGPT</code>
+              が Codex、音声対話は
+              <code className="mx-1 rounded bg-stone-800 px-1.5 py-0.5 text-xs">ChatGPT Classic</code>
+              です）。事故になるのは
+              <strong className="text-stone-200">設定するアプリを取り違えたとき</strong>
+              だけです。音量ミキサーで出力デバイスを
+              <code className="mx-1 rounded bg-stone-800 px-1.5 py-0.5 text-xs">CABLE Input</code>
+              にするのは、音声対話に使っている方の行（行が複数あるときは音量が 100 の行）です。
             </Trouble>
             <Trouble q="ハウリングする">
               スピーカーを使っていないか、VoiceMeeter で A が点灯していないかを確認してください。
