@@ -5,6 +5,7 @@ import { Track, type Room } from 'livekit-client';
 import {
   aiWiringFingerprint,
   isLoopbackCaptureLabel,
+  DEFAULT_AI_CONFIG,
   type AiParticipantConfig,
 } from '@/lib/studio-participants';
 import type { AiProviderStatus } from '@/lib/ai/provider';
@@ -17,8 +18,9 @@ import {
   playToneProbe,
   type DeviceOption,
 } from '@/lib/audio-devices';
+import { buildWiringPlan, matchesPlan } from '@/lib/ai-wiring-plan';
 import { AiPreflightPanel } from './AiPreflightPanel';
-import { AiRequiredSettings } from './AiRequiredSettings';
+import { AiWiringPlanPanel, type PlanTarget } from './AiWiringPlanPanel';
 
 interface AiParticipantSetupModalProps {
   room: Room | null;
@@ -459,6 +461,54 @@ export function AiParticipantSetupModal({
   };
 
   /**
+   * 表示名はローカルバッファで持つ。
+   *
+   * config を直接 value にすると、1文字ごとの非同期な保存往復と
+   * sanitizeAiConfig の .trim() / 既定値フォールバックが重なり、
+   * IME 変換中に値が巻き戻って caret が飛ぶ（実機で入力不能になった）。
+   * 表示は常にこのバッファを使い、config へは編集のたびに書き戻す。
+   */
+  const [nameDraft, setNameDraft] = useState(config.displayName);
+  const nameEditingRef = useRef(false);
+  useEffect(() => {
+    if (!nameEditingRef.current) setNameDraft(config.displayName);
+  }, [config.displayName]);
+
+  /**
+   * この PC の推奨配線。接続デバイスだけから決まる「正解」を先に提示するために使う
+   * （現在の選択から逆算すると、選択が間違っているときに誤った案内が出る）。
+   */
+  const plan = useMemo(() => buildWiringPlan(inputs, outputs), [inputs, outputs]);
+
+  const applyPlanTarget = (target: PlanTarget) => {
+    if (target === 'source') {
+      if (plan.source) {
+        set({ sourceDeviceId: plan.source.deviceId, sourceDeviceLabel: plan.source.label });
+      }
+    } else if (target === 'sink') {
+      set({ sinkDeviceId: plan.sink?.deviceId ?? null, sinkDeviceLabel: plan.sink?.label });
+    } else if (plan.mic) {
+      void switchMic(plan.mic.deviceId);
+    }
+  };
+
+  const applyPlanAll = () => {
+    const patch: Partial<AiParticipantConfig> = {};
+    if (plan.source && !matchesPlan(config.sourceDeviceId, plan.source)) {
+      patch.sourceDeviceId = plan.source.deviceId;
+      patch.sourceDeviceLabel = plan.source.label;
+    }
+    if (!matchesPlan(config.sinkDeviceId, plan.sink)) {
+      patch.sinkDeviceId = plan.sink?.deviceId ?? null;
+      patch.sinkDeviceLabel = plan.sink?.label;
+    }
+    if (Object.keys(patch).length > 0) set(patch);
+    if (plan.mic && plan.mic.deviceId !== (micInfo?.deviceId ?? null)) {
+      void switchMic(plan.mic.deviceId);
+    }
+  };
+
+  /**
    * 有効化。「検証済み」の指紋は、収録前チェック全通過・自己ループ検査合格・
    * 手動確認のいずれかを経たときだけ保存する。未検証のまま有効化はできる
    * (チェックは任意という運用) が、その場合は次回のワンクリック起動を許可しない
@@ -548,14 +598,25 @@ export function AiParticipantSetupModal({
 
           <SectionTitle step={1}>デバイスを選ぶ</SectionTitle>
 
+          <AiWiringPlanPanel
+            plan={plan}
+            currentSourceId={config.sourceDeviceId}
+            currentMicId={micInfo?.deviceId ?? null}
+            currentSinkId={config.sinkDeviceId}
+            onApply={applyPlanTarget}
+            onApplyAll={applyPlanAll}
+            busy={probeBusy || switchingMic}
+          />
+
           <Field
             htmlFor="ai-source"
             label="① AI 音声ソース"
             hint="ChatGPT の声が出てくる側。ChatGPT の「出力デバイス」に指定した仮想ケーブルの録音側を選びます。"
             help={
               <>
-                例: <Code>CABLE Output</Code> / <Code>CABLE-A Output</Code>
-                。★ が付くものは、名前から自動で見つけた推奨デバイスです。
+                例: <Code>CABLE Output</Code> / <Code>CABLE-A Output</Code>。
+                <strong className="font-medium text-stone-200">◎ がこの PC での推奨</strong>
+                、★ は仮想ケーブル系の候補（推奨とは限りません）です。
                 <br />
                 レベルメーターは ChatGPT が実際に喋ったときだけ振れます。ChatGPT
                 に話しかけても反応しないのは正常です（あなたの声は「AI 参加者を
@@ -583,11 +644,18 @@ export function AiParticipantSetupModal({
               <option value="">未選択</option>
               {inputs.map((d) => (
                 <option key={d.deviceId} value={d.deviceId}>
-                  {d.recommended ? '★ ' : ''}
+                  {optionPrefix(d, plan.source)}
                   {d.label}
                 </option>
               ))}
             </select>
+
+            <PlanHint
+              recommendedLabel={plan.source?.label ?? null}
+              matched={matchesPlan(config.sourceDeviceId, plan.source)}
+              onApply={() => applyPlanTarget('source')}
+              disabled={probeBusy}
+            />
 
             {micCollision && (
               <Alert tone="error">
@@ -641,11 +709,22 @@ export function AiParticipantSetupModal({
               {!micInfo && <option value="">(マイク未取得)</option>}
               {inputs.map((d) => (
                 <option key={d.deviceId} value={d.deviceId}>
-                  {isLoopbackCaptureLabel(d.label) ? '⚠ ' : ''}
+                  {isLoopbackCaptureLabel(d.label)
+                    ? '⚠ '
+                    : plan.mic && d.deviceId === plan.mic.deviceId
+                      ? '◎ '
+                      : ''}
                   {d.label}
                 </option>
               ))}
             </select>
+
+            <PlanHint
+              recommendedLabel={plan.mic?.label ?? null}
+              matched={matchesPlan(micInfo?.deviceId ?? null, plan.mic)}
+              onApply={() => applyPlanTarget('mic')}
+              disabled={switchingMic}
+            />
           </Field>
 
           <Field
@@ -677,12 +756,18 @@ export function AiParticipantSetupModal({
               <option value="">使用しない (外部でルーティング済み)</option>
               {outputs.map((d) => (
                 <option key={d.deviceId} value={d.deviceId}>
-                  {d.recommended ? '★ ' : ''}
+                  {optionPrefix(d, plan.sink)}
                   {d.label}
                 </option>
               ))}
             </select>
 
+            <PlanHint
+              recommendedLabel={plan.sink?.label ?? '使用しない'}
+              matched={matchesPlan(config.sinkDeviceId, plan.sink)}
+              onApply={() => applyPlanTarget('sink')}
+              disabled={probeBusy}
+            />
           </Field>
 
           <div className="mb-5 space-y-2.5 rounded-lg border border-stone-800 bg-stone-950/40 p-3">
@@ -747,9 +832,31 @@ export function AiParticipantSetupModal({
             <input
               id="ai-name"
               type="text"
-              value={config.displayName}
+              value={nameDraft}
               maxLength={32}
-              onChange={(e) => set({ displayName: e.target.value })}
+              onFocus={() => {
+                nameEditingRef.current = true;
+              }}
+              onCompositionStart={() => {
+                nameEditingRef.current = true;
+              }}
+              onChange={(e) => {
+                setNameDraft(e.target.value);
+                set({ displayName: e.target.value });
+              }}
+              onCompositionEnd={(e) => {
+                const v = e.currentTarget.value;
+                setNameDraft(v);
+                set({ displayName: v });
+              }}
+              onBlur={(e) => {
+                nameEditingRef.current = false;
+                // state ではなく DOM の値を読む。直前の入力が反映される前に
+                // blur が来ると、state 経由では1つ古い値を掴む
+                const v = e.currentTarget.value.trim().slice(0, 32) || DEFAULT_AI_CONFIG.displayName;
+                setNameDraft(v);
+                if (v !== config.displayName) set({ displayName: v });
+              }}
               className={selectClass}
             />
           </Field>
@@ -918,13 +1025,6 @@ export function AiParticipantSetupModal({
 
           <SectionTitle>参考</SectionTitle>
 
-          <AiRequiredSettings
-            inputs={inputs}
-            outputs={outputs}
-            sourceDeviceId={config.sourceDeviceId}
-            sinkDeviceId={config.sinkDeviceId}
-          />
-
           <details className="mt-3 rounded-xl border border-stone-800 bg-stone-950/40 px-3 py-2">
             <summary className="cursor-pointer text-sm font-medium text-stone-300">
               この画面について（4点）
@@ -994,6 +1094,46 @@ export function AiParticipantSetupModal({
 
 const selectClass =
   'w-full rounded-lg border border-stone-600 bg-stone-800 px-2.5 py-2 text-sm text-stone-100';
+
+/** 選択肢の先頭に付ける印。◎ = この構成での推奨、★ = 仮想ケーブル系の候補 */
+function optionPrefix(d: DeviceOption, recommended: DeviceOption | null): string {
+  if (recommended && d.deviceId === recommended.deviceId) return '◎ ';
+  return d.recommended ? '★ ' : '';
+}
+
+/**
+ * 各選択欄の直下に「推奨はこれ」を出す。
+ * 一致していれば静かに ✓ だけ、違っていれば名指し＋ワンクリック修正。
+ */
+function PlanHint({
+  recommendedLabel,
+  matched,
+  onApply,
+  disabled,
+}: {
+  recommendedLabel: string | null;
+  matched: boolean;
+  onApply: () => void;
+  disabled?: boolean;
+}) {
+  if (!recommendedLabel) return null;
+  if (matched) return <p className="mt-1.5 text-xs text-emerald-400">✓ 推奨どおりです</p>;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+      <span className="text-amber-300">
+        推奨: <code className="rounded bg-stone-800 px-1.5 py-0.5">{recommendedLabel}</code>
+      </span>
+      <button
+        type="button"
+        onClick={onApply}
+        disabled={disabled}
+        className="rounded border border-amber-700 px-2 py-0.5 font-medium text-amber-200 hover:bg-amber-900/40 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        これにする
+      </button>
+    </div>
+  );
+}
 
 function SectionTitle({ step, children }: { step?: number; children: React.ReactNode }) {
   return (

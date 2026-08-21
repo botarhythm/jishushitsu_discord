@@ -39,6 +39,28 @@ export default function AiParticipantHelpPage() {
           </strong>
         </Callout>
 
+        <aside className="mb-10 rounded-lg border border-sky-900/60 bg-sky-950/30 px-4 py-4">
+          <p className="mb-1 text-sm font-semibold text-sky-100">
+            2回目以降 — 「ChatGPT が声を認識しない」ときは、まずこれを実行する
+          </p>
+          <p className="text-pretty text-sm leading-relaxed text-sky-200/80">
+            一度組んだ設定が崩れる原因はほぼ決まっています（イヤホンを接続すると VoiceMeeter の
+            IN1 が別デバイスに変わる／開けなくなる、が最頻）。
+            画面を目視して推測で設定を触る前に、リポジトリで次を実行してください。
+            経路のどこが切れているかと、
+            <strong className="text-sky-100">ChatGPT に実際に届いている音量（dB）</strong>
+            が数値で出ます。
+          </p>
+          <pre className="mt-3 overflow-x-auto rounded bg-stone-900 px-3 py-2 text-xs text-stone-300">
+            pwsh -File scripts/check-chatgpt-audio.ps1
+          </pre>
+          <p className="mt-2 text-pretty text-sm leading-relaxed text-sky-200/80">
+            測定中の4秒間は声を出し続けてください。VoiceMeeter の配線が原因だと分かったら{' '}
+            <code className="rounded bg-stone-800 px-1 py-0.5 text-xs">-Fix</code>{' '}
+            を付けて実行すると、IN1 の再割当てとオーディオエンジン再起動まで自動で行います。
+          </p>
+        </aside>
+
         <Section n={0} title="用意するもの">
           <ul className="space-y-2 text-sm text-stone-300">
             <Item>
@@ -280,6 +302,19 @@ export default function AiParticipantHelpPage() {
             <span className="rounded bg-stone-800 px-1.5 py-0.5">🔧</span>{' '}
             （AI 参加者の設定）を開きます。
           </p>
+          <div className="mb-4 rounded-lg border border-sky-900/60 bg-sky-950/30 px-4 py-3">
+            <p className="mb-1 text-sm font-semibold text-sky-100">
+              いちばん上の「この PC ではこう設定します」に従えば終わりです
+            </p>
+            <p className="text-pretty text-sm leading-relaxed text-sky-200/80">
+              接続されているデバイスから正解を割り出して、5箇所すべてを名指しで表示します。
+              アプリ内の3つは<strong className="text-sky-100">「推奨をまとめて適用」</strong>
+              で一括設定できます。プルダウンの
+              <strong className="text-sky-100">◎ がこの PC での推奨</strong>で、★
+              は仮想ケーブル系の候補（推奨とは限りません）です。
+              下の表は、その中身を手で確認したいときのために残しています。
+            </p>
+          </div>
           <AppSettingsTable />
           <p className="mt-4 text-pretty text-sm leading-relaxed text-stone-400">
             下に2つのチェックボックスがあります。手順5・7で VoiceMeeter と Windows に
@@ -303,7 +338,7 @@ export default function AiParticipantHelpPage() {
           </ul>
           <Shot
             src="/help/ai-participant/app-settings.png"
-            caption="デバイスを選び終えた状態。★印は名前から自動で見つけた推奨デバイス。詳しい説明は「詳しく」に畳まれている"
+            caption="上部の「この PC ではこう設定します」に、アプリ内3箇所と Windows 側2箇所の正解がデバイス名で並ぶ。一致していれば ✓、違っていれば「これにする」で直せる"
           />
           <Callout tone="warn" title="この設定はサイトごとに保存されます">
             設定はブラウザの localStorage に保存されるため、
@@ -393,11 +428,38 @@ export default function AiParticipantHelpPage() {
         <Section n={11} title="うまくいかないときは">
           <dl className="space-y-5">
             <Trouble q="ChatGPT がこちらの声に反応しない">
-              マイクボタンにカーソルを合わせると、ChatGPT が実際に使っているデバイス名が出ます。
+              まず
+              <code className="mx-1 rounded bg-stone-800 px-1.5 py-0.5 text-xs">
+                pwsh -File scripts/check-chatgpt-audio.ps1
+              </code>
+              を実行してください。B1 バスの実測 dB が出るので、
+              <strong className="text-stone-200">配線が原因かアプリ側が原因かがそこで確定します</strong>
+              （目視で切り分けようとすると必ず遠回りになります）。B1 に音が乗っているのに反応しない
+              場合だけ、ChatGPT 側を疑ってください。マイクボタンにカーソルを合わせると、ChatGPT が
+              実際に使っているデバイス名が出ます。
               <code className="mx-1 rounded bg-stone-800 px-1.5 py-0.5 text-xs">
                 Voicemeeter Out B1
               </code>
               以外なら、手順4をやり直してから ChatGPT を再起動してください。
+            </Trouble>
+            <Trouble q="イヤホンを接続したら認識しなくなった（最頻）">
+              イヤホンやヘッドセットを接続すると、VoiceMeeter の
+              <strong className="text-stone-200"> IN1 の割り当てが変わる・開けなくなる</strong>
+              ことがあります。VoiceMeeter の Stereo Input 1 の下に出ているデバイス名が
+              <strong className="text-stone-200">赤文字</strong>
+              なら異常です（正常なら他の割当と同じ淡い色で表示されます）。
+              <code className="mx-1 rounded bg-stone-800 px-1.5 py-0.5 text-xs">
+                -Fix
+              </code>
+              付きで診断スクリプトを実行すると、IN1 を物理マイクへ割り当て直し、B のみ点灯にして、
+              オーディオエンジンを再起動します。イヤホンは
+              <strong className="text-stone-200">聴くためだけ</strong>
+              に使い、収録する声は物理マイク（マイク配列）から録ってください。
+            </Trouble>
+            <Trouble q="ChatGPT と ChatGPT Classic が両方入っている">
+              設定が効くのは実際に音声モードを開いている方だけです。両方起動していると
+              「設定は正しいのに認識しない」状態になります。使わない方はタスクトレイからも
+              完全に終了してください。診断スクリプトはこの二重起動も検出します。
             </Trouble>
             <Trouble q="ハウリングする">
               スピーカーを使っていないか、VoiceMeeter で A が点灯していないかを確認してください。
