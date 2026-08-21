@@ -61,6 +61,17 @@ Last synced: 2026-08-21
 ### [project-recording-pipeline] 収録→Canva→Spotify パイプライン
 - アプリ側の WebM Duration/Cues 注入は修正済み（c709e0f）。Canva 出力の長さ不一致は
   ffmpeg 完全再エンコードで修復（Spotify 受理実証済み）
+- **録画中の解像度変動問題は Element Capture で恒久解決（393cf32, 2026-08-21）**:
+  サイドパネル開閉でステージ（クロップ対象）が伸縮し録画途中で解像度が変わり
+  WebM が壊れる問題（過去収録13本中2本で実変動を確認）。Codex+Gemini クロスレビューで
+  検出 → `docs/reviews/studio-side-panels-cross-review-2026-08-21.md`
+  - 確保順序: Element Capture (restrictTo, Chrome 132+) → Region Capture (cropTo) →
+    録画中止 (fail-closed)。element モードは重なった UI を録画から除外するため、
+    パネルは fixed オーバーレイ化して**録画中も開閉可**。region 時は従来封鎖
+  - 「録画中の AI ON/OFF 禁止」は方式に関係なく維持（aiToggleLocked）
+  - 機械検証: `npm run verify:element-capture`（Playwright + 画面共有ピッカー自動応答。
+    映り込みピクセル・解像度不変・フォールバック・fail-closed を毎回検証できる回帰資産）
+  - 残: ホスト実機の本番 Chrome で実収録1本（element モード表示と WebM 健全性の確認）
 
 ## 決定事項 / 方針
 
