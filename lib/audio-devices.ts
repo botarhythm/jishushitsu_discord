@@ -154,16 +154,24 @@ export function suggestAiSourceInput(inputs: DeviceOption[]): DeviceOption | nul
   );
 }
 
-/** 通話マイクの推奨。仮想デバイスでも録音ループバックでもない最初の入力 */
+/**
+ * Bluetooth ヘッドセットの内蔵マイク。マイクを使った瞬間にハンズフリー通話
+ * プロファイルへ切り替わり音質が電話並みに落ちるため、収録では選ばせない。
+ */
+const HANDS_FREE_MIC = /hands[-\s]?free|ハンズフリー|ヘッドセット|headset/i;
+
+/**
+ * 通話マイクの推奨。仮想デバイスでも録音ループバックでもない入力のうち、
+ * Bluetooth ヘッドセット系を後回しにした最初のもの。
+ */
 export function suggestPhysicalMicInput(inputs: DeviceOption[]): DeviceOption | null {
-  return (
-    inputs.find(
-      (d) =>
-        !isVirtualCableLabel(d.label) &&
-        !isLoopbackCaptureLabel(d.label) &&
-        !normalizeLabel(d.label).startsWith('default')
-    ) ?? null
+  const candidates = inputs.filter(
+    (d) =>
+      !isVirtualCableLabel(d.label) &&
+      !isLoopbackCaptureLabel(d.label) &&
+      !normalizeLabel(d.label).startsWith('default')
   );
+  return candidates.find((d) => !HANDS_FREE_MIC.test(d.label)) ?? candidates[0] ?? null;
 }
 
 /** ChatGPT への送出先の推奨。定番は Voicemeeter Input */
