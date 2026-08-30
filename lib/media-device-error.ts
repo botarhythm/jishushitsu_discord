@@ -1,6 +1,56 @@
 import { MediaDeviceFailure } from 'livekit-client';
 
 /**
+ * ブラウザの権限設定画面 (chrome:// 等) へは Web ページからリンクできないため、
+ * 権限拒否時は端末を判別して「その環境での操作手順」を文言で案内するしかない。
+ * ここはその判別。UA だけに頼らず iPadOS の Macintosh 偽装は maxTouchPoints で拾う。
+ */
+function detectPlatform(): 'android' | 'ios' | 'desktop' {
+  if (typeof navigator === 'undefined') return 'desktop';
+  const ua = navigator.userAgent;
+  if (/iPhone|iPad|iPod/.test(ua)) return 'ios';
+  if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) return 'ios';
+  if (/Android/.test(ua)) return 'android';
+  return 'desktop';
+}
+
+/** 権限拒否 (ブラウザ設定の変更 + 再読み込みで直る系) の失敗か */
+export function isPermissionFailure(error: Error | undefined): boolean {
+  return MediaDeviceFailure.getFailure(error) === MediaDeviceFailure.PermissionDenied;
+}
+
+/** 権限拒否時の、端末別の復旧手順つきメッセージ */
+function describePermissionDenied(deviceLabel: string): string {
+  switch (detectPlatform()) {
+    case 'android':
+      return (
+        `${deviceLabel}の使用が許可されませんでした。ブラウザの設定から許可できます:\n` +
+        '1. アドレスバー左の鍵マーク 🔒 (または設定アイコン) をタップ\n' +
+        '2. 「権限」でカメラとマイクを「許可」に変更\n' +
+        '3. このページを再読み込み\n' +
+        '「権限」の項目が出ない場合は、端末の 設定 → アプリ → Chrome → 権限 でカメラとマイクを許可してください。\n' +
+        'LINE・Instagram などのアプリ内ブラウザで開いている場合はカメラ/マイクが使えないことがあります。メニューから「他のブラウザで開く」で Chrome で開き直してください。'
+      );
+    case 'ios':
+      return (
+        `${deviceLabel}の使用が許可されませんでした。ブラウザの設定から許可できます:\n` +
+        '1. アドレスバー左の「ぁあ」をタップ →「Webサイトの設定」\n' +
+        '2. カメラとマイクを「許可」に変更\n' +
+        '3. このページを再読み込み\n' +
+        'それでも直らない場合は、端末の 設定 → Safari → カメラ/マイク を「確認」または「許可」にしてください。\n' +
+        'LINE・Instagram などのアプリ内ブラウザで開いている場合は、メニューから「Safariで開く」で開き直してください。'
+      );
+    default:
+      return (
+        `${deviceLabel}の使用が許可されませんでした。ブラウザの設定から許可できます:\n` +
+        '1. アドレスバーの右端 (またはURL左の鍵マーク) にあるカメラのアイコンをクリック\n' +
+        '2. カメラとマイクを「許可」に変更\n' +
+        '3. このページを再読み込み'
+      );
+  }
+}
+
+/**
  * カメラ/マイクの getUserMedia 失敗を、利用者が次に何をすればいいか分かる文言に変換する。
  * PermissionDenied は「権限ダイアログを拒否した」以外に、LINE/Instagram 等のアプリ内蔵ブラウザ
  * (WebView) がそもそもカメラ/マイク権限を仲介できず即座に失敗するケースが非常に多いため、
@@ -22,11 +72,7 @@ export function describeMediaDeviceFailure(error: Error | undefined, deviceLabel
   const failure = MediaDeviceFailure.getFailure(error);
   switch (failure) {
     case MediaDeviceFailure.PermissionDenied:
-      return (
-        `${deviceLabel}の使用が許可されませんでした。ブラウザの権限設定を確認してください。` +
-        'LINE・Instagram・メールアプリなどのアプリ内蔵ブラウザで開いている場合はカメラ/マイクが使えないことがあります。' +
-        '右上のメニューなどから「他のブラウザで開く」を選び、Chrome・Safariなど通常のブラウザで開き直してください。'
-      );
+      return describePermissionDenied(deviceLabel);
     case MediaDeviceFailure.NotFound:
       return `${deviceLabel}が見つかりませんでした。端末にカメラ/マイクが接続・搭載されているか確認してください。`;
     case MediaDeviceFailure.DeviceInUse:

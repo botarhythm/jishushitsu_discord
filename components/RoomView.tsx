@@ -14,7 +14,7 @@ import {
 } from '@livekit/components-react';
 import { AudioPresets, Track, RoomEvent } from 'livekit-client';
 import { downloadChatHistory } from '@/lib/chat-export';
-import { describeMediaDeviceFailure } from '@/lib/media-device-error';
+import { describeMediaDeviceFailure, isPermissionFailure } from '@/lib/media-device-error';
 import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS, mergeParticipantMetadata } from '@/lib/types';
 import InstructorDashboard from './InstructorDashboard';
 import { useSessionRecorder } from '@/hooks/useSessionRecorder';
@@ -155,24 +155,36 @@ function RoomInner({
   // 手動トグルも、getUserMedia失敗時は内部で RoomEvent.MediaDevicesError を発火する。
   // これを拾わないとエラーが完全にサイレントになり「ボタンを押しても反応がない」ように見える
   // (実際は権限拒否・LINE等のアプリ内蔵ブラウザでの制限・デバイス使用中などが起きている)。
-  const [deviceError, setDeviceError] = useState<string | null>(null);
+  const [deviceError, setDeviceErrorState] = useState<{
+    message: string;
+    /** 権限拒否系: ブラウザ設定の変更後に再読み込みが必要なので、バナーにボタンを出す */
+    showReload?: boolean;
+  } | null>(null);
+  // 既存呼び出し箇所の大半は文字列を渡すだけなので、薄いラッパで受ける
+  const setDeviceError = useCallback((message: string | null) => {
+    setDeviceErrorState(message === null ? null : { message });
+  }, []);
   useEffect(() => {
     const handleMediaDevicesError = () => {
       const cameraErr = localParticipant.lastCameraError;
       const micErr = localParticipant.lastMicrophoneError;
+      const showReload = isPermissionFailure(cameraErr) || isPermissionFailure(micErr);
       // カメラ/マイクが同時に失敗する (LINE等のアプリ内蔵ブラウザで両方とも権限を
       // 仲介できないケースで典型的) 場合、片方だけを優先して表示すると
       // もう片方の失敗理由が握りつぶされてしまうため、両方あれば両方表示する。
+      // ただし両方とも権限拒否なら手順は同一なので、1つの案内にまとめる。
       if (cameraErr && micErr) {
-        setDeviceError(
-          `${describeMediaDeviceFailure(cameraErr, 'カメラ')}\n${describeMediaDeviceFailure(micErr, 'マイク')}`
-        );
+        const message =
+          isPermissionFailure(cameraErr) && isPermissionFailure(micErr)
+            ? describeMediaDeviceFailure(cameraErr, 'カメラとマイク')
+            : `${describeMediaDeviceFailure(cameraErr, 'カメラ')}\n${describeMediaDeviceFailure(micErr, 'マイク')}`;
+        setDeviceErrorState({ message, showReload });
       } else if (cameraErr) {
-        setDeviceError(describeMediaDeviceFailure(cameraErr, 'カメラ'));
+        setDeviceErrorState({ message: describeMediaDeviceFailure(cameraErr, 'カメラ'), showReload });
       } else if (micErr) {
-        setDeviceError(describeMediaDeviceFailure(micErr, 'マイク'));
+        setDeviceErrorState({ message: describeMediaDeviceFailure(micErr, 'マイク'), showReload });
       } else {
-        setDeviceError(describeMediaDeviceFailure(undefined, 'カメラ/マイク'));
+        setDeviceErrorState({ message: describeMediaDeviceFailure(undefined, 'カメラ/マイク') });
       }
     };
     room.on(RoomEvent.MediaDevicesError, handleMediaDevicesError);
@@ -991,7 +1003,11 @@ function RoomInner({
         <InAppBrowserWarning />
         <StartAudioBanner />
         {deviceError && (
-          <DeviceErrorBanner message={deviceError} onDismiss={() => setDeviceError(null)} />
+          <DeviceErrorBanner
+            message={deviceError.message}
+            showReload={deviceError.showReload}
+            onDismiss={() => setDeviceError(null)}
+          />
         )}
         {studioSyncError && (
           <DeviceErrorBanner message={studioSyncError} onDismiss={() => setStudioSyncError(null)} />
@@ -1292,7 +1308,11 @@ function RoomInner({
 
       {/* カメラ/マイク取得失敗の警告 */}
       {deviceError && (
-        <DeviceErrorBanner message={deviceError} onDismiss={() => setDeviceError(null)} />
+        <DeviceErrorBanner
+          message={deviceError.message}
+          showReload={deviceError.showReload}
+          onDismiss={() => setDeviceError(null)}
+        />
       )}
 
       {/* 録音/録画ステータストースト (全員) */}
