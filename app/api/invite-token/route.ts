@@ -54,7 +54,12 @@ export async function POST(request: NextRequest) {
     initialRec,
   });
   const origin = request.nextUrl.origin;
-  const url = `${origin}/join/${token}`;
+  // openExternalBrowser=1 は LINE アプリ内ブラウザの公式パラメータで、リンクを
+  // タップした時点で端末の既定ブラウザ (Chrome/Safari) で開かせる。LINE の WebView は
+  // カメラ/マイク権限を仲介できず参加に失敗するため、招待リンクには常に付与する。
+  // LINE 以外のアプリ・ブラウザではこのパラメータは単に無視される (join ページは
+  // クエリを読まない)。
+  const url = `${origin}/join/${token}?openExternalBrowser=1`;
 
   return NextResponse.json({ url, token, expiresAt, role, initialRec });
 }
