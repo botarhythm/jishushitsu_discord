@@ -128,7 +128,7 @@ npm run dev
 
 | 変数名 | 説明 |
 |--------|------|
-| `DISCORD_ADDITIONAL_GUILD_IDS` | 追加で許可する Guild ID をカンマ区切り (本番: デジハラ第1期 `1500085001717420134`) |
+| `DISCORD_ADDITIONAL_GUILD_IDS` | 追加で許可する Guild ID をカンマ区切り (本番: デジハラ第1期 `1500085001717420134`, 第2期 `1529007741979332709`) |
 
 許可 guild のいずれかに所属していれば入室可。User ID で講師判定するため、どの guild から来ても元沢/塚ちゃんは instructor、それ以外は student。
 

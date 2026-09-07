@@ -22,6 +22,7 @@ Jishushitsu の Discord OAuth 認証で「どの Discord サーバーのメン�
 |------|------|----------|----------|
 | プライマリ | After Digital Harappa Daigaku (ADHD) | `1500075036285866215` | `DISCORD_GUILD_ID` |
 | 追加 | デジハラ第1期 | `1500085001717420134` | `DISCORD_ADDITIONAL_GUILD_IDS` (カンマ区切り) |
+| 追加 | デジハラ第2期 | `1529007741979332709` | `DISCORD_ADDITIONAL_GUILD_IDS` (カンマ区切り) |
 
 ### 講師 (instructor) — Discord User ID 固定
 
@@ -50,7 +51,7 @@ Jishushitsu の Discord OAuth 認証で「どの Discord サーバーのメン�
 DISCORD_CLIENT_ID=...
 DISCORD_CLIENT_SECRET=...
 DISCORD_GUILD_ID=1500075036285866215
-DISCORD_ADDITIONAL_GUILD_IDS=1500085001717420134
+DISCORD_ADDITIONAL_GUILD_IDS=1500085001717420134,1529007741979332709
 DISCORD_INSTRUCTOR_USER_IDS=1016907741018726470,1337662562283683861
 SESSION_SECRET=<32+ バイトランダム>
 
@@ -78,6 +79,7 @@ Production / Preview / Development すべてに同じ値を設定。
 | 塚ちゃんが ADHD 経由でログイン | instructor 判定 | 未確認 |
 | ADHD の一般メンバー (student) ログイン | student 判定で入室可 | 未確認 |
 | 第1期メンバー (ADHD 未所属) ログイン | student 判定で入室可 | 未確認 |
+| 第2期メンバー (ADHD 未所属) ログイン | student 判定で入室可 | 未確認 |
 | 第1期に元沢/塚ちゃんが所属していた場合のログイン | instructor 判定 (User ID 一致のため guild に関係なく) | 未確認 |
 | 許可 guild に未所属のアカウントでログイン | 拒否 (「対象サーバーに参加していません」) | 未確認 |
 
