@@ -6,7 +6,7 @@ lake_capacity:
   selection_source: user
   effective_phase: A2
   root_model: gpt-5.6-sol
-  phase_status: implementation-complete
+  phase_status: deployed
   quota_observed_at: 2026-09-07T14:07:47Z
   quota_scope: account
   quota_remaining_percent: 26
@@ -16,11 +16,12 @@ lake_capacity:
 ```
 
 ### Lake実装完了: 通常モードのChatGPT参加と音声設定の簡略化
-- 状態: ローカル実装完了。GPT-6 Astra 最終ゲート GO（P0/P1/P2=0）。未デプロイ。
+- 状態: 本番デプロイ済み。GPT-6 Astra 最終ゲート GO（P0/P1/P2=0）。機能コミット `0c17906`。
 - 引継ぎ: `tasks/runs/chatgpt-all-participants-a2-handoff.md`
 - ユーザー意図: 収録モード以外でも全参加者がChatGPTと対話でき、今回のマイク設定問題をワンクリックで解消できること。
 - 予約 LiveKit AI 参加者、全参加者音声ミックス、通常モード操作、v4 往復検証、ブラウザ一括適用、Windows 修復スクリプトを実装。
 - 実機受入として複数端末のリモートのみ往復、WebM再生、Windows `-Fix` 実行を残す。
+- 2026-09-08: Vercel production 完了。`https://session.botarhythm.com/` と `/help/ai-participant` が 200、未認証の `/api/ai-participant-token` が 401 を返すことを確認。
 
 > 複数AI（Claude Code / Antigravity / その他）が共有するプロジェクトの現状・決定事項の単一ソース。
 > Claude の private メモリと常に同期される（Skill: project-knowledge-sync）。

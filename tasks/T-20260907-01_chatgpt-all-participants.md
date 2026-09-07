@@ -1,6 +1,6 @@
 # T-20260907-01 ChatGPTを通常ルーム参加者として公開
 
-- status: implemented (local, final Astra gate GO)
+- status: deployed (final Astra gate GO)
 - owner: gpt-5.6-sol `/root`
 - requirements: FR-001..005, FR-010..012; NFR-001..005
 
@@ -25,3 +25,4 @@
 
 - 実装・型検査・対象Lint・production build・Astra競合/lifecycle mockを完了。
 - 実複数端末の音声往復と録画再生はデプロイ後の受入確認に残す。
+- production: `0c17906` を Vercel へ反映。トップページ 200 と API 未認証 401 を確認。

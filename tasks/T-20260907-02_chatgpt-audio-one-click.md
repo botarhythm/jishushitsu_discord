@@ -1,6 +1,6 @@
 # T-20260907-02 ChatGPT音声設定の一括適用と検証記録
 
-- status: implemented (local, final Astra gate GO)
+- status: deployed (final Astra gate GO)
 - owner: gpt-5.6-sol `/root`
 - requirements: FR-006..009; RAC-002, RAC-005, RAC-006
 
@@ -25,3 +25,4 @@
 
 - v4検証、競合防止、一括適用、部分結果、Windows診断・修復を実装。
 - ChatGPT Classic 内部マイクとリモート往復は画面上で確認を要求し、未確認のまま検証済みにしない。
+- production: `0c17906` を Vercel へ反映。セットアップ手順ページ 200 を確認。
