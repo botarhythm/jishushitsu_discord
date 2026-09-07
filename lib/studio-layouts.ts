@@ -9,7 +9,7 @@
  * 同一の見た目になる値で移植している（AC-007）。変更時はスクショ比較で回帰確認すること。
  */
 
-export type StudioLayout = 'split' | 'screen-main' | 'solo' | 'speaker' | 'trio' | 'triple';
+export type StudioLayout = 'split' | 'screen-main' | 'solo' | 'speaker' | 'trio' | 'triple' | 'spotlight' | 'spotlight-strip';
 
 export interface SlotGeometry {
   /** grid-column の値 (例 '1 / 3') 。省略時は自動配置 */
@@ -32,13 +32,25 @@ export interface StudioLayoutSpec {
    *  - 'grid': gridTemplate* に従って slots を敷き詰める
    *  - 'screen-main': 背景に画面共有、右下に slots を小窓で縦積み（専用描画）
    */
-  kind: 'grid' | 'screen-main';
+  kind: 'grid' | 'screen-main' | 'spotlight';
   gridTemplateColumns?: string;
   gridTemplateRows?: string;
   slots: SlotGeometry[];
 }
 
 export const STUDIO_LAYOUTS: Record<StudioLayout, StudioLayoutSpec> = {
+  spotlight: {
+    id: 'spotlight',
+    label: 'スポットライト',
+    kind: 'spotlight',
+    slots: [{ roleLabel: 'スポットライト対象' }],
+  },
+  'spotlight-strip': {
+    id: 'spotlight-strip',
+    label: 'スポットライト＋全参加者を下部に表示',
+    kind: 'spotlight',
+    slots: [{ roleLabel: 'スポットライト対象' }],
+  },
   // 従来: grid grid-cols-2 gap-px / object-contain
   split: {
     id: 'split',

@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { RoomServiceClient } from 'livekit-server-sdk';
 import { requireInstructor } from '@/lib/auth-guard';
 import { livekitIdentityFor } from '@/lib/session';
+import { STUDIO_LAYOUTS } from '@/lib/studio-layouts';
 
-const KNOWN_LAYOUTS = new Set(['split', 'screen-main', 'solo', 'speaker', 'trio', 'triple']);
+const KNOWN_LAYOUTS = new Set(Object.keys(STUDIO_LAYOUTS));
 const MAX_SLOTS = 8;
 const MAX_TOKEN_LENGTH = 256;
 const MAX_BODY_BYTES = 8 * 1024;

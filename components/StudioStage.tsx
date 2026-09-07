@@ -44,6 +44,8 @@ interface StudioStageProps {
    * スロットを占有しないので、人物レイアウトの縦横比を変えずに AI を登場させられる。
    */
   aiOrb?: AiTileState | null;
+  /** ホストだけに渡す。下部の参加者を選ぶとスポットライトを切り替える。 */
+  onSpotlight?: (token: string) => void;
 }
 
 /**
@@ -55,7 +57,7 @@ interface StudioStageProps {
  * - レイアウトは lib/studio-layouts.ts のレジストリでデータ駆動（固定人数のJSX分岐を持たない）。
  *   未知のレイアウトIDは split にフォールバックし、決して空ステージにしない。
  */
-export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTiles, aiOrb }: StudioStageProps) {
+export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTiles, aiOrb, onSpotlight }: StudioStageProps) {
   const tracks = useTracks([Track.Source.Camera, Track.Source.ScreenShare], {
     onlySubscribed: false,
   });
@@ -86,6 +88,18 @@ export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTi
   }, [tracks]);
 
   const spec = resolveLayout(layout);
+  const stripTokens = [
+    ...participants.map((p) => p.identity).sort(),
+    ...Object.keys(aiTiles ?? {}).sort().map((id) => `ai:${id}`),
+  ];
+  const spotlightToken = slotTokens[0] ?? null;
+  const spotlightPresent = spotlightToken !== null && stripTokens.includes(spotlightToken);
+  const tokenName = (token: string) => {
+    const ref = parseSlotToken(token);
+    return ref?.kind === 'ai'
+      ? aiTiles?.[ref.aiId]?.info.displayName ?? 'AI'
+      : byIdentity.get(token)?.name?.trim() || token;
+  };
 
   const renderTile = (token: string | null, geo: SlotGeometry) => {
     const ref = parseSlotToken(token);
@@ -129,7 +143,38 @@ export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTi
         className="relative isolate aspect-video w-full"
         style={{ maxWidth: 'calc(100dvh * 16 / 9)', maxHeight: '100%' }}
       >
-        {spec.kind === 'screen-main' ? (
+        {spec.kind === 'spotlight' ? (
+          <div className="absolute inset-0 flex flex-col bg-black">
+            <div className="relative min-h-0 flex-1" data-testid="spotlight-main">
+              {spotlightPresent ? renderTile(spotlightToken, {}) : (
+                <div className="flex h-full items-center justify-center px-4 text-center text-sm text-stone-400" role="status">
+                  {spotlightToken
+                    ? 'スポットライト対象の参加を待っています'
+                    : 'スポットライト対象を選択してください'}
+                </div>
+              )}
+            </div>
+            {spec.id === 'spotlight-strip' && stripTokens.length > 0 && (
+              <div className="flex h-1/5 shrink-0 items-center justify-center gap-px bg-stone-950" aria-label="全参加者" data-testid="spotlight-strip">
+                {stripTokens.map((token) => (
+                  <div key={token} className="relative h-full min-w-0 flex-1 overflow-hidden" style={{ maxWidth: '20%' }}>
+                    {renderTile(token, { compact: true, cover: false })}
+                    {onSpotlight && (
+                      <button
+                        type="button"
+                        className="absolute inset-0 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-400"
+                        aria-label={`${tokenName(token)}をスポットライトに固定`}
+                        aria-pressed={spotlightToken === token}
+                        title={`${tokenName(token)}をスポットライトに固定`}
+                        onClick={() => onSpotlight(token)}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : spec.kind === 'screen-main' ? (
           <div className="absolute inset-0 bg-stone-950">
             {/* メイン: 画面共有 (object-contain で全体を表示) */}
             <div className="absolute inset-0 flex items-center justify-center bg-black">
@@ -173,7 +218,7 @@ export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTi
 
         {/* AI のエネルギー球。スロットを使わず中央に重ねるため、
             人物側のレイアウトと縦横比はそのまま保たれる。 */}
-        {aiOrb && (
+        {aiOrb && spec.kind !== 'spotlight' && (
           <div className="pointer-events-none absolute inset-0">
             {/* キャンバスはステージ全体。球の位置と大きさは描画側の比率で決めるので、
                 コロナやブルームが要素の矩形で切り取られない。 */}

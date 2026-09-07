@@ -693,11 +693,12 @@ function RoomInner({
     if (!studioMode) return;
     if (screenShareActive) {
       setStudioLayout((prev) => {
+        if (prev === 'spotlight' || prev === 'spotlight-strip') return prev;
         if (prev !== 'screen-main') preShareLayoutRef.current = prev;
         return 'screen-main';
       });
     } else {
-      setStudioLayout(preShareLayoutRef.current);
+      setStudioLayout((prev) => prev === 'screen-main' ? preShareLayoutRef.current : prev);
     }
   }, [studioMode, screenShareActive]);
 
@@ -1024,10 +1025,11 @@ function RoomInner({
                 stageRef={studioStageRef}
                 aiTiles={aiTile ? { [AI_PARTICIPANT_ID]: aiTile } : undefined}
                 aiOrb={aiTile}
+                onSpotlight={(token) => changeStudioSlot(0, token)}
               />
             </div>
             {/* 視聴者サムネは録画ステージ (16:9) の外。表示されるが録画には含まれない。 */}
-            {showAudience && (
+            {showAudience && studioLayout !== 'spotlight-strip' && (
               <AudienceStrip
                 excludeIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
               />
@@ -1202,7 +1204,7 @@ function RoomInner({
                   aiOrb={remoteAiTile}
                 />
               </div>
-              {remoteStudio.showAudience && (
+              {remoteStudio.showAudience && remoteStudio.layout !== 'spotlight-strip' && (
                 <AudienceStrip
                   excludeIdentities={remoteStudio.slots.slice(
                     0,

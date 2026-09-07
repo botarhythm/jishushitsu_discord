@@ -118,12 +118,13 @@ export function StudioBar(props: StudioBarProps) {
 
   const [visible, setVisible] = useState(true);
   const hoveringRef = useRef(false);
+  const focusedRef = useRef(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const scheduleHide = useCallback(() => {
     if (hideTimer.current) clearTimeout(hideTimer.current);
     hideTimer.current = setTimeout(() => {
-      if (!hoveringRef.current) setVisible(false);
+      if (!hoveringRef.current && !focusedRef.current) setVisible(false);
     }, 3000);
   }, []);
 
@@ -162,6 +163,16 @@ export function StudioBar(props: StudioBarProps) {
       onMouseEnter={() => {
         hoveringRef.current = true;
         setVisible(true);
+      }}
+      onFocus={() => {
+        focusedRef.current = true;
+        setVisible(true);
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          focusedRef.current = false;
+          scheduleHide();
+        }
       }}
       onMouseLeave={() => {
         hoveringRef.current = false;
@@ -277,6 +288,16 @@ export function StudioBar(props: StudioBarProps) {
           );
         })}
 
+        {layoutSpec.kind === 'spotlight' && (
+          <button
+            type="button"
+            onClick={() => onChangeLayout('split')}
+            className="shrink-0 rounded-lg bg-stone-700 px-3 py-2 text-xs text-stone-100 hover:bg-stone-600"
+          >
+            スポットライト解除
+          </button>
+        )}
+
         {onOpenDeviceSettings && (
           <BarButton label="マイク/カメラのデバイス設定" onClick={onOpenDeviceSettings}>
             ⚙️
@@ -320,7 +341,7 @@ export function StudioBar(props: StudioBarProps) {
         <BarButton active={showNameplates} label="名前表示" onClick={onToggleNameplates}>
           🏷️
         </BarButton>
-        <BarButton active={showAudience} label="視聴者を下段に表示" onClick={onToggleAudience}>
+        <BarButton active={showAudience || layout === 'spotlight-strip'} disabled={layout === 'spotlight-strip'} label={layout === 'spotlight-strip' ? '全参加者を録画内の下部に表示中' : '視聴者を下段に表示'} onClick={onToggleAudience}>
           👥
         </BarButton>
 
