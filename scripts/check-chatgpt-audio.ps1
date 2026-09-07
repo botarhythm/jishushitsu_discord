@@ -42,8 +42,13 @@ public static class AudioDef {
   [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] internal class MMDeviceEnumerator {}
   [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
   internal interface IMMDeviceEnumerator {
-    int EnumAudioEndpoints(int dataFlow, int stateMask, out IntPtr devices);
+    int EnumAudioEndpoints(int dataFlow, int stateMask, out IMMDeviceCollection devices);
     int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppEndpoint);
+  }
+  [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  internal interface IMMDeviceCollection {
+    int GetCount(out uint count);
+    int Item(uint index, out IMMDevice device);
   }
   [Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
   internal interface IMMDevice {
@@ -60,14 +65,39 @@ public static class AudioDef {
   }
   [StructLayout(LayoutKind.Sequential)] internal struct PROPERTYKEY { public Guid fmtid; public int pid; }
   [StructLayout(LayoutKind.Explicit)] internal struct PROPVARIANT { [FieldOffset(0)] public short vt; [FieldOffset(8)] public IntPtr p; }
+  [ComImport, Guid("870AF99C-171D-4F9E-AF0D-E63DF40C2BC9")] internal class PolicyConfigClient {}
+  [Guid("568B9108-44BF-40B4-9006-86AFE5B5A620"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  internal interface IPolicyConfig {
+    int GetMixFormat(); int GetDeviceFormat(); int ResetDeviceFormat(); int SetDeviceFormat();
+    int GetProcessingPeriod(); int SetProcessingPeriod(); int GetShareMode(); int SetShareMode();
+    int GetPropertyValue(); int SetPropertyValue(); int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string id, int role);
+    int SetEndpointVisibility();
+  }
+  static string FriendlyName(IMMDevice dev) {
+    IPropertyStore st; dev.OpenPropertyStore(0, out st);
+    var key = new PROPERTYKEY { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 14 };
+    PROPVARIANT pv; st.GetValue(ref key, out pv);
+    return Marshal.PtrToStringUni(pv.p) ?? "";
+  }
   public static string GetDefault(int dataFlow, int role) {
     var en = (IMMDeviceEnumerator)(new MMDeviceEnumerator());
     IMMDevice dev = null;
     if (en.GetDefaultAudioEndpoint(dataFlow, role, out dev) != 0 || dev == null) return "(none)";
-    IPropertyStore st; dev.OpenPropertyStore(0, out st);
-    var key = new PROPERTYKEY { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 14 };
-    PROPVARIANT pv; st.GetValue(ref key, out pv);
-    return Marshal.PtrToStringUni(pv.p);
+    return FriendlyName(dev);
+  }
+  public static string[] GetActiveEndpoints(int dataFlow) {
+    var en = (IMMDeviceEnumerator)(new MMDeviceEnumerator());
+    IMMDeviceCollection devices; en.EnumAudioEndpoints(dataFlow, 1, out devices);
+    uint count; devices.GetCount(out count);
+    var result = new string[count];
+    for (uint i = 0; i < count; i++) {
+      IMMDevice dev; devices.Item(i, out dev); string id; dev.GetId(out id);
+      result[i] = id + "\t" + FriendlyName(dev);
+    }
+    return result;
+  }
+  public static int SetDefault(string endpointId, int role) {
+    return ((IPolicyConfig)(new PolicyConfigClient())).SetDefaultEndpoint(endpointId, role);
   }
 }
 '@
@@ -77,6 +107,35 @@ $playDefault = [AudioDef]::GetDefault(0, 0)
 $playComm    = [AudioDef]::GetDefault(0, 2)
 $recDefault  = [AudioDef]::GetDefault(1, 0)
 $recComm     = [AudioDef]::GetDefault(1, 2)
+$activeCapture = @(
+  [AudioDef]::GetActiveEndpoints(1) | ForEach-Object {
+    $parts = $_ -split "`t", 2
+    if ($parts.Count -eq 2) {
+      # IMMDevice::GetId が返す opaque な完全 ID をそのまま PolicyConfig に渡す。
+      [pscustomobject]@{ Id = $parts[0]; Name = $parts[1] }
+    }
+  }
+)
+$b1Candidates = @($activeCapture | Where-Object { $_.Name -like 'Voicemeeter Out B1*' })
+$micCandidates = @($activeCapture | Where-Object { $_.Name -like "*$Mic*" -and $_.Name -notmatch 'CABLE|Voicemeeter' })
+
+Head "0. 修復計画プリフライト"
+$preflightBlocked = $false
+if ($b1Candidates.Count -ne 1) {
+  Bad "録音デバイス Voicemeeter Out B1 を一意に解決できません（候補 $($b1Candidates.Count) 件）"
+  $preflightBlocked = $true
+}
+if ($micCandidates.Count -ne 1) {
+  Bad "物理マイク '$Mic' を一意に解決できません（候補 $($micCandidates.Count) 件）"
+  $preflightBlocked = $true
+}
+if (-not $preflightBlocked) {
+  Info "録音 既定の通信 | 変更前: $recComm | 要求値: $($b1Candidates[0].Name)"
+  Info "VoiceMeeter IN1  | 要求値: $($micCandidates[0].Name)"
+}
+if ($Fix) {
+  if ($preflightBlocked) { Info 'プリフライト失敗のため変更しません'; exit 2 }
+}
 
 Head "1. Windows の既定デバイス"
 Info "再生 既定       : $playDefault"
@@ -122,14 +181,17 @@ $required = @(
   @{ Flow = 'Render';  Pattern = 'CABLE Input*';        Why = 'ChatGPT の声の出口' },
   @{ Flow = 'Render';  Pattern = 'Voicemeeter Input*';  Why = 'アプリから ChatGPT へ送る入口' }
 )
+$requiredBlocked = $false
 foreach ($r in $required) {
   $d = @(Get-EndpointState $r.Flow $r.Pattern)
   if ($d.Count -eq 0) {
     Bad "$($r.Pattern) が存在しない（$($r.Why)）"
-  } elseif ($d | Where-Object { $_.State -eq 1 }) {
-    Ok "$($d[0].Name) : 有効（$($r.Why)）"
+    $requiredBlocked = $true
+  } elseif (@($d | Where-Object { $_.State -eq 1 }).Count -ne 1) {
+    Bad "$($r.Pattern) の有効候補を一意に解決できない（$($r.Why)）"
+    $requiredBlocked = $true
   } else {
-    Bad "$($d[0].Name) が無効／未接続（$($r.Why)）— mmsys.cpl で有効化する"
+    Ok "$($d[0].Name) : 有効（$($r.Why)）"
   }
 }
 
@@ -162,9 +224,9 @@ public static class VMR {
   [DllImport(DLL, CallingConvention = CallingConvention.StdCall)] public static extern int VBVMR_GetParameterStringW([MarshalAs(UnmanagedType.LPStr)] string p, [MarshalAs(UnmanagedType.LPWStr)] StringBuilder s);
   [DllImport(DLL, CallingConvention = CallingConvention.StdCall)] public static extern int VBVMR_SetParameterStringW([MarshalAs(UnmanagedType.LPStr)] string p, [MarshalAs(UnmanagedType.LPWStr)] string s);
   [DllImport(DLL, CallingConvention = CallingConvention.StdCall)] public static extern int VBVMR_GetLevel(int type, int channel, ref float v);
-  public static string GetStr(string p) { var sb = new StringBuilder(1024); VBVMR_GetParameterStringW(p, sb); return sb.ToString(); }
-  public static float GetF(string p) { float v = 0; VBVMR_GetParameterFloat(p, ref v); return v; }
-  public static float Level(int t, int c) { float v = 0; VBVMR_GetLevel(t, c, ref v); return v; }
+  public static string GetStr(string p) { var sb = new StringBuilder(1024); var rc = VBVMR_GetParameterStringW(p, sb); if (rc < 0) throw new InvalidOperationException(p + " read failed: " + rc); return sb.ToString(); }
+  public static float GetF(string p) { float v = 0; var rc = VBVMR_GetParameterFloat(p, ref v); if (rc < 0) throw new InvalidOperationException(p + " read failed: " + rc); return v; }
+  public static float Level(int t, int c) { float v = 0; var rc = VBVMR_GetLevel(t, c, ref v); if (rc < 0) throw new InvalidOperationException("level read failed: " + rc); return v; }
 }
 "@
 if (-not ('VMR' -as [type])) { Add-Type -TypeDefinition $remoteSrc -Language CSharp }
@@ -213,16 +275,77 @@ if ($login -lt 0) {
 
   if ($Fix) {
     Head "4. 自動復旧を実行"
-    [void][VMR]::VBVMR_SetParameterStringW('Strip[0].device.wdm', $Mic)
-    [void][VMR]::VBVMR_SetParameterFloat('Strip[0].A1', 0)
-    [void][VMR]::VBVMR_SetParameterFloat('Strip[0].B1', 1)
-    [void][VMR]::VBVMR_SetParameterFloat('Strip[0].mute', 0)
-    [void][VMR]::VBVMR_SetParameterFloat('Strip[2].A1', 0)
-    [void][VMR]::VBVMR_SetParameterFloat('Strip[2].B1', 1)
-    Start-Sleep -Milliseconds 400
-    [void][VMR]::VBVMR_SetParameterFloat('Command.Restart', 1)
-    Start-Sleep -Seconds 3
-    Info "復旧後の IN1: $(if ([VMR]::GetStr('Strip[0].device.name')) { [VMR]::GetStr('Strip[0].device.name') } else { '(未割当)' })"
+    if ($requiredBlocked) {
+      Info '必要な仮想デバイスを一意に解決できないため変更しません'
+      [void][VMR]::VBVMR_Logout()
+      exit 2
+    }
+    $steps = @(
+      @{ Name = '録音 既定の通信'; Before = $recComm; Requested = $b1Candidates[0].Name; Apply = { [AudioDef]::SetDefault($b1Candidates[0].Id, 2) }; Read = { [AudioDef]::GetDefault(1, 2) } },
+      @{ Name = 'VoiceMeeter IN1'; Before = $in1; Requested = $micCandidates[0].Name; Apply = { [VMR]::VBVMR_SetParameterStringW('Strip[0].device.wdm', $micCandidates[0].Name) }; Read = { [VMR]::GetStr('Strip[0].device.name') } },
+      @{ Name = 'IN1 A1'; Before = [int]$in1A1; Requested = 0; Apply = { [VMR]::VBVMR_SetParameterFloat('Strip[0].A1', 0) }; Read = { [int][VMR]::GetF('Strip[0].A1') } },
+      @{ Name = 'IN1 B1'; Before = [int]$in1B1; Requested = 1; Apply = { [VMR]::VBVMR_SetParameterFloat('Strip[0].B1', 1) }; Read = { [int][VMR]::GetF('Strip[0].B1') } },
+      @{ Name = 'IN1 mute'; Before = [int]$in1Mute; Requested = 0; Apply = { [VMR]::VBVMR_SetParameterFloat('Strip[0].mute', 0) }; Read = { [int][VMR]::GetF('Strip[0].mute') } },
+      @{ Name = 'Virtual Input A1'; Before = [int]$vioA1; Requested = 0; Apply = { [VMR]::VBVMR_SetParameterFloat('Strip[2].A1', 0) }; Read = { [int][VMR]::GetF('Strip[2].A1') } },
+      @{ Name = 'Virtual Input B1'; Before = [int]$vioB1; Requested = 1; Apply = { [VMR]::VBVMR_SetParameterFloat('Strip[2].B1', 1) }; Read = { [int][VMR]::GetF('Strip[2].B1') } }
+    )
+    $fixFailed = $false
+    $changed = $false
+    foreach ($step in $steps) {
+      if ($fixFailed) {
+        Info "$($step.Name) | 変更前: $($step.Before) | 要求値: $($step.Requested) | 変更後: 不明 | 結果: 未実行"
+        continue
+      }
+      if ([string]$step.Before -eq [string]$step.Requested) {
+        Info "$($step.Name) | 変更前: $($step.Before) | 要求値: $($step.Requested) | 変更後: $($step.Before) | 結果: 変更不要"
+        continue
+      }
+      try {
+        $code = & $step.Apply
+        if ($code -lt 0) { throw "設定APIが失敗しました (code=$code)" }
+        $after = '不明'
+        $matched = $false
+        foreach ($attempt in 1..10) {
+          # VoiceMeeter は dirty 通知を一度取り込んでから再読込する。Core Audio の
+          # 既定デバイスも同じ有界再試行に載せ、反映遅延を固定 sleep で決め打ちしない。
+          if ($step.Name -ne '録音 既定の通信') {
+            $dirtyCode = [VMR]::VBVMR_IsParametersDirty()
+            if ($dirtyCode -lt 0) { throw "VoiceMeeter 同期に失敗しました (code=$dirtyCode)" }
+          }
+          try { $after = & $step.Read } catch { $after = '不明' }
+          if ([string]$after -like "*$($step.Requested)*") { $matched = $true; break }
+          Start-Sleep -Milliseconds 100
+        }
+        if (-not $matched) { throw "適用後の実値が要求値と一致しません (code=$code)" }
+        $changed = $true
+        Info "$($step.Name) | 変更前: $($step.Before) | 要求値: $($step.Requested) | 変更後: $after | 結果: 変更済み"
+      } catch {
+        $after = try { & $step.Read } catch { '不明' }
+        Bad "$($step.Name) | 変更前: $($step.Before) | 要求値: $($step.Requested) | 変更後: $after | 結果: 失敗 ($($_.Exception.Message))"
+        $fixFailed = $true
+      }
+    }
+    if ($fixFailed) {
+      [void][VMR]::VBVMR_Logout()
+      Write-Host "結果: 部分成功。再実行すると一致済み項目は変更しません" -ForegroundColor Red
+      exit 3
+    }
+    if ($changed) {
+      Start-Sleep -Milliseconds 400
+      $restartCode = [VMR]::VBVMR_SetParameterFloat('Command.Restart', 1)
+      if ($restartCode -lt 0) {
+        [void][VMR]::VBVMR_Logout()
+        Bad "VoiceMeeter の再起動要求に失敗しました (code=$restartCode)"
+        exit 3
+      }
+      Start-Sleep -Seconds 3
+    } else {
+      Info '全項目が要求値と一致しているため、VoiceMeeter は再起動しません'
+    }
+    [void][VMR]::VBVMR_Logout()
+    Write-Host "`n修復後の状態を再診断します" -ForegroundColor Cyan
+    & $PSCommandPath -Mic $Mic -VoiceApp $VoiceApp -LevelSeconds $LevelSeconds
+    exit $LASTEXITCODE
   }
 
   Head "5. レベル実測（$LevelSeconds 秒）— この間に声を出してください"
@@ -242,7 +365,8 @@ if ($login -lt 0) {
   } elseif ($peakB1 -lt 0.01) {
     Caution "B1 のレベルが非常に小さい（-40dB 未満）。ChatGPT が声を検出できない可能性がある"
   } else {
-    Ok "B1 に声が乗っている → 配線は正常。ChatGPT アプリ側（ミュート・アプリ内設定）を疑う"
+    Ok "B1 に声が乗っています。VoiceMeeter出力までは正常です"
+    Info "これはChatGPT内部の選択マイクやリモート往復を証明しません。最後にリモート参加者だけで応答を確認してください"
   }
 
   [void][VMR]::VBVMR_Logout()
@@ -272,6 +396,7 @@ if ($others.Count -gt 0) {
   Info "音量ミキサーで出力デバイスを設定するのは『$VoiceApp』の行。別アプリの行を触っても効かない"
 }
 Info "確認: 音声モードのマイクボタンにカーソルを合わせると Communications - <デバイス名> が出る"
+Info "ChatGPT内部で明示マイクが選ばれている場合は Voicemeeter Out B1 を選ぶ（このスクリプトからは変更できません）"
 Info "既定の通信デバイスを変えたら $VoiceApp はタスクトレイからも完全終了して再起動する"
 
 Write-Host ""
@@ -285,3 +410,5 @@ if ($script:Fail -eq 0 -and $script:Warn -eq 0) {
     Write-Host "  pwsh -File scripts/check-chatgpt-audio.ps1 -Fix" -ForegroundColor Yellow
   }
 }
+
+if ($script:Fail -gt 0) { exit 1 }

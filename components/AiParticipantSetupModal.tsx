@@ -5,6 +5,7 @@ import { Track, type Room } from 'livekit-client';
 import {
   aiWiringFingerprint,
   isLoopbackCaptureLabel,
+  loadAiConfigWithStatus,
   DEFAULT_AI_CONFIG,
   type AiParticipantConfig,
 } from '@/lib/studio-participants';
@@ -28,9 +29,17 @@ interface AiParticipantSetupModalProps {
   /**
    * 設定の書き込み。patch だけを渡す (全体スナップショットは渡さない —
    * 古い state で他フィールドを巻き戻す事故の恒久対策)。
-   * @returns localStorage へ保存できたか
+   * @returns 書き戻した実値と localStorage へ保存できたか
    */
-  onPatchConfig: (patch: Partial<AiParticipantConfig>) => Promise<boolean>;
+  onPatchConfig: (
+    patch: Partial<AiParticipantConfig>,
+    options?: { expectedUpdatedAt: number | null; signal?: AbortSignal }
+  ) => Promise<{
+    config: AiParticipantConfig;
+    persisted: boolean;
+    applied: boolean;
+    updatedAt: number | null;
+  }>;
   enabled: boolean;
   onChangeEnabled: (enabled: boolean) => void;
   aiStatus: AiProviderStatus;
@@ -45,7 +54,6 @@ interface AiParticipantSetupModalProps {
     blockedMicLabel: string | null;
     remoteCount: number;
   } | null;
-  onReconnect: () => void;
   /**
    * 録画中か。有効/無効の切替そのものは録画中でも許可する (T-20260821-03) が、
    * テストトーンを鳴らす検査系だけは封鎖する（トーンが収録と配信に混入するため）。
@@ -75,7 +83,6 @@ export function AiParticipantSetupModal({
   setInputMixerSendEnabled,
   setInputMixerIncludeLocalMic,
   getInputMixerDiagnostics,
-  onReconnect,
   isRecording,
   onClose,
 }: AiParticipantSetupModalProps) {
@@ -93,6 +100,12 @@ export function AiParticipantSetupModal({
     | { state: 'unavailable'; reason: string }
   >({ state: 'idle' });
   const [manualConfirm, setManualConfirm] = useState(false);
+  const [browserWiringConfirmed, setBrowserWiringConfirmed] = useState(false);
+  const [selfLoopConfirmed, setSelfLoopConfirmed] = useState(false);
+  const [remoteRoundtripKey, setRemoteRoundtripKey] = useState<string | null>(null);
+  const [bulkResults, setBulkResults] = useState<
+    Array<{ item: string; before: string; requested: string; after: string; result: string }>
+  >([]);
   /**
    * 検査・手動確認が「どの配線に対して」成立したかの指紋 (Codex 第4巡 #1)。
    * boolean で持つと、検証後に別タブから配線が変わっても合格状態が残る。
@@ -102,11 +115,33 @@ export function AiParticipantSetupModal({
   const [verifiedFp, setVerifiedFp] = useState<string | null>(null);
   // localStorage へ書けなかった (プライベートモード等)。設定がタブ限りになる警告
   const [persistFailed, setPersistFailed] = useState(false);
+  const [saveConflict, setSaveConflict] = useState(false);
+  const [initialStorageRevision] = useState(() => loadAiConfigWithStatus().updatedAt);
+  const storageRevisionRef = useRef(initialStorageRevision);
+  const patchConfig = useCallback(
+    async (patch: Partial<AiParticipantConfig>, signal?: AbortSignal) => {
+      const result = await onPatchConfig(patch, {
+        expectedUpdatedAt: storageRevisionRef.current,
+        signal,
+      });
+      if (result.applied) storageRevisionRef.current = result.updatedAt;
+      else setSaveConflict(true);
+      return result;
+    },
+    [onPatchConfig]
+  );
   // プリフライト完了時に「検査した配線」と「今の配線」の一致を確かめるための現在値
   const configRef = useRef(config);
   useEffect(() => {
     configRef.current = config;
   }, [config]);
+  const getVerificationKey = useCallback(
+    (candidate: AiParticipantConfig) =>
+      `${aiWiringFingerprint(candidate)}|mic:${room?.getActiveDevice('audioinput') ?? ''}`,
+    [room]
+  );
+  const currentVerificationKey = getVerificationKey(config);
+  const remoteRoundtripConfirmed = remoteRoundtripKey === currentVerificationKey;
   // 音を出す・測る検査は同時に1つだけ (送出ミュートの取り合い防止)。
   // 排他は ref による同期リースで行う — state だけだと反映前の一瞬に
   // 二重起動できてしまう (Codex 第3巡 #2)。state は UI の表示専用。
@@ -124,6 +159,13 @@ export function AiParticipantSetupModal({
   }, []);
   // 「試聴テスト」(Windows 常時モニタの確認) の再生中フラグ
   const [listenTestPlaying, setListenTestPlaying] = useState(false);
+  const modalAbortRef = useRef(new AbortController());
+  useEffect(() => {
+    // Strict Mode の setup→cleanup→setup 再実行でも、2回目は新しい controller を所有する。
+    const controller = new AbortController();
+    modalAbortRef.current = controller;
+    return () => controller.abort();
+  }, []);
 
   // ── デバイス列挙 ──
   const refreshDevices = useCallback(async () => {
@@ -229,13 +271,26 @@ export function AiParticipantSetupModal({
 
   // 通話マイクの切替（この画面から直せるようにする。収録バーの⚙️はモーダルに隠れるため）
   const [switchingMic, setSwitchingMic] = useState(false);
-  const switchMic = async (deviceId: string) => {
-    if (!room || !deviceId) return;
+  const switchMic = async (deviceId: string): Promise<boolean> => {
+    if (!room || !deviceId) return false;
     setSwitchingMic(true);
     try {
       await room.switchActiveDevice("audioinput", deviceId);
+      const applied = room.getActiveDevice('audioinput') === deviceId;
+      if (applied) {
+        setVerifiedFp(null);
+        setBrowserWiringConfirmed(false);
+        setSelfLoopConfirmed(false);
+        setRemoteRoundtripKey(null);
+        setLoopCheck({ state: 'idle' });
+        setManualConfirm(false);
+        const result = await patchConfig({ validatedFingerprint: null, validation: null });
+        setPersistFailed(!result.persisted);
+      }
+      return applied;
     } catch (err) {
       console.error("[AiSetup] マイク切替に失敗", err);
+      return false;
     } finally {
       setSwitchingMic(false);
     }
@@ -358,9 +413,30 @@ export function AiParticipantSetupModal({
     }
     // 音を出す・測る区間はリースで排他する。前提検査はリース不要 (音を出さない)
     if (!acquireProbe()) return;
+    const modalSignal = modalAbortRef.current?.signal;
+    if (!modalSignal || modalSignal.aborted) {
+      releaseProbe();
+      return;
+    }
     // この検査が対象にした配線。完了時に一致しなければ結果を捨てる
-    const wiringFpAtStart = aiWiringFingerprint(configRef.current);
+    const wiringFpAtStart = getVerificationKey(configRef.current);
     let stream: MediaStream | null = null;
+    let monitorDetector: RmsSpeakingDetector | null = null;
+    let cleanedUp = false;
+    const stopProbe = () => {
+      monitorDetector?.stop();
+      stream?.getTracks().forEach((t) => t.stop());
+    };
+    const restoreAfterProbe = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      stopProbe();
+      setInputMixerSendEnabled(true);
+      releaseProbe();
+    };
+    // getUserMedia の許可待ちが終わらなくても、閉じた瞬間に会話経路と
+    // 排他リースを復元する。遅れて取得できた track は finally で停止する。
+    modalSignal.addEventListener('abort', restoreAfterProbe, { once: true });
     // 有効化後はこちらの声が送出経路に乗っているため、検査中だけ送出を止めて
     // 「OS 側の漏れ」だけを測る。止めないとマイクが拾った物音を漏れと誤判定する。
     setInputMixerSendEnabled(false);
@@ -373,11 +449,15 @@ export function AiParticipantSetupModal({
           autoGainControl: false,
         },
       });
+      if (modalSignal.aborted) {
+        stopProbe();
+        return;
+      }
       const track = stream.getAudioTracks()[0];
       if (!track) throw new Error('監視トラックなし');
       let aiActiveSamples = 0;
       let leakSamples = 0;
-      const monitorDetector = new RmsSpeakingDetector(track, { startThreshold: 0.015 });
+      monitorDetector = new RmsSpeakingDetector(track, { startThreshold: 0.015 });
       let monitorSpeaking = false;
       monitorDetector.start((s) => {
         monitorSpeaking = s.isSpeaking;
@@ -386,6 +466,7 @@ export function AiParticipantSetupModal({
       for (let sec = DURATION_S; sec > 0; sec--) {
         setLoopCheck({ state: 'running', secondsLeft: sec });
         await new Promise((r) => setTimeout(r, 1000));
+        if (modalSignal.aborted) return;
         // AI が発声している間に送出先へ音が漏れていればループ
         if (previewActiveRef.current) {
           aiActiveSamples++;
@@ -405,7 +486,7 @@ export function AiParticipantSetupModal({
           reason:
             'AI の音声が ChatGPT への送出先に漏れています（自己ループ）。配線を見直してください。',
         });
-      } else if (wiringFpAtStart !== aiWiringFingerprint(configRef.current)) {
+      } else if (wiringFpAtStart !== getVerificationKey(configRef.current)) {
         // 検査中に配線が変わった (別タブ等)。古い配線の合格を新配線に付けない
         setLoopCheck({
           state: 'unavailable',
@@ -414,16 +495,25 @@ export function AiParticipantSetupModal({
       } else {
         setLoopCheck({ state: 'passed' });
         setVerifiedFp(wiringFpAtStart);
+        setSelfLoopConfirmed(true);
       }
     } catch (e) {
+      if (modalSignal.aborted) return;
       console.warn('[AiSetup] ループ検査失敗', e);
       setLoopCheck({ state: 'unavailable', reason: '監視入力を開けませんでした' });
     } finally {
-      setInputMixerSendEnabled(true);
-      stream?.getTracks().forEach((t) => t.stop());
-      releaseProbe();
+      modalSignal.removeEventListener('abort', restoreAfterProbe);
+      stopProbe();
+      restoreAfterProbe();
+      if (!modalSignal.aborted) {
+        setLoopCheck((current) =>
+          current.state === 'running'
+            ? { state: 'unavailable', reason: '検査を中断しました' }
+            : current
+        );
+      }
     }
-  }, [inputs, outputs, config.sinkDeviceId, config.sourceDeviceId, setInputMixerSendEnabled, isRecording, acquireProbe, releaseProbe]);
+  }, [inputs, outputs, config.sinkDeviceId, config.sourceDeviceId, setInputMixerSendEnabled, isRecording, acquireProbe, releaseProbe, getVerificationKey]);
 
   // 送出先(ChatGPTの耳)の経路をAI音声ソースに選んでしまう取り違えの検出。
   // これをやると自分たちの声を「AIの声」として取り込むことになる。
@@ -436,11 +526,17 @@ export function AiParticipantSetupModal({
 
   // 録画中でも有効化できる (T-20260821-03)。録画ミキサーのタブ音声はゲート経由で
   // 閉じられ、AI トラックはレジストリ経由で録画中に足されるため二重取り込みにならない。
-  const canEnable = !!config.sourceDeviceId && !micCollision && !sourceIsSinkMonitor;
+  const canEnable =
+    !!config.sourceDeviceId &&
+    !!config.sinkDeviceId &&
+    !micCollision &&
+    !sourceIsSinkMonitor;
 
   // ボタンが押せない理由を明示する（グレーアウトの理由が分からない状態を作らない）
   const enableBlockReason = !config.sourceDeviceId
     ? "① AI 音声ソースを選んでください"
+    : !config.sinkDeviceId
+      ? "② ChatGPTへの送出先を選んでください"
     : micCollision || sourceIsSinkMonitor
       ? "上の警告を解消してください"
       : null;
@@ -451,14 +547,20 @@ export function AiParticipantSetupModal({
     // 落として再検証に戻す (Codex 第2巡 #8。monitorAiLocally は聞こえ方だけ
     // なので落とさない)
     const invalidates = wiringChanged || 'sendLocalMic' in patch;
-    void onPatchConfig({
+    void patchConfig({
       ...patch,
-      ...(invalidates ? { validatedFingerprint: null } : {}),
-    }).then((persisted) => setPersistFailed(!persisted));
+      ...(invalidates ? { validatedFingerprint: null, validation: null } : {}),
+    }).then((result) => setPersistFailed(!result.persisted));
+    if (invalidates) {
+      setRemoteRoundtripKey(null);
+      setVerifiedFp(null);
+      setBrowserWiringConfirmed(false);
+      setSelfLoopConfirmed(false);
+    }
     if (wiringChanged) {
       setLoopCheck({ state: 'idle' });
       setManualConfirm(false);
-      setVerifiedFp(null);
+      setRemoteRoundtripKey(null);
     }
   };
 
@@ -494,8 +596,9 @@ export function AiParticipantSetupModal({
     }
   };
 
-  const applyPlanAll = () => {
+  const applyPlanAll = async () => {
     const patch: Partial<AiParticipantConfig> = {};
+    const results: Array<{ item: string; before: string; requested: string; after: string; result: string }> = [];
     if (plan.source && !matchesPlan(config.sourceDeviceId, plan.source)) {
       patch.sourceDeviceId = plan.source.deviceId;
       patch.sourceDeviceLabel = plan.source.label;
@@ -504,10 +607,98 @@ export function AiParticipantSetupModal({
       patch.sinkDeviceId = plan.sink?.deviceId ?? null;
       patch.sinkDeviceLabel = plan.sink?.label;
     }
-    if (Object.keys(patch).length > 0) set(patch);
-    if (plan.mic && plan.mic.deviceId !== (micInfo?.deviceId ?? null)) {
-      void switchMic(plan.mic.deviceId);
+    const plannedSendLocalMic = plan.mode === 'voicemeeter' ? false : true;
+    if (config.sendLocalMic !== plannedSendLocalMic) patch.sendLocalMic = plannedSendLocalMic;
+    const configBefore = config;
+    const micBeforeId = room?.getActiveDevice('audioinput') ?? null;
+    const micBeforeLabel = inputs.find((d) => d.deviceId === micBeforeId)?.label ?? micInfo?.label ?? '不明';
+    // 実変更が無い場合も、検証記録は一括適用開始時点で必ず失効させる。
+    // 後続の通話マイク切替だけが失敗しても旧検証が残らない。
+    const applied = await patchConfig({
+      ...patch,
+      validatedFingerprint: null,
+      validation: null,
+    });
+    if (!applied.applied) {
+      setBulkResults([
+        {
+          item: '設定の一括適用',
+          before: '別タブ更新前',
+          requested: '推奨設定',
+          after: '最新設定を保持',
+          result: '再実行が必要',
+        },
+      ]);
+      return;
     }
+    const readback = applied.persisted
+      ? loadAiConfigWithStatus()
+      : { config: applied.config, readOk: false };
+    const latest = readback.config;
+    const fieldResult = (
+      beforeId: string | null,
+      requestedId: string | null,
+      afterId: string | null,
+      hasTarget = true
+    ) => {
+      if (!hasTarget) return '未実行';
+      if (applied.persisted && !readback.readOk) return '読取不能';
+      if (afterId !== requestedId) return '失敗';
+      if (!applied.persisted) return beforeId === afterId ? '変更不要（保存失敗）' : '変更済み（保存失敗）';
+      return beforeId === afterId ? '変更不要' : '変更済み';
+    };
+    results.push(
+      {
+        item: 'AI音声ソース',
+        before: configBefore.sourceDeviceLabel ?? '未設定',
+        requested: plan.source?.label ?? '対象なし',
+        after: readback.readOk || !applied.persisted ? (latest.sourceDeviceLabel ?? '未設定') : '読取不能',
+        result: fieldResult(configBefore.sourceDeviceId, plan.source?.deviceId ?? null, latest.sourceDeviceId, !!plan.source),
+      },
+      {
+        item: 'ChatGPT送出先',
+        before: configBefore.sinkDeviceLabel ?? '未設定',
+        requested: plan.sink?.label ?? '対象なし',
+        after: readback.readOk || !applied.persisted ? (latest.sinkDeviceLabel ?? '未設定') : '読取不能',
+        result: fieldResult(configBefore.sinkDeviceId, plan.sink?.deviceId ?? null, latest.sinkDeviceId, !!plan.sink),
+      },
+      {
+        item: 'ローカルマイク経路',
+        before: configBefore.sendLocalMic === false ? 'VoiceMeeterから直接' : 'アプリから送出',
+        requested: plannedSendLocalMic ? 'アプリから送出' : 'VoiceMeeterから直接',
+        after: applied.persisted && !readback.readOk
+          ? '読取不能'
+          : latest.sendLocalMic === false ? 'VoiceMeeterから直接' : 'アプリから送出',
+        result: fieldResult(
+          configBefore.sendLocalMic === false ? 'direct' : 'app',
+          plannedSendLocalMic ? 'app' : 'direct',
+          latest.sendLocalMic === false ? 'direct' : 'app'
+        ),
+      }
+    );
+    setPersistFailed(!applied.persisted || !readback.readOk);
+    if (plan.mic && plan.mic.deviceId !== micBeforeId) {
+      const ok = await switchMic(plan.mic.deviceId);
+      const afterId = room?.getActiveDevice('audioinput') ?? null;
+      const afterLabel = inputs.find((d) => d.deviceId === afterId)?.label ?? '再取得できません';
+      results.push({
+        item: '通話マイク',
+        before: micBeforeLabel,
+        requested: plan.mic.label,
+        after: afterLabel,
+        result: ok && afterId === plan.mic.deviceId ? '変更済み' : '失敗',
+      });
+    } else {
+      results.push({
+        item: '通話マイク',
+        before: micBeforeLabel,
+        requested: plan.mic?.label ?? '対象なし',
+        after: inputs.find((d) => d.deviceId === (room?.getActiveDevice('audioinput') ?? null))?.label ?? '不明',
+        result: plan.mic ? '変更不要' : '未実行',
+      });
+    }
+    setRemoteRoundtripKey(null);
+    setBulkResults(results);
   };
 
   /**
@@ -517,22 +708,78 @@ export function AiParticipantSetupModal({
    * — 検証していない配線を「検証済み」として記録しない (Codex レビュー #6)。
    */
   const handleEnable = async () => {
+    const modalSignal = modalAbortRef.current?.signal;
+    if (!modalSignal || modalSignal.aborted) return;
     void resumeAllAudioContexts();
     // 検証は「今の配線に対して」成立していなければならない。指紋の一致で
     // 確かめるため、検証後に配線が変わっていれば (別タブ含む) 自動的に落ちる
-    const verified = verifiedFp !== null && verifiedFp === aiWiringFingerprint(config);
-    const persisted = await onPatchConfig({
+    const currentMic = room?.getActiveDevice('audioinput') ?? null;
+    const verificationKey = `${aiWiringFingerprint(config)}|mic:${currentMic ?? ''}`;
+    const verified =
+      verifiedFp !== null &&
+      verifiedFp === verificationKey &&
+      browserWiringConfirmed &&
+      selfLoopConfirmed &&
+      remoteRoundtripConfirmed;
+    const confirmedAt = new Date().toISOString();
+    const applied = await patchConfig({
       validatedFingerprint: verified ? aiWiringFingerprint(config) : null,
-    });
+      validation: verified
+        ? {
+            schemaVersion: 4,
+            fingerprint: aiWiringFingerprint(config),
+            callMicDeviceId: currentMic,
+            browserWiringConfirmedAt: confirmedAt,
+            selfLoopConfirmedAt: confirmedAt,
+            remoteRoundtripAt: confirmedAt,
+          }
+        : null,
+    }, modalSignal);
+    if (modalSignal.aborted) return;
+    if (!applied.applied) return;
     onChangeEnabled(true);
-    if (!persisted) {
+    if (!applied.persisted) {
       // 有効化はする (今この場では使える) が、保存できていないことを見せてから
       // 閉じてもらう。黙って閉じると次回「設定が消えた」に見える
       setPersistFailed(true);
       return;
     }
+    if (!verified) return;
     // 設定完了なのでそのまま閉じる（状態は StudioBar の 🤖 ボタンとステージのタイルで分かる）
     onClose();
+  };
+
+  const saveRemoteValidation = async () => {
+    const modalSignal = modalAbortRef.current?.signal;
+    if (!modalSignal || modalSignal.aborted) return;
+    const fingerprint = aiWiringFingerprint(config);
+    const currentMic = room?.getActiveDevice('audioinput') ?? null;
+    const verificationKey = `${fingerprint}|mic:${currentMic ?? ''}`;
+    if (
+      verifiedFp !== verificationKey ||
+      !browserWiringConfirmed ||
+      !selfLoopConfirmed ||
+      !remoteRoundtripConfirmed ||
+      aiStatus !== 'connected' ||
+      publishFailed ||
+      !!inputMixerError
+    ) return;
+    const confirmedAt = new Date().toISOString();
+    const applied = await patchConfig({
+      validatedFingerprint: fingerprint,
+      validation: {
+        schemaVersion: 4,
+        fingerprint,
+        callMicDeviceId: currentMic,
+        browserWiringConfirmedAt: confirmedAt,
+        selfLoopConfirmedAt: confirmedAt,
+        remoteRoundtripAt: confirmedAt,
+      },
+    }, modalSignal);
+    if (modalSignal.aborted) return;
+    if (!applied.applied) return;
+    setPersistFailed(!applied.persisted);
+    if (applied.persisted) onClose();
   };
 
   const statusLabel: Record<AiProviderStatus, string> = {
@@ -583,10 +830,10 @@ export function AiParticipantSetupModal({
               )}
               {enabled && aiStatus === 'error' && (
                 <button
-                  onClick={onReconnect}
+                  onClick={() => onChangeEnabled(false)}
                   className="rounded-lg bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-500"
                 >
-                  再接続
+                  停止してやり直す
                 </button>
               )}
             </div>
@@ -616,9 +863,39 @@ export function AiParticipantSetupModal({
             currentMicId={micInfo?.deviceId ?? null}
             currentSinkId={config.sinkDeviceId}
             onApply={applyPlanTarget}
-            onApplyAll={applyPlanAll}
+            onApplyAll={() => void applyPlanAll()}
             busy={probeBusy || switchingMic}
           />
+          {bulkResults.length > 0 && (
+            <div className="mb-4 overflow-x-auto rounded-lg border border-stone-700" role="status">
+              <p className={`px-2 pt-2 text-xs ${bulkResults.some((r) => r.result.includes('失敗')) ? 'text-amber-300' : 'text-emerald-400'}`}>
+                {bulkResults.some((r) => r.result.includes('失敗'))
+                  ? '一部だけ適用されました。失敗した項目を直して再実行してください。'
+                  : '推奨設定の適用結果'}
+              </p>
+              <table className="w-full text-left text-[11px] text-stone-300">
+                <thead className="bg-stone-800 text-stone-400">
+                  <tr><th className="p-2">項目</th><th className="p-2">変更前</th><th className="p-2">要求値</th><th className="p-2">変更後</th><th className="p-2">結果</th></tr>
+                </thead>
+                <tbody>
+                  {bulkResults.map((result) => (
+                    <tr key={result.item} className="border-t border-stone-800">
+                      <td className="p-2 font-medium text-stone-200">{result.item}</td>
+                      <td className="p-2">{result.before}</td>
+                      <td className="p-2">{result.requested}</td>
+                      <td className="p-2">{result.after}</td>
+                      <td className={result.result === '失敗' ? 'p-2 text-red-300' : 'p-2 text-emerald-400'}>{result.result}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {saveConflict && (
+            <Alert tone="error">
+              別のタブで設定が更新されました。最新設定を確認して、検査をやり直してください。
+            </Alert>
+          )}
 
           <Field
             htmlFor="ai-source"
@@ -824,9 +1101,11 @@ export function AiParticipantSetupModal({
                     const playback = src ? findCablePlaybackForCapture(src, outputs) : null;
                     if (!playback) return;
                     setListenTestPlaying(true);
-                    void playToneProbe(playback.deviceId, 2000).finally(() =>
-                      setListenTestPlaying(false)
-                    );
+                    const modalSignal = modalAbortRef.current?.signal;
+                    if (!modalSignal || modalSignal.aborted) return;
+                    void playToneProbe(playback.deviceId, 2000, 880, modalSignal).finally(() => {
+                      if (!modalSignal.aborted) setListenTestPlaying(false);
+                    });
                   }}
                   className="rounded-lg bg-stone-700 px-2.5 py-1 text-xs font-medium text-stone-200 hover:bg-stone-600 disabled:opacity-40"
                 >
@@ -881,6 +1160,7 @@ export function AiParticipantSetupModal({
               outputs={outputs}
               sourceDeviceId={config.sourceDeviceId}
               sinkDeviceId={config.sinkDeviceId}
+              validationKey={getVerificationKey(config)}
               micLabel={micInfo?.label ?? null}
               mixerRunning={mixerDiag?.contextState === 'running'}
               mixerHasMic={!!mixerDiag?.localMic}
@@ -902,11 +1182,14 @@ export function AiParticipantSetupModal({
               }
               acquireProbe={acquireProbe}
               releaseProbe={releaseProbe}
-              onAllPassed={(wiringFp) => {
+              onAllPassed={(testedKey) => {
                 // 「検査した配線」の指紋を保存する。有効化時に現在の配線と照合する
                 // ため、検査後に配線が変わっていれば自動的に無効になる
                 setManualConfirm(true);
-                setVerifiedFp(wiringFp);
+                if (testedKey !== getVerificationKey(configRef.current)) return;
+                setVerifiedFp(testedKey);
+                setBrowserWiringConfirmed(true);
+                setSelfLoopConfirmed(true);
               }}
             />
           </div>
@@ -1013,7 +1296,8 @@ export function AiParticipantSetupModal({
                   checked={manualConfirm}
                   onChange={(v) => {
                     setManualConfirm(v);
-                    setVerifiedFp(v ? aiWiringFingerprint(configRef.current) : null);
+                    setVerifiedFp(v ? getVerificationKey(configRef.current) : null);
+                    setSelfLoopConfirmed(v);
                   }}
                   title="ChatGPT の声が ChatGPT 自身の入力に戻らないことを手動で確認しました"
                   tone="warn"
@@ -1026,12 +1310,51 @@ export function AiParticipantSetupModal({
                   checked={manualConfirm}
                   onChange={(v) => {
                     setManualConfirm(v);
-                    setVerifiedFp(v ? aiWiringFingerprint(configRef.current) : null);
+                    setVerifiedFp(v ? getVerificationKey(configRef.current) : null);
+                    setSelfLoopConfirmed(v);
                   }}
                   title="外部ルーティングで ChatGPT の声が ChatGPT 自身の入力に戻らないことを確認しました"
                   tone="warn"
                 />
               </div>
+            )}
+          </div>
+
+          <div className="mb-4 rounded-xl border border-amber-800/60 bg-amber-950/20 p-3">
+            <CheckLine
+              checked={remoteRoundtripConfirmed}
+              onChange={(checked) =>
+                setRemoteRoundtripKey(checked ? getVerificationKey(config) : null)
+              }
+              title="リモート参加者だけが話し、ChatGPTが内容に応答し、その返答を参加者全員が一度だけ聞けました"
+              sub="この確認に合格した場合だけ、次回からワンクリックで参加できます。"
+              tone="warn"
+            />
+            <p className="mt-2 text-xs leading-relaxed text-stone-400">
+              初回は下の「未検証でテスト接続」でAIを参加させ、ChatGPT Classicのマイクが
+              Voicemeeter Out B1になっていることを確認してください。接続しただけでは検証済みになりません。
+            </p>
+            {config.validation && (
+              <button
+                type="button"
+                onClick={() => {
+                  setVerifiedFp(null);
+                  setBrowserWiringConfirmed(false);
+                  setSelfLoopConfirmed(false);
+                  setRemoteRoundtripKey(null);
+                  // 明示的な安全失効は、競合した検証保存より必ず後勝ちにする。
+                  // 検証の保存だけを revision CAS で拒否し、失効は最新値へ適用する。
+                  void onPatchConfig({ validatedFingerprint: null, validation: null }).then(
+                    (result) => {
+                      if (result.applied) storageRevisionRef.current = result.updatedAt;
+                      setPersistFailed(!result.persisted);
+                    }
+                  );
+                }}
+                className="mt-2 text-xs font-medium text-amber-300 underline underline-offset-4 hover:text-amber-200"
+              >
+                ChatGPTまたはWindowsの外部設定を変更した
+              </button>
             )}
           </div>
 
@@ -1042,18 +1365,12 @@ export function AiParticipantSetupModal({
               この画面について（4点）
             </summary>
             <ul className="mt-2 space-y-1.5 text-pretty text-xs leading-relaxed text-stone-300">
-              <li>
-                AI タイルは
-                <strong className="font-medium text-stone-300">
-                  この画面を再読み込みした参加者にのみ
-                </strong>
-                表示されます。有効化の前に、参加中のメンバーへページの再読み込みを依頼してください。
-              </li>
-              <li>録画開始前に有効化してください（録画中の有効化はできません）。</li>
+              <li>AIタイルは通常の参加者として同じルームの全員に表示されます。</li>
+              <li>通常モードでも収録モードでも開始・停止できます。</li>
               <li>ヘッドホン必須（スピーカー使用はエコーの原因になります）。</li>
               <li>
-                一度有効化すると
-                <strong className="font-medium text-stone-300">この配線を記憶</strong>
+                リモート往復確認まで完了すると
+                <strong className="font-medium text-stone-300">確認済みの配線を記憶</strong>
                 し、次回からはダッシュボードの「🤖 ChatGPTつきで収録モードへ」でワンクリック起動できます。
                 デバイスを変更すると記憶は破棄され、再びこの画面での確認が必要になります。
               </li>
@@ -1077,21 +1394,36 @@ export function AiParticipantSetupModal({
             </span>
           )}
           {enabled ? (
-            // 録画中でも無効化できる (T-20260821-03)。タブ音声はゲート経由で
-            // 滑らかに開き直され、AI トラックは録画ミキサーから動的に外れる。
-            <button
-              onClick={() => onChangeEnabled(false)}
-              className="shrink-0 rounded-lg bg-stone-700 px-4 py-2 text-sm font-medium text-stone-200 hover:bg-stone-600 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              AI 参加者を無効にする
-            </button>
+            <>
+              <button
+                onClick={() => onChangeEnabled(false)}
+                className="shrink-0 rounded-lg bg-stone-700 px-4 py-2 text-sm font-medium text-stone-200 hover:bg-stone-600"
+              >
+                AI 参加者を無効にする
+              </button>
+              <button
+                onClick={() => void saveRemoteValidation()}
+                 disabled={
+                   verifiedFp !== getVerificationKey(config) ||
+                   !browserWiringConfirmed ||
+                   !selfLoopConfirmed ||
+                   !remoteRoundtripConfirmed ||
+                   aiStatus !== 'connected' ||
+                   publishFailed ||
+                   !!inputMixerError
+                 }
+                className="shrink-0 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                往復確認を保存
+              </button>
+            </>
           ) : (
             <button
               onClick={() => void handleEnable()}
               disabled={!canEnable}
               className="shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              AI 参加者を有効にする
+               {remoteRoundtripConfirmed ? '確認済みとしてAIを参加' : '未検証でテスト接続'}
             </button>
           )}
         </footer>

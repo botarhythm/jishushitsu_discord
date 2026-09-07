@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   detectSignal,
   envelopeCorrelation,
@@ -61,6 +61,8 @@ interface Props {
   outputs: DeviceOption[];
   sourceDeviceId: string | null;
   sinkDeviceId: string | null;
+  /** 検査開始時の配線・通話マイク・送出方式を含む完全キー */
+  validationKey: string;
   micLabel: string | null;
   mixerRunning: boolean;
   mixerHasMic: boolean;
@@ -106,6 +108,7 @@ export function AiPreflightPanel({
   outputs,
   sourceDeviceId,
   sinkDeviceId,
+  validationKey,
   micLabel,
   mixerRunning,
   mixerHasMic,
@@ -125,6 +128,8 @@ export function AiPreflightPanel({
   const [prompt, setPrompt] = useState<string | null>(null);
   const [probeLevel, setProbeLevel] = useState(0);
   const [probeLeft, setProbeLeft] = useState(0);
+  const runAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => runAbortRef.current?.abort(), []);
   const onProbe = (level: number, remainingMs: number) => {
     setProbeLevel(level);
     setProbeLeft(Math.ceil(remainingMs / 1000));
@@ -140,12 +145,28 @@ export function AiPreflightPanel({
     // LiveKit 配信に混入するため、入口で拒否する (Codex 第2巡 #6)
     if (disabledReason) return;
     if (!acquireProbe()) return;
+    runAbortRef.current?.abort();
+    const controller = new AbortController();
+    runAbortRef.current = controller;
+    const { signal } = controller;
+    let cleanedUp = false;
+    let restoreLocalMic = sendLocalMicOn;
+    const restoreAfterProbe = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      setSendEnabled(true);
+      setMixerIncludeLocalMic(restoreLocalMic);
+      releaseProbe();
+    };
+    // capture の許可待ちが未解決でも、閉じた時点で一時ルーティングと
+    // リースを即時復元する。遅い完了は signal 判定で結果へ反映しない。
+    signal.addEventListener('abort', restoreAfterProbe, { once: true });
     setRunning(true);
     setChecks(INITIAL);
     void resumeAllAudioContexts();
     // この実行が検査する配線。完了時にこの指紋を渡し、途中で配線が変わって
     // いたら結果を無効にする (Codex 第2巡 #4)
-    const wiringFp = `${sourceDeviceId ?? ''}|${sinkDeviceId ?? ''}`;
+    const wiringFp = validationKey;
     // skip を含む「全通過」は検証済みとして扱わない (skip は pass ではない。Codex レビュー #6)
     let skipped = false;
     try {
@@ -236,9 +257,10 @@ export function AiPreflightPanel({
       if (expectedChatGptOutput) {
         // トーンが「実際に鳴り始めてから」測る。開始を待たずに測ると、
         // トーンより先に計測が終わって偽陰性になる (Codex 第2巡 #1)
-        const probe = startToneProbe(expectedChatGptOutput.deviceId);
+        const probe = startToneProbe(expectedChatGptOutput.deviceId, 880, signal);
         try {
           const startedResult = await probe.started;
+          if (signal.aborted) return;
           if (!startedResult.ok) {
             set('receive', {
               status: 'fail',
@@ -247,7 +269,8 @@ export function AiPreflightPanel({
             });
             return;
           }
-          const pipe = await detectSignal(sourceDeviceId, 3000, 0.02, onProbe);
+          const pipe = await detectSignal(sourceDeviceId, 3000, 0.02, onProbe, signal);
+          if (signal.aborted) return;
           if (pipe.error) {
             set('receive', {
               status: 'fail',
@@ -269,7 +292,8 @@ export function AiPreflightPanel({
         }
       }
       setPrompt('ChatGPT にテキストで「何か話して」と打ち込んでください（検出した時点で次へ進みます）');
-      const recv = await detectSignal(sourceDeviceId, 15000, 0.015, onProbe);
+      const recv = await detectSignal(sourceDeviceId, 15000, 0.015, onProbe, signal);
+      if (signal.aborted) return;
       setPrompt(null);
       if (!recv.detected) {
         set('receive', {
@@ -322,9 +346,10 @@ export function AiPreflightPanel({
         }
         setSendEnabled(false);
         setPrompt('声の経路を判定します。8秒ほど話し続けてください（静かな場所で）');
-        const micEnvP = measureTrackEnvelope(micTrack, 8000);
-        const monEnvA = await measureEnvelope(monitor.deviceId, 8000, onProbe);
+        const micEnvP = measureTrackEnvelope(micTrack, 8000, undefined, signal);
+        const monEnvA = await measureEnvelope(monitor.deviceId, 8000, onProbe, signal);
         const micEnvA = await micEnvP;
+        if (signal.aborted) return;
         if (monEnvA.error) {
           setPrompt(null);
           set('send', {
@@ -352,6 +377,7 @@ export function AiPreflightPanel({
           ? envelopeCorrelation(micEnvA.env, monEnvA.env)
           : 0;
         if (reachedExternal && corrExternal >= 0.5) {
+          restoreLocalMic = false;
           onAutoConfig({ sendLocalMic: false });
           setPrompt(null);
           set('send', {
@@ -373,9 +399,10 @@ export function AiPreflightPanel({
           setMixerIncludeLocalMic(true);
           setSendEnabled(true);
           setPrompt('アプリ経由を試します。もう一度8秒ほど話し続けてください');
-          const micEnvP2 = measureTrackEnvelope(micTrack, 8000);
-          const monEnvB = await measureEnvelope(monitor.deviceId, 8000, onProbe);
+          const micEnvP2 = measureTrackEnvelope(micTrack, 8000, undefined, signal);
+          const monEnvB = await measureEnvelope(monitor.deviceId, 8000, onProbe, signal);
           const micEnvB = await micEnvP2;
+          if (signal.aborted) return;
           setPrompt(null);
           const micOkB = !micEnvB.error && micSignalSufficient(micEnvB.env, micEnvB.peak);
           const reachedApp = monEnvB.peak >= 0.015;
@@ -396,6 +423,7 @@ export function AiPreflightPanel({
             return;
           }
           onAutoConfig({ sendLocalMic: true });
+          restoreLocalMic = true;
           set('send', {
             status: 'pass',
             detail: `アプリ経由で届いています (相関 ${corrApp.toFixed(2)}。アプリからの送出は自動で ON にしました)`,
@@ -419,7 +447,8 @@ export function AiPreflightPanel({
         set('loop', { status: 'running', detail: '自動検査中…' });
         setSendEnabled(false);
         setPrompt('自己ループを自動検査します。7秒ほどお静かに…');
-        const baseline = await detectSignal(monitor.deviceId, 2000, 999, onProbe);
+        const baseline = await detectSignal(monitor.deviceId, 2000, 999, onProbe, signal);
+        if (signal.aborted) return;
         if (baseline.error) {
           setPrompt(null);
           set('loop', {
@@ -431,9 +460,10 @@ export function AiPreflightPanel({
         }
         let during = { detected: false, peak: 0 } as Awaited<ReturnType<typeof detectSignal>>;
         if (expectedChatGptOutput) {
-          const probe = startToneProbe(expectedChatGptOutput.deviceId);
+          const probe = startToneProbe(expectedChatGptOutput.deviceId, 880, signal);
           try {
             const startedResult = await probe.started;
+            if (signal.aborted) return;
             if (!startedResult.ok) {
               // トーンを出せないまま「漏れ無し」を出すと、鳴っていないだけの
               // 偽合格になる (Codex 第2巡 #1)。判定不能として止める
@@ -445,7 +475,8 @@ export function AiPreflightPanel({
               });
               return;
             }
-            during = await detectSignal(monitor.deviceId, 4500, 999, onProbe);
+            during = await detectSignal(monitor.deviceId, 4500, 999, onProbe, signal);
+            if (signal.aborted) return;
           } finally {
             probe.stop();
           }
@@ -461,7 +492,8 @@ export function AiPreflightPanel({
         } else {
           // 対の再生側が見つからない環境では従来どおり ChatGPT に喋らせて測る
           setPrompt('ChatGPT に話させてください。あなたは黙っていてください');
-          during = await detectSignal(monitor.deviceId, 8000, 999, onProbe);
+          during = await detectSignal(monitor.deviceId, 8000, 999, onProbe, signal);
+          if (signal.aborted) return;
         }
         setSendEnabled(true);
         setPrompt(null);
@@ -480,16 +512,22 @@ export function AiPreflightPanel({
 
       if (!skipped) onAllPassed(wiringFp);
     } finally {
-      setSendEnabled(true);
-      setPrompt(null);
-      setRunning(false);
-      releaseProbe();
+      signal.removeEventListener('abort', restoreAfterProbe);
+      restoreAfterProbe();
+      if (runAbortRef.current === controller) {
+        runAbortRef.current = null;
+        if (!signal.aborted) {
+          setPrompt(null);
+          setRunning(false);
+        }
+      }
     }
   }, [
     inputs,
     outputs,
     sourceDeviceId,
     sinkDeviceId,
+    validationKey,
     micLabel,
     mixerRunning,
     mixerHasMic,

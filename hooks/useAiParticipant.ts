@@ -1,8 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Track, RoomEvent, type Room } from 'livekit-client';
-import type { AudioTrackRegistry } from '@/lib/audio-track-registry';
+import { ConnectionState, DisconnectReason, Room as LiveKitRoom, RoomEvent, Track, type Room } from 'livekit-client';
 import {
   aiAudioTrackName,
   classifyAudioPublication,
@@ -17,6 +16,7 @@ import { FakeAiProvider } from '@/lib/ai/fake-provider';
 import { ChatGptInputMixer } from '@/lib/ai/chatgpt-input-mixer';
 import { RmsSpeakingDetector } from '@/lib/ai/speaking-detector';
 import { recordSessionEvent } from '@/lib/session-clock';
+import { AI_LIVEKIT_IDENTITY } from '@/lib/ai/livekit-participant';
 
 /** AI 参加者の固定 ID。再接続・トラック差し替えでも不変（要件§26） */
 export const AI_PARTICIPANT_ID = 'chatgpt';
@@ -44,8 +44,8 @@ interface UseAiParticipantOptions {
   /** AI 参加者を有効にするか（セットアップUIのオプトイン。false なら一切のコードパスが走らない） */
   enabled: boolean;
   config: AiParticipantConfig;
-  /** 録画ミキサーへ渡す汎用レジストリ（useLocalRecording の extraAudioTracks と同一インスタンス） */
-  registry: AudioTrackRegistry;
+  /** 接続喪失・競合時に外側の開始許可を破棄する */
+  onTerminalFailure?: (message: string) => void;
 }
 
 export interface UseAiParticipantResult {
@@ -64,8 +64,6 @@ export interface UseAiParticipantResult {
   setInputMixerIncludeLocalMic: (on: boolean) => void;
   /** 送出経路の内部状態を取得する（切り分け用。未起動なら null） */
   getInputMixerDiagnostics: () => ReturnType<ChatGptInputMixer["getDiagnostics"]> | null;
-  /** エラー後の再接続（同一 participant ID のまま新トラック取得 → registry → publish） */
-  reconnect: () => Promise<void>;
 }
 
 /**
@@ -85,7 +83,7 @@ export function useAiParticipant({
   room,
   enabled,
   config,
-  registry,
+  onTerminalFailure,
 }: UseAiParticipantOptions): UseAiParticipantResult {
   const [status, setStatus] = useState<AiProviderStatus>('disconnected');
   const [publishFailed, setPublishFailed] = useState(false);
@@ -96,15 +94,14 @@ export function useAiParticipant({
   const levelRef = useRef(0);
   const getLevel = useCallback(() => levelRef.current, []);
 
-  const providerRef = useRef<AiParticipantProvider | null>(null);
   const mixerRef = useRef<ChatGptInputMixer | null>(null);
-  const monitorElRef = useRef<HTMLAudioElement | null>(null);
-  const publishedTrackRef = useRef<MediaStreamTrack | null>(null);
-  /** attach 済みの AI トラック (publish 失敗時も保持。モニタの後付け切替用) */
-  const currentTrackRef = useRef<MediaStreamTrack | null>(null);
+  const terminateRuntimeRef = useRef<((message: string) => void) | null>(null);
+  const aiRoomRef = useRef<LiveKitRoom | null>(null);
+  const generationRef = useRef(0);
   const wasSpeakingRef = useRef(false);
 
   const configRef = useRef(config);
+  const onTerminalFailureRef = useRef(onTerminalFailure);
 
   const info = useMemo<AiParticipantInfo>(
     () => ({ id: AI_PARTICIPANT_ID, displayName: config.displayName, avatar: config.avatar }),
@@ -114,92 +111,82 @@ export function useAiParticipant({
   useEffect(() => {
     configRef.current = config;
     infoRef.current = info;
-  }, [config, info]);
+    onTerminalFailureRef.current = onTerminalFailure;
+  }, [config, info, onTerminalFailure]);
 
   const trackName = aiAudioTrackName(AI_PARTICIPANT_ID);
 
-  /** track を registry / publish / モニタへ配線する（connect・reconnect 共通） */
-  const attachTrack = useCallback(
-    async (track: MediaStreamTrack) => {
-      registry.add(AI_PARTICIPANT_ID, track);
-      currentTrackRef.current = track;
-
-      // ホストのモニタ (既定出力=ヘッドホン)。LiveKit のローカル publish はホスト自身では
-      // 再生されないため、これが無いとホストだけ AI の声が聞こえない。
-      // ChatGPT 入力ミキサー (CABLE-B) とは独立した経路 — AI の声は CABLE-B に入らない。
-      // Windows 側でモニタしている構成ではアプリは再生しない（二重再生の防止）
-      const monitorLocally = configRef.current.monitorAiLocally !== false;
-      if (!monitorLocally) {
-        if (monitorElRef.current) monitorElRef.current.srcObject = null;
-      } else {
-      if (!monitorElRef.current) {
-        const el = document.createElement('audio');
-        el.style.display = 'none';
-        el.autoplay = true;
-        document.body.appendChild(el);
-        monitorElRef.current = el;
-      }
-      monitorElRef.current.srcObject = new MediaStream([track]);
-      monitorElRef.current.play().catch(() => {
-        // autoplay 制限は StartAudioBanner のユーザー操作で解除される
-      });
-      }
-
-      // LiveKit へ publish。失敗しても録画は継続する（別状態で表示）。
-      if (room) {
-        try {
-          await room.localParticipant.publishTrack(track, {
-            name: trackName,
-            source: Track.Source.Unknown,
-            dtx: false,
-          });
-          publishedTrackRef.current = track;
-          setPublishFailed(false);
-        } catch (e) {
-          console.error('[useAiParticipant] AI音声の publish に失敗 (録画は継続)', e);
-          setPublishFailed(true);
-        }
-      }
-    },
-    [registry, room, trackName]
-  );
-
-  /** publish / registry / モニタから track を外す。Provider の track 自体は止めない（オーナーは Provider） */
-  const detachTrack = useCallback(async () => {
-    registry.remove(AI_PARTICIPANT_ID);
-    currentTrackRef.current = null;
-    if (monitorElRef.current) {
-      monitorElRef.current.srcObject = null;
-    }
-    const track = publishedTrackRef.current;
-    publishedTrackRef.current = null;
-    if (room && track) {
-      try {
-        // stopOnUnpublish=false: トラックの stop 権限は Provider が持つ。
-        // ここで stop すると録画ミキサー側の入力まで死ぬ。
-        await room.localParticipant.unpublishTrack(track, false);
-      } catch {
-        // room 切断済み等は無視
-      }
-    }
-  }, [registry, room]);
-
   // ── Provider ライフサイクル ──
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !room) {
+      queueMicrotask(() => {
+        setStatus('disconnected');
+        setPublishFailed(false);
+        setInputMixerError(null);
+      });
+      return;
+    }
 
     let cancelled = false;
+    let stopPromise: Promise<void> | null = null;
+    let terminal = false;
+    let ownedAiRoom: LiveKitRoom | null = null;
+    let ownedPublishedTrack: MediaStreamTrack | null = null;
+    let releaseRoomWait: (() => void) | null = null;
+    const generation = ++generationRef.current;
     const provider = createProvider(infoRef.current, () => configRef.current.sourceDeviceId);
-    providerRef.current = provider;
+
+    const isCurrent = () => !cancelled && !terminal && generationRef.current === generation;
+
+    const stopRuntime = async () => {
+      if (stopPromise) return stopPromise;
+      stopPromise = (async () => {
+        releaseRoomWait?.();
+        releaseRoomWait = null;
+        const aiRoom = ownedAiRoom;
+        const publishedTrack = ownedPublishedTrack;
+        ownedPublishedTrack = null;
+        ownedAiRoom = null;
+        if (aiRoomRef.current === aiRoom) aiRoomRef.current = null;
+        if (aiRoom && publishedTrack) {
+          await aiRoom.localParticipant.unpublishTrack(publishedTrack, false).catch(() => {});
+        }
+        await provider.disconnect().catch(() => {});
+        if (aiRoom) await aiRoom.disconnect(false).catch(() => {});
+      })();
+      try {
+        await stopPromise;
+      } finally {
+        stopPromise = null;
+      }
+    };
+
+    const failRuntime = (message: string) => {
+      if (!isCurrent()) return;
+      terminal = true;
+      generationRef.current += 1;
+      setInputMixerError(message);
+      setStatus('error');
+      setPublishFailed(true);
+      onTerminalFailureRef.current?.(message);
+      void stopRuntime();
+    };
+    terminateRuntimeRef.current = failRuntime;
+    const onHumanReconnecting = () => {
+      failRuntime('通話ルームの接続が切れました。復旧後に手動でChatGPTを再開してください。');
+    };
+    room.on(RoomEvent.Reconnecting, onHumanReconnecting);
+    room.on(RoomEvent.Disconnected, onHumanReconnecting);
 
     const offStatus = provider.onStatusChange((s) => {
-      if (cancelled) return;
-      setStatus(s);
-      if (s === 'error') {
+      if (!isCurrent()) return;
+      if (s === 'error' || s === 'disconnected') {
         recordSessionEvent({ type: "participant_error", participantId: AI_PARTICIPANT_ID });
-        // 障害分離: 録画ミキサー/リモート配信から外すだけ。収録は継続する。
-        void detachTrack();
+        failRuntime('ChatGPT音声ソースが切断されました。停止してから明示的に再開してください。');
+        return;
       }
+      // connected は LiveKit publish 完了後にだけ表示し、入力ミキサーもその時点で起動する。
+      if (s !== 'connected') setStatus(s);
     });
     const offSpeaking = provider.onSpeaking((s) => {
       if (cancelled) return;
@@ -219,38 +206,123 @@ export function useAiParticipant({
     (async () => {
       try {
         setStatus('connecting');
+        setInputMixerError(null);
+        setPublishFailed(false);
+        if (room.state !== ConnectionState.Connected) {
+          await new Promise<void>((resolve) => {
+            const onConnected = () => {
+              room.off(RoomEvent.Connected, onConnected);
+              releaseRoomWait = null;
+              resolve();
+            };
+            releaseRoomWait = () => {
+              room.off(RoomEvent.Connected, onConnected);
+              resolve();
+            };
+            room.once(RoomEvent.Connected, onConnected);
+          });
+        }
+        if (!isCurrent()) {
+          await stopRuntime();
+          return;
+        }
+        const response = await fetch('/api/ai-participant-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            roomName: room.name,
+            displayName: infoRef.current.displayName,
+            avatar: infoRef.current.avatar,
+          }),
+        });
+        const tokenResult = (await response.json().catch(() => ({}))) as {
+          token?: string;
+          livekitUrl?: string;
+          error?: string;
+        };
+        if (!response.ok || !tokenResult.token || !tokenResult.livekitUrl) {
+          throw new Error(tokenResult.error || `AI参加トークンの取得に失敗しました (${response.status})`);
+        }
+        if (!isCurrent()) {
+          await stopRuntime();
+          return;
+        }
+
+        const aiRoom = new LiveKitRoom();
+        ownedAiRoom = aiRoom;
+        aiRoomRef.current = aiRoom;
+        aiRoom.on(RoomEvent.Reconnecting, () => {
+          if (cancelled || terminal || stopPromise) return;
+          failRuntime('ChatGPT参加者の接続が切れました。自動再取得せず停止しました。');
+        });
+        aiRoom.on(RoomEvent.Disconnected, (reason) => {
+          if (stopPromise || !isCurrent()) return;
+          failRuntime(
+            reason === DisconnectReason.DUPLICATE_IDENTITY
+              ? '別の操作でChatGPT参加者が置き換えられました。競合を確認して手動で再開してください。'
+              : 'ChatGPT参加者が切断されました。手動で再開してください。'
+          );
+        });
+        await aiRoom.connect(tokenResult.livekitUrl, tokenResult.token, { autoSubscribe: false });
+        if (!isCurrent()) {
+          await stopRuntime();
+          return;
+        }
         await provider.connect();
-        if (cancelled) return;
+        if (!isCurrent()) {
+          await stopRuntime();
+          // 先行 cleanup が getUserMedia 完了前に終わっていた場合も、遅れて取得した
+          // capture をこの時点でもう一度確実に閉じる。
+          await provider.disconnect().catch(() => {});
+          return;
+        }
         const track = provider.getAudioTrack();
-        if (track) await attachTrack(track);
-        if (!cancelled) setStatus(provider.status);
+        if (!track) throw new Error('ChatGPT音声トラックを取得できませんでした');
+        try {
+          await aiRoom.localParticipant.publishTrack(track, {
+            name: trackName,
+            source: Track.Source.Unknown,
+            dtx: false,
+          });
+          if (!isCurrent()) {
+            await aiRoom.localParticipant.unpublishTrack(track, false).catch(() => {});
+            await stopRuntime();
+            await provider.disconnect().catch(() => {});
+            return;
+          }
+          ownedPublishedTrack = track;
+          setPublishFailed(false);
+        } catch (e) {
+          console.error('[useAiParticipant] AI音声の publish に失敗', e);
+          throw e;
+        }
+        if (isCurrent()) setStatus(provider.status);
       } catch (e) {
         console.error('[useAiParticipant] AI音声ソースの接続に失敗', e);
-        if (!cancelled) setStatus('error');
+        if (isCurrent()) {
+          failRuntime(e instanceof Error ? e.message : String(e));
+        }
       }
     })();
 
     return () => {
       cancelled = true;
+      if (generationRef.current === generation) generationRef.current += 1;
       offStatus();
       offSpeaking();
-      void detachTrack().finally(() => provider.disconnect().catch(() => {}));
-      providerRef.current = null;
-      if (monitorElRef.current) {
-        monitorElRef.current.remove();
-        monitorElRef.current = null;
-      }
+      room.off(RoomEvent.Reconnecting, onHumanReconnecting);
+      room.off(RoomEvent.Disconnected, onHumanReconnecting);
+      void stopRuntime();
+      if (terminateRuntimeRef.current === failRuntime) terminateRuntimeRef.current = null;
       setStatus('disconnected');
       setPublishFailed(false);
       levelRef.current = 0;
       setIsSpeaking(false);
     };
-    // config の deviceId 変更は reconnect で反映する（有効中の自動再接続はしない）
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, room, registry]);
+  }, [enabled, room, trackName, config.sourceDeviceId]);
 
   // ── ChatGPT 入力ミキサー（人間の声 → CABLE-B → ChatGPT 入力）──
-  const sinkDeviceId = enabled ? config.sinkDeviceId : null;
+  const sinkDeviceId = enabled && status === 'connected' ? config.sinkDeviceId : null;
   useEffect(() => {
     if (!room || !sinkDeviceId) return;
     const mixer = new ChatGptInputMixer();
@@ -261,9 +333,11 @@ export function useAiParticipant({
         includeLocalMic: configRef.current.sendLocalMic !== false,
       })
       .catch((e) => {
-      console.error('[useAiParticipant] ChatGPT入力ミキサーの起動に失敗', e);
-      setInputMixerError(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
-    });
+        if (mixerRef.current !== mixer) return;
+        console.error('[useAiParticipant] ChatGPT入力ミキサーの起動に失敗', e);
+        const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+        terminateRuntimeRef.current?.(`ChatGPTへの送出経路を開始できませんでした: ${message}`);
+      });
     return () => {
       mixer.stop();
       if (mixerRef.current === mixer) mixerRef.current = null;
@@ -278,46 +352,6 @@ export function useAiParticipant({
     mixerRef.current?.setIncludeLocalMic(sendLocalMicOn);
   }, [sendLocalMicOn]);
 
-  const monitorLocallyOn = config.monitorAiLocally !== false;
-  useEffect(() => {
-    if (!enabled) return;
-    if (!monitorLocallyOn) {
-      // アプリからの再生を即時停止 (Windows 側モニタに任せる)
-      if (monitorElRef.current) monitorElRef.current.srcObject = null;
-      return;
-    }
-    const track = currentTrackRef.current;
-    if (!track) return;
-    if (!monitorElRef.current) {
-      const el = document.createElement('audio');
-      el.style.display = 'none';
-      el.autoplay = true;
-      document.body.appendChild(el);
-      monitorElRef.current = el;
-    }
-    monitorElRef.current.srcObject = new MediaStream([track]);
-    monitorElRef.current.play().catch(() => {
-      // autoplay 制限は StartAudioBanner のユーザー操作で解除される
-    });
-  }, [enabled, monitorLocallyOn]);
-
-  /** 再接続: 同一 participant ID のまま「新トラック取得 → registry → publish」の順で復帰 */
-  const reconnect = useCallback(async () => {
-    const provider = providerRef.current;
-    if (!provider) return;
-    try {
-      setStatus('connecting');
-      await provider.connect();
-      const track = provider.getAudioTrack();
-      if (track) await attachTrack(track);
-      recordSessionEvent({ type: "track_replaced", participantId: AI_PARTICIPANT_ID });
-      setStatus(provider.status);
-    } catch (e) {
-      console.error('[useAiParticipant] 再接続に失敗', e);
-      setStatus('error');
-    }
-  }, [attachTrack]);
-
   const tile: AiTileState | null = enabled
     ? {
         info,
@@ -329,20 +363,19 @@ export function useAiParticipant({
   // descriptor は room metadata 配信の effect 依存に入るため、必ずメモ化する。
   // 毎レンダリング新しいオブジェクトを作ると、発話検出(100ms周期)の再描画ごとに
   // 配信APIが呼ばれ、LiveKit へ毎秒10回級のリクエストを投げてしまう。
-  const localIdentity = room?.localParticipant.identity ?? null;
   const descriptor = useMemo<StudioAiDescriptor | null>(
     () =>
-      enabled && localIdentity
+      enabled
         ? {
             id: AI_PARTICIPANT_ID,
-            ownerIdentity: localIdentity,
+            ownerIdentity: AI_LIVEKIT_IDENTITY,
             trackName,
             displayName: info.displayName,
             avatar: info.avatar,
             providerKind: "desktop",
           }
         : null,
-    [enabled, localIdentity, trackName, info.displayName, info.avatar]
+    [enabled, trackName, info.displayName, info.avatar]
   );
 
   /**
@@ -373,7 +406,6 @@ export function useAiParticipant({
     getInputMixerDiagnostics,
     tile,
     descriptor,
-    reconnect,
   };
 }
 

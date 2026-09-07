@@ -174,6 +174,15 @@ export interface AiParticipantConfig {
    * 再検査は不要。デバイスを変更すると指紋が外れ、再びセットアップ必須に戻る。
    */
   validatedFingerprint?: string | null;
+  /** 全参加者向けv4検証。確認段階を分離し、旧記録ではワンクリック開始を許可しない。 */
+  validation?: {
+    schemaVersion: 4;
+    fingerprint: string;
+    callMicDeviceId: string | null;
+    browserWiringConfirmedAt: string;
+    selfLoopConfirmedAt: string;
+    remoteRoundtripAt: string;
+  } | null;
 }
 
 export const DEFAULT_AI_CONFIG: AiParticipantConfig = {
@@ -184,19 +193,30 @@ export const DEFAULT_AI_CONFIG: AiParticipantConfig = {
   sendLocalMic: true,
   monitorAiLocally: true,
   validatedFingerprint: null,
+  validation: null,
 };
 
 /** 配線（音声ソース + 送出先）の指紋 */
 export function aiWiringFingerprint(config: AiParticipantConfig): string {
-  return `${config.sourceDeviceId ?? ''}|${config.sinkDeviceId ?? ''}`;
+  return `${config.sourceDeviceId ?? ''}|${config.sinkDeviceId ?? ''}|${config.sendLocalMic !== false ? 'app-mic' : 'direct-mic'}`;
 }
 
 /** 保存済みの検証結果が現在の配線に対して有効か */
-export function isAiWiringValidated(config: AiParticipantConfig): boolean {
+export function isAiWiringValidated(
+  config: AiParticipantConfig,
+  currentCallMicDeviceId?: string | null
+): boolean {
   return (
     !!config.sourceDeviceId &&
-    !!config.validatedFingerprint &&
-    config.validatedFingerprint === aiWiringFingerprint(config)
+    !!config.sinkDeviceId &&
+    !!config.validation &&
+    config.validation.schemaVersion === 4 &&
+    !!config.validation.browserWiringConfirmedAt &&
+    !!config.validation.selfLoopConfirmedAt &&
+    !!config.validation.remoteRoundtripAt &&
+    config.validation.fingerprint === aiWiringFingerprint(config) &&
+    (currentCallMicDeviceId === undefined ||
+      config.validation.callMicDeviceId === currentCallMicDeviceId)
   );
 }
 
@@ -242,32 +262,70 @@ function sanitizeAiConfig(raw: unknown): AiParticipantConfig {
     sendLocalMic: bool(p.sendLocalMic, true),
     monitorAiLocally: bool(p.monitorAiLocally, true),
     validatedFingerprint: str(p.validatedFingerprint),
+    validation:
+      p.validation &&
+      typeof p.validation === 'object' &&
+      (p.validation as Record<string, unknown>).schemaVersion === 4 &&
+      typeof (p.validation as Record<string, unknown>).fingerprint === 'string' &&
+      typeof (p.validation as Record<string, unknown>).browserWiringConfirmedAt === 'string' &&
+      typeof (p.validation as Record<string, unknown>).selfLoopConfirmedAt === 'string' &&
+      typeof (p.validation as Record<string, unknown>).remoteRoundtripAt === 'string'
+        ? {
+            schemaVersion: 4,
+            fingerprint: (p.validation as Record<string, unknown>).fingerprint as string,
+            callMicDeviceId:
+              typeof (p.validation as Record<string, unknown>).callMicDeviceId === 'string'
+                ? ((p.validation as Record<string, unknown>).callMicDeviceId as string)
+                : null,
+            browserWiringConfirmedAt: (p.validation as Record<string, unknown>).browserWiringConfirmedAt as string,
+            selfLoopConfirmedAt: (p.validation as Record<string, unknown>).selfLoopConfirmedAt as string,
+            remoteRoundtripAt: (p.validation as Record<string, unknown>).remoteRoundtripAt as string,
+          }
+        : null,
   };
 }
 
-export function loadAiConfig(): AiParticipantConfig {
-  if (typeof window === 'undefined') return DEFAULT_AI_CONFIG;
+export function loadAiConfigWithStatus(): {
+  config: AiParticipantConfig;
+  readOk: boolean;
+  updatedAt: number | null;
+} {
+  if (typeof window === 'undefined') {
+    return { config: DEFAULT_AI_CONFIG, readOk: false, updatedAt: null };
+  }
   try {
     const rawV2 = window.localStorage.getItem(STORAGE_KEY_V2);
     if (rawV2) {
       const env = JSON.parse(rawV2) as Partial<AiConfigEnvelopeV2>;
-      if (env && env.schemaVersion === 2) return sanitizeAiConfig(env.config);
+      if (env && env.schemaVersion === 2) {
+        return {
+          config: sanitizeAiConfig(env.config),
+          readOk: true,
+          updatedAt: typeof env.updatedAt === 'number' ? env.updatedAt : null,
+        };
+      }
       // 版数が読めない v2 キーは壊れている。v1 フォールバックへ
     }
     // v1 からの移行 (読み取りのみ。v1 は旧ビルドのロールバック用に残す)
     const rawV1 = window.localStorage.getItem(AI_PARTICIPANT_STORAGE_KEY);
-    if (rawV1) return sanitizeAiConfig(JSON.parse(rawV1));
-    return DEFAULT_AI_CONFIG;
+    if (rawV1) {
+      return { config: sanitizeAiConfig(JSON.parse(rawV1)), readOk: true, updatedAt: null };
+    }
+    return { config: DEFAULT_AI_CONFIG, readOk: true, updatedAt: null };
   } catch {
-    return DEFAULT_AI_CONFIG;
+    return { config: DEFAULT_AI_CONFIG, readOk: false, updatedAt: null };
   }
 }
 
+export function loadAiConfig(): AiParticipantConfig {
+  return loadAiConfigWithStatus().config;
+}
+
 /** @returns 保存に成功したか。false なら設定はこのセッション限りで消える */
-export function saveAiConfig(config: AiParticipantConfig): boolean {
+export function saveAiConfig(config: AiParticipantConfig, updatedAt = Date.now()): boolean {
   if (typeof window === 'undefined') return false;
   try {
-    const env: AiConfigEnvelopeV2 = { schemaVersion: 2, updatedAt: Date.now(), config };
+    const env: AiConfigEnvelopeV2 = { schemaVersion: 2, updatedAt, config };
     window.localStorage.setItem(STORAGE_KEY_V2, JSON.stringify(env));
     return true;
   } catch {
@@ -298,14 +356,24 @@ let unpersistedConfig: AiParticipantConfig | null = null;
  * @returns { config, persisted } — マージ後の全体と、localStorage へ書けたか
  */
 export async function patchAiConfig(
-  patch: Partial<AiParticipantConfig>
-): Promise<{ config: AiParticipantConfig; persisted: boolean }> {
-  const apply = (): { config: AiParticipantConfig; persisted: boolean } => {
-    const base = unpersistedConfig ?? loadAiConfig();
+  patch: Partial<AiParticipantConfig>,
+  options?: { expectedUpdatedAt: number | null; signal?: AbortSignal }
+): Promise<{ config: AiParticipantConfig; persisted: boolean; applied: boolean; updatedAt: number | null }> {
+  const apply = (): { config: AiParticipantConfig; persisted: boolean; applied: boolean; updatedAt: number | null } => {
+    const stored = loadAiConfigWithStatus();
+    const base = unpersistedConfig ?? stored.config;
+    const currentUpdatedAt = unpersistedConfig ? null : stored.updatedAt;
+    if (options?.signal?.aborted) {
+      return { config: base, persisted: stored.readOk, applied: false, updatedAt: currentUpdatedAt };
+    }
+    if (options && currentUpdatedAt !== options.expectedUpdatedAt) {
+      return { config: base, persisted: stored.readOk, applied: false, updatedAt: currentUpdatedAt };
+    }
     const merged = sanitizeAiConfig({ ...base, ...patch });
-    const persisted = saveAiConfig(merged);
+    const updatedAt = Math.max(Date.now(), (currentUpdatedAt ?? 0) + 1);
+    const persisted = saveAiConfig(merged, updatedAt);
     unpersistedConfig = persisted ? null : merged;
-    return { config: merged, persisted };
+    return { config: merged, persisted, applied: true, updatedAt: persisted ? updatedAt : null };
   };
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
   if (locks?.request) {

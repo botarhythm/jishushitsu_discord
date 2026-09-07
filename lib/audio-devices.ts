@@ -83,9 +83,13 @@ export async function detectSignal(
   deviceId: string,
   durationMs: number,
   threshold = 0.015,
-  onProgress?: (level: number, remainingMs: number) => void
+  onProgress?: (level: number, remainingMs: number) => void,
+  signal?: AbortSignal
 ): Promise<{ detected: boolean; peak: number; error?: string }> {
   let stream: MediaStream | null = null;
+  let src: MediaStreamAudioSourceNode | null = null;
+  let analyser: AnalyserNode | null = null;
+  const stopStream = () => stream?.getTracks().forEach((t) => t.stop());
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -95,14 +99,16 @@ export async function detectSignal(
         autoGainControl: false,
       },
     });
+    if (signal?.aborted) return { detected: false, peak: 0, error: '中止しました' };
+    signal?.addEventListener('abort', stopStream, { once: true });
     const track = stream.getAudioTracks()[0];
     if (!track) return { detected: false, peak: 0, error: "トラックを取得できませんでした" };
 
     const ctx = getSharedAudioContext();
     if (ctx.state !== "running") await ctx.resume().catch(() => {});
-    const analyser = ctx.createAnalyser();
+    analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
-    const src = ctx.createMediaStreamSource(new MediaStream([track]));
+    src = ctx.createMediaStreamSource(new MediaStream([track]));
     src.connect(analyser);
     const buf = new Float32Array(analyser.fftSize);
 
@@ -110,7 +116,7 @@ export async function detectSignal(
     const started = performance.now();
     // 検出したら即座に打ち切る。利用者を待たせないことと、
     // 反応時間で測定窓を食い潰して誤検出になるのを防ぐため。
-    while (performance.now() - started < durationMs) {
+    while (!signal?.aborted && performance.now() - started < durationMs) {
       analyser.getFloatTimeDomainData(buf as Float32Array<ArrayBuffer>);
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
@@ -120,8 +126,7 @@ export async function detectSignal(
       if (peak >= threshold) break;
       await new Promise((r) => setTimeout(r, 100));
     }
-    src.disconnect();
-    analyser.disconnect();
+    if (signal?.aborted) return { detected: false, peak, error: '中止しました' };
     return { detected: peak >= threshold, peak };
   } catch (e) {
     return {
@@ -130,7 +135,10 @@ export async function detectSignal(
       error: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
     };
   } finally {
-    stream?.getTracks().forEach((t) => t.stop());
+    signal?.removeEventListener('abort', stopStream);
+    src?.disconnect();
+    analyser?.disconnect();
+    stopStream();
   }
 }
 
@@ -199,35 +207,45 @@ export interface ToneProbeHandle {
   stop: () => void;
 }
 
-export function startToneProbe(sinkDeviceId: string, frequency = 880): ToneProbeHandle {
+export function startToneProbe(
+  sinkDeviceId: string,
+  frequency = 880,
+  signal?: AbortSignal
+): ToneProbeHandle {
   let el: HTMLAudioElement | null = null;
   let osc: OscillatorNode | null = null;
   let gain: GainNode | null = null;
   let dest: MediaStreamAudioDestinationNode | null = null;
   let stopped = false;
 
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    try {
-      osc?.stop();
-      osc?.disconnect();
-      gain?.disconnect();
-      dest?.disconnect();
-    } catch {
-      // ignore
-    }
+  const cleanupResources = () => {
+    try { osc?.stop(); } catch { /* already stopped */ }
+    try { osc?.disconnect(); } catch { /* ignore */ }
+    try { gain?.disconnect(); } catch { /* ignore */ }
+    try { dest?.disconnect(); } catch { /* ignore */ }
     if (el) {
       el.srcObject = null;
       el.remove();
       el = null;
     }
   };
+  const stop = () => {
+    stopped = true;
+    // stop 後に遅い await が resource を作った場合にも再実行できる cleanup。
+    cleanupResources();
+    signal?.removeEventListener('abort', stop);
+  };
+  if (signal?.aborted) stop();
+  else signal?.addEventListener('abort', stop, { once: true });
 
   const started = (async () => {
     try {
       const ctx = getSharedAudioContext();
-      if (ctx.state !== 'running') await ctx.resume().catch(() => {});
+      if (ctx.state !== 'running') await ctx.resume();
+      if (stopped || signal?.aborted) {
+        cleanupResources();
+        return { ok: false, error: 'stopped before start' };
+      }
       dest = ctx.createMediaStreamDestination();
       osc = ctx.createOscillator();
       osc.frequency.value = frequency;
@@ -239,14 +257,16 @@ export function startToneProbe(sinkDeviceId: string, frequency = 880): ToneProbe
       // setSinkId が先。失敗時に既定出力へトーンが漏れる要素を作らない
       el = document.createElement('audio');
       await el.setSinkId(sinkDeviceId);
+      if (stopped || signal?.aborted) {
+        cleanupResources();
+        return { ok: false, error: 'stopped before start' };
+      }
       el.srcObject = dest.stream;
       document.body.appendChild(el);
       osc.start();
       await el.play();
-      if (stopped) {
-        // 開始前に stop された競合。後片付けだけやり直す
-        stopped = false;
-        stop();
+      if (stopped || signal?.aborted) {
+        cleanupResources();
         return { ok: false, error: 'stopped before start' };
       }
       return { ok: true };
@@ -263,9 +283,10 @@ export function startToneProbe(sinkDeviceId: string, frequency = 880): ToneProbe
 export async function playToneProbe(
   sinkDeviceId: string,
   durationMs: number,
-  frequency = 880
+  frequency = 880,
+  signal?: AbortSignal
 ): Promise<{ ok: boolean; error?: string }> {
-  const probe = startToneProbe(sinkDeviceId, frequency);
+  const probe = startToneProbe(sinkDeviceId, frequency, signal);
   try {
     const st = await probe.started;
     if (!st.ok) return st;
@@ -287,9 +308,11 @@ export async function playToneProbe(
 export async function measureEnvelope(
   deviceId: string,
   durationMs: number,
-  onProgress?: (level: number, remainingMs: number) => void
+  onProgress?: (level: number, remainingMs: number) => void,
+  signal?: AbortSignal
 ): Promise<{ env: number[]; peak: number; error?: string }> {
   let stream: MediaStream | null = null;
+  const stopStream = () => stream?.getTracks().forEach((t) => t.stop());
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -299,13 +322,16 @@ export async function measureEnvelope(
         autoGainControl: false,
       },
     });
+    if (signal?.aborted) return { env: [], peak: 0, error: '中止しました' };
+    signal?.addEventListener('abort', stopStream, { once: true });
     const track = stream.getAudioTracks()[0];
     if (!track) return { env: [], peak: 0, error: 'トラックを取得できませんでした' };
-    return await measureTrackEnvelope(track, durationMs, onProgress);
+    return await measureTrackEnvelope(track, durationMs, onProgress, signal);
   } catch (e) {
     return { env: [], peak: 0, error: e instanceof Error ? e.message : String(e) };
   } finally {
-    stream?.getTracks().forEach((t) => t.stop());
+    signal?.removeEventListener('abort', stopStream);
+    stopStream();
   }
 }
 
@@ -319,20 +345,23 @@ export async function measureEnvelope(
 export async function measureTrackEnvelope(
   track: MediaStreamTrack,
   durationMs: number,
-  onProgress?: (level: number, remainingMs: number) => void
+  onProgress?: (level: number, remainingMs: number) => void,
+  signal?: AbortSignal
 ): Promise<{ env: number[]; peak: number; error?: string }> {
+  let src: MediaStreamAudioSourceNode | null = null;
+  let analyser: AnalyserNode | null = null;
   try {
     const ctx = getSharedAudioContext();
     if (ctx.state !== 'running') await ctx.resume().catch(() => {});
-    const analyser = ctx.createAnalyser();
+    analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
-    const src = ctx.createMediaStreamSource(new MediaStream([track]));
+    src = ctx.createMediaStreamSource(new MediaStream([track]));
     src.connect(analyser);
     const buf = new Float32Array(analyser.fftSize);
     const env: number[] = [];
     let peak = 0;
     const started = performance.now();
-    while (performance.now() - started < durationMs) {
+    while (!signal?.aborted && performance.now() - started < durationMs) {
       analyser.getFloatTimeDomainData(buf as Float32Array<ArrayBuffer>);
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
@@ -342,11 +371,13 @@ export async function measureTrackEnvelope(
       onProgress?.(rms, Math.max(0, durationMs - (performance.now() - started)));
       await new Promise((r) => setTimeout(r, 100));
     }
-    src.disconnect();
-    analyser.disconnect();
+    if (signal?.aborted) return { env, peak, error: '中止しました' };
     return { env, peak };
   } catch (e) {
     return { env: [], peak: 0, error: e instanceof Error ? e.message : String(e) };
+  } finally {
+    src?.disconnect();
+    analyser?.disconnect();
   }
 }
 

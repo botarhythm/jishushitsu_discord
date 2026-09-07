@@ -28,6 +28,7 @@ export class ChatGptInputMixer {
   private blockedMicLabel: string | null = null;
   private includeLocalMic = true;
   private connectLocalMicFn: (() => void) | null = null;
+  private generation = 0;
 
   /**
    * @param room   接続済みの LiveKit Room
@@ -41,6 +42,7 @@ export class ChatGptInputMixer {
     this.includeLocalMic = opts.includeLocalMic ?? true;
     if (this.started) return;
     this.started = true;
+    const generation = ++this.generation;
 
     try {
       const ctx = getSharedAudioContext();
@@ -53,7 +55,12 @@ export class ChatGptInputMixer {
       // autoplay ポリシーで suspended のまま作られることがある。suspended だと
       // destination に音が流れず、送出先に何も届かない（無音の原因になる）。
       if (ctx.state !== "running") {
-        await ctx.resume().catch(() => {});
+        await ctx.resume();
+        const resumedState = ctx.state as AudioContextState;
+        if (resumedState !== 'running') {
+          throw new Error(`音声処理を開始できませんでした (${resumedState})`);
+        }
+        if (!this.started || this.generation !== generation) return;
       }
 
       // 送出先: hidden audio 要素を明示 sink（CABLE-B Input）へ。
@@ -65,12 +72,14 @@ export class ChatGptInputMixer {
       const el = document.createElement('audio');
       el.style.display = 'none';
       await el.setSinkId(sinkId);
+      if (!this.started || this.generation !== generation) return;
       el.srcObject = this.dest.stream;
       document.body.appendChild(el);
       this.audioEl = el;
-      el.play().catch(() => {
-        // autoplay 制限は AudioRuntime の resume と同じユーザー操作で解除される
-      });
+      // play() 拒否は実際の送出不能なので、接続成功として扱わない。
+      // 呼び出し側が terminal failure として AI を停止し、再設定を促す。
+      await el.play();
+      if (!this.started || this.generation !== generation) return;
 
     // ── ローカルマイク（Human A）──
     const connectLocalMic = () => {
@@ -227,6 +236,7 @@ export class ChatGptInputMixer {
   }
 
   stop(): void {
+    this.generation++;
     this.detach?.();
     this.detach = null;
     this.nodes.forEach((n) => {

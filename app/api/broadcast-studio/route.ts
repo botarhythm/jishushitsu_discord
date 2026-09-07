@@ -3,6 +3,7 @@ import { RoomServiceClient } from 'livekit-server-sdk';
 import { requireInstructor } from '@/lib/auth-guard';
 import { livekitIdentityFor } from '@/lib/session';
 import { STUDIO_LAYOUTS } from '@/lib/studio-layouts';
+import { AI_LIVEKIT_IDENTITY } from '@/lib/ai/livekit-participant';
 
 const KNOWN_LAYOUTS = new Set(Object.keys(STUDIO_LAYOUTS));
 const MAX_SLOTS = 8;
@@ -131,10 +132,11 @@ export async function POST(request: NextRequest) {
       if (active) {
         const err = validateV2(body);
         if (err) return NextResponse.json({ error: err }, { status: 400 });
-        // AI 記述子の owner は必ず送信者自身。ズレていればクライアントのバグか詐称。
-        if (body.ai && body.ai.ownerIdentity !== hostIdentity) {
+        // AI音声は講師とは別の予約participantからpublishする。metadataは表示用であり、
+        // ownerはこの固定identity以外を受理しない。
+        if (body.ai && body.ai.ownerIdentity !== AI_LIVEKIT_IDENTITY) {
           return NextResponse.json(
-            { error: 'ai.ownerIdentity が送信者と一致しません' },
+            { error: 'ai.ownerIdentity が予約AI参加者と一致しません' },
             { status: 403 }
           );
         }

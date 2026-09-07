@@ -1,0 +1,3 @@
+# Lake requirements review round 1 packet
+
+Review `docs/requirements/chatgpt-all-participants-r1.snapshot.md` using the Lake round-1 completeness and feasibility rubric. Read-only. Do not edit files or decide product scope. Primary evidence: `docs/briefs/chatgpt-all-participants.md`, `components/RoomView.tsx`, `hooks/useAiParticipant.ts`, `lib/ai/chatgpt-input-mixer.ts`, `components/AiParticipantSetupModal.tsx`, `components/AiWiringPlanPanel.tsx`, `lib/ai-wiring-plan.ts`, `scripts/check-chatgpt-audio.ps1`, `app/api/broadcast-studio/route.ts`, `AGENTS.md`. Return the exact finding format from review-contract.md and verdict.

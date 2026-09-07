@@ -1,0 +1,3 @@
+# Lake requirements review round 2 packet
+
+Review canonical `docs/requirements/chatgpt-all-participants.md` version 1 using the independent adversarial implementability rubric. Read-only. Do not read round-1 reports, dispositions, prompts, or version history. Primary evidence: `docs/briefs/chatgpt-all-participants.md`, `components/RoomView.tsx`, `hooks/useAiParticipant.ts`, `lib/ai/chatgpt-input-mixer.ts`, `components/AiParticipantSetupModal.tsx`, `lib/studio-participants.ts`, `scripts/check-chatgpt-audio.ps1`, `app/api/token/route.ts`, `AGENTS.md`. Return required finding format, counts, questions, verdict.

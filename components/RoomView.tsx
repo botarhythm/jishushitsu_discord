@@ -37,7 +37,6 @@ import { ControlBar } from './ControlBar';
 import { StudioStage, AudienceStrip, type StudioLayout, STUDIO_LAYOUT_SLOTS, MAX_STUDIO_SLOTS } from './StudioStage';
 import { StudioBar } from './StudioBar';
 import { AiParticipantSetupModal } from './AiParticipantSetupModal';
-import { AudioTrackRegistry } from '@/lib/audio-track-registry';
 import { useAiParticipant, useRemoteAiTile, AI_PARTICIPANT_ID } from '@/hooks/useAiParticipant';
 import {
   aiSlotToken,
@@ -54,6 +53,7 @@ import { ChatPanel } from './ChatPanel';
 import { StudioChatPanel } from './StudioChatPanel';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
 import { PreJoinScreen } from './PreJoinScreen';
+import { AI_LIVEKIT_IDENTITY } from '@/lib/ai/livekit-participant';
 
 type InitialRec = 'off' | 'audio' | 'screen' | 'both';
 
@@ -79,6 +79,13 @@ export default function RoomView(props: RoomViewProps) {
   const [joined, setJoined] = useState(false);
   const [initialMicOn, setInitialMicOn] = useState(true);
   const [initialCameraOn, setInitialCameraOn] = useState(true);
+  // ルーム移動では RoomInner が再マウントされるため、AI の利用意図だけをこの層で保持する。
+  // ページ退出や再ログインでは初期値 false に戻り、保存済み設定だけで自動起動しない。
+  const [aiEnabled, setAiEnabledState] = useState(false);
+  const setAiEnabled = useCallback(
+    (next: boolean) => setAiEnabledState(props.role === 'instructor' && next),
+    [props.role]
+  );
 
   if (!joined) {
     return (
@@ -119,7 +126,13 @@ export default function RoomView(props: RoomViewProps) {
       }}
     >
       <RoomAudioRenderer />
-      <RoomInner {...props} initialMicOn={initialMicOn} initialCameraOn={initialCameraOn} />
+      <RoomInner
+        {...props}
+        initialMicOn={initialMicOn}
+        initialCameraOn={initialCameraOn}
+        aiEnabled={aiEnabled}
+        setAiEnabled={setAiEnabled}
+      />
     </LiveKitRoom>
   );
 }
@@ -133,7 +146,14 @@ function RoomInner({
   initialMicOn = true,
   initialCameraOn = true,
   onRoomChange,
-}: RoomViewProps & { initialMicOn?: boolean; initialCameraOn?: boolean }) {
+  aiEnabled,
+  setAiEnabled,
+}: RoomViewProps & {
+  initialMicOn?: boolean;
+  initialCameraOn?: boolean;
+  aiEnabled: boolean;
+  setAiEnabled: (next: boolean) => void;
+}) {
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
   const participants = useParticipants();
@@ -258,7 +278,8 @@ function RoomInner({
   // 完全オプトイン。aiEnabled=false の間は録画・publish・metadata いずれの
   // 新規コードパスも走らない（既存保護戦略の不変条件）。
   const [aiConfig, setAiConfig] = useState<AiParticipantConfig>(() => loadAiConfig());
-  const [aiEnabled, setAiEnabled] = useState(false);
+  const [aiValidationRevision, setAiValidationRevision] = useState(0);
+  const [aiTestRequested, setAiTestRequested] = useState(false);
   const [aiSetupOpen, setAiSetupOpen] = useState(false);
   /**
    * チャットと AI 設定はどちらも収録ステージに重なる `position: fixed` のオーバーレイで、
@@ -270,7 +291,6 @@ function RoomInner({
     setChatOpen(false);
     setAiSetupOpen(false);
   }, []);
-  const aiRegistry = useMemo(() => new AudioTrackRegistry(), []);
   /**
    * 設定の書き込みは patch 経路に一本化する。保存済みの最新値へ patch だけを
    * 重ねるので、この画面の state が古くても他フィールドを巻き戻さない
@@ -278,15 +298,31 @@ function RoomInner({
    * @returns localStorage へ書けたか
    */
   const handlePatchAiConfig = useCallback(
-    async (patch: Partial<AiParticipantConfig>): Promise<boolean> => {
-      const { config, persisted } = await patchAiConfig(patch);
+    async (
+      patch: Partial<AiParticipantConfig>,
+      options?: { expectedUpdatedAt: number | null; signal?: AbortSignal }
+    ) => {
+      if ('sourceDeviceId' in patch || 'sinkDeviceId' in patch || 'sendLocalMic' in patch) {
+        setAiTestRequested(false);
+        setAiEnabled(false);
+      }
+      const { config, persisted, applied, updatedAt } = await patchAiConfig(patch, options);
       setAiConfig(config);
-      return persisted;
+      return { config, persisted, applied, updatedAt };
     },
-    []
+    [setAiEnabled]
   );
   // 別タブで保存されたら読み直す (古い state のまま上書きし合う競合の遮断)
-  useEffect(() => subscribeAiConfig(setAiConfig), []);
+  useEffect(
+    () =>
+      subscribeAiConfig((nextConfig) => {
+        setAiTestRequested(false);
+        setAiEnabled(false);
+        setAiConfig(nextConfig);
+        setAiValidationRevision((revision) => revision + 1);
+      }),
+    [setAiEnabled]
+  );
 
   // ── ローカル録画（全員対象。タブを録画して WebM 保存） ──
   const [recordingQuality, setRecordingQuality] = useState<RecordingQuality>('streaming');
@@ -303,11 +339,9 @@ function RoomInner({
     // クロップが確保できないときは録画自体を中止する (fail-closed)。
     // その際サイドパネルも閉じておく。
     onRegionCaptureUnavailable: closeSidePanels,
-    // AI 参加者の音声は参加者非依存の汎用レジストリ経由で mix する
-    extraAudioTracks: aiRegistry,
-    // 単一取り込みポリシー: AI 有効時はタブ音声を録画に入れない (AI モニタ音声・
-    // リモート再生音声との二重取り込み防止)。AI 無効時は従来経路のまま。
-    excludeTabAudio: aiEnabled,
+    // 単一取り込みポリシー: 通話音声は全員分を LiveKit の明示トラックから録る。
+    // RoomAudioRenderer のタブ再生を同時に混ぜると人間・AIとも二重になるため常時除外する。
+    excludeTabAudio: true,
   });
   /**
    * サイドパネル (チャット・AI設定) を開閉できるか。
@@ -367,7 +401,7 @@ function RoomInner({
       // 逃がし、effect body 内での同期 setState を回避する。
       queueMicrotask(() => setDeviceError(localRecordingError));
     }
-  }, [localRecordingError]);
+  }, [localRecordingError, setDeviceError]);
 
   const toggleLocalRecording = useCallback(() => {
     if (isLocalRecording) {
@@ -457,25 +491,37 @@ function RoomInner({
     ai: StudioAiDescriptor | null;
   } | null>(null);
 
-  // ── AI 参加者のライフサイクル (ホスト側) ──
-  // 有効なのは「収録モード中」のみ。収録モードを抜けると unpublish・切断される
-  // (aiEnabled 自体は保持され、再入室で自動的に再接続する)。
-  const {
-    status: aiStatus,
-    publishFailed: aiPublishFailed,
-    inputMixerError: aiInputMixerError,
-    setInputMixerSendEnabled: aiSetInputMixerSendEnabled,
-    setInputMixerIncludeLocalMic: aiSetInputMixerIncludeLocalMic,
-    getInputMixerDiagnostics: aiGetInputMixerDiagnostics,
-    tile: aiTile,
-    descriptor: aiDescriptor,
-    reconnect: aiReconnect,
-  } = useAiParticipant({
-    room,
-    enabled: aiEnabled && studioMode,
-    config: aiConfig,
-    registry: aiRegistry,
-  });
+  // 講師だけはChatGPT Classicの外部モニターとLiveKit再生が重複し得る。
+  // AIトラックの再生音量だけを0にし、録画が読むMediaStreamTrackは残す。
+  useEffect(() => {
+    const syncAiPlayback = () => {
+      const participant = room.remoteParticipants.get(AI_LIVEKIT_IDENTITY);
+      participant?.audioTrackPublications.forEach((publication) => {
+        const track = publication.track;
+        const volumeTrack = track as { setVolume?: (volume: number) => void } | undefined;
+        let ownerIdentity: string | null = null;
+        try {
+          ownerIdentity = (JSON.parse(participant.metadata ?? '{}') as { ownerIdentity?: string })
+            .ownerIdentity ?? null;
+        } catch {
+          ownerIdentity = null;
+        }
+        const shouldMuteOwnedMonitor =
+          isInstructor &&
+          aiEnabled &&
+          ownerIdentity === localParticipant.identity &&
+          aiConfig.monitorAiLocally === false;
+        volumeTrack?.setVolume?.(shouldMuteOwnedMonitor ? 0 : 1);
+      });
+    };
+    syncAiPlayback();
+    room.on(RoomEvent.TrackSubscribed, syncAiPlayback);
+    room.on(RoomEvent.ParticipantConnected, syncAiPlayback);
+    return () => {
+      room.off(RoomEvent.TrackSubscribed, syncAiPlayback);
+      room.off(RoomEvent.ParticipantConnected, syncAiPlayback);
+    };
+  }, [isInstructor, aiEnabled, localParticipant.identity, room, aiConfig.monitorAiLocally]);
 
   // AI 有効化時のスロット自動割当: ai トークンが未割当なら空きスロット (下段=index 2 優先) へ。
   // split のままなら 3 人用の trio へ自動切替。無効化時は ai トークンを外す。
@@ -547,29 +593,121 @@ function RoomInner({
   // aiQuickStartReady が false になってセットアップ画面へ誘導される)。
   const [aiDevicePresent, setAiDevicePresent] = useState<boolean | null>(null);
   useEffect(() => {
-    if (!isInstructor || !isAiWiringValidated(aiConfig)) return;
+    if (!isInstructor) {
+      queueMicrotask(() => setAiDevicePresent(false));
+      return;
+    }
     let cancelled = false;
-    queueMicrotask(async () => {
+    const refreshPresence = async () => {
       try {
+        const callMicDeviceId = room.getActiveDevice('audioinput') ?? null;
+        const validated = isAiWiringValidated(aiConfig, callMicDeviceId);
         const devices = await navigator.mediaDevices.enumerateDevices();
         if (cancelled) return;
         const hasSource = devices.some(
           (d) => d.kind === 'audioinput' && d.deviceId === aiConfig.sourceDeviceId
         );
         const hasSink =
-          !aiConfig.sinkDeviceId ||
+          !!aiConfig.sinkDeviceId &&
           devices.some((d) => d.kind === 'audiooutput' && d.deviceId === aiConfig.sinkDeviceId);
-        setAiDevicePresent(hasSource && hasSink);
+        const expectedCallMic = aiConfig.validation?.callMicDeviceId ?? callMicDeviceId;
+        const hasCallMic =
+          !!expectedCallMic &&
+          devices.some(
+            (d) => d.kind === 'audioinput' && d.deviceId === expectedCallMic
+          );
+        const present = hasSource && hasSink && hasCallMic;
+        setAiDevicePresent(validated && present);
+        if (!present) {
+          setAiTestRequested(false);
+          setAiEnabled(false);
+          if (aiConfig.validation || aiConfig.validatedFingerprint) {
+            await handlePatchAiConfig({ validatedFingerprint: null, validation: null });
+          }
+        }
       } catch {
         if (!cancelled) setAiDevicePresent(false);
       }
-    });
+    };
+    queueMicrotask(() => void refreshPresence());
+    navigator.mediaDevices.addEventListener('devicechange', refreshPresence);
+    const refreshForActiveDevice = (kind: MediaDeviceKind) => {
+      if (kind === 'audioinput') void refreshPresence();
+    };
+    room.on(RoomEvent.ActiveDeviceChanged, refreshForActiveDevice);
     return () => {
       cancelled = true;
+      navigator.mediaDevices.removeEventListener('devicechange', refreshPresence);
+      room.off(RoomEvent.ActiveDeviceChanged, refreshForActiveDevice);
     };
-  }, [isInstructor, aiConfig]);
+  }, [isInstructor, aiConfig, room, handlePatchAiConfig, setAiEnabled]);
 
-  const aiQuickStartReady = isAiWiringValidated(aiConfig) && aiDevicePresent === true;
+  useEffect(() => {
+    const invalidateForMicChange = (kind: MediaDeviceKind, deviceId: string) => {
+      if (
+        kind !== 'audioinput' ||
+        (!aiConfig.validation && !aiTestRequested) ||
+        aiConfig.validation?.callMicDeviceId === deviceId
+      ) return;
+      setAiTestRequested(false);
+      setAiEnabled(false);
+      void handlePatchAiConfig({ validatedFingerprint: null, validation: null });
+    };
+    room.on(RoomEvent.ActiveDeviceChanged, invalidateForMicChange);
+    return () => {
+      room.off(RoomEvent.ActiveDeviceChanged, invalidateForMicChange);
+    };
+  }, [aiConfig.validation, aiTestRequested, handlePatchAiConfig, room, setAiEnabled]);
+
+  const aiQuickStartReady =
+    isAiWiringValidated(aiConfig, room.getActiveDevice('audioinput') ?? null) &&
+    aiDevicePresent === true;
+
+  // 設定パネルを開いている間だけ未検証のテスト接続を許可する。通常参加と
+  // ルーム移動後の再開は、現在の通話マイクを含む検証済み配線に限定する。
+  const aiRuntimeEnabled =
+    isInstructor &&
+    aiEnabled &&
+    !!aiConfig.sourceDeviceId &&
+    !!aiConfig.sinkDeviceId &&
+    (aiQuickStartReady || aiTestRequested);
+
+  // ── AI 参加者のライフサイクル (講師側) ──
+  const {
+    status: aiStatus,
+    publishFailed: aiPublishFailed,
+    inputMixerError: aiInputMixerError,
+    setInputMixerSendEnabled: aiSetInputMixerSendEnabled,
+    setInputMixerIncludeLocalMic: aiSetInputMixerIncludeLocalMic,
+    getInputMixerDiagnostics: aiGetInputMixerDiagnostics,
+    tile: aiTile,
+    descriptor: aiDescriptor,
+  } = useAiParticipant({
+    room,
+    enabled: aiRuntimeEnabled,
+    config: aiConfig,
+    onTerminalFailure: (message) => {
+      setDeviceError(message);
+      setAiTestRequested(false);
+      setAiEnabled(false);
+    },
+  });
+
+  useEffect(() => {
+    if (aiSetupOpen || !aiTestRequested) return;
+    queueMicrotask(() => {
+      setAiTestRequested(false);
+      setAiEnabled(false);
+    });
+  }, [aiSetupOpen, aiTestRequested, setAiEnabled]);
+
+  const setAiEnabledFromSetup = useCallback(
+    (next: boolean) => {
+      setAiTestRequested(next && !aiQuickStartReady);
+      setAiEnabled(next);
+    },
+    [aiQuickStartReady, setAiEnabled]
+  );
 
   // 収録モードに入った経緯が「ダッシュボードの録画ボタン」かどうか。
   // true の場合、録画停止でダッシュボード(通常画面)へ自動的に戻す。
@@ -606,7 +744,7 @@ function RoomInner({
       '録画範囲を確定するため、開いていたパネルを閉じました。もう一度録画ボタンを押してください。'
     );
     return false;
-  }, [chatOpen, aiSetupOpen]);
+  }, [chatOpen, aiSetupOpen, setDeviceError]);
 
   /**
    * AI 参加者の ON/OFF。設定が済んでいなければ設定画面へ誘導する。
@@ -619,7 +757,7 @@ function RoomInner({
       setAiEnabled(false);
       return;
     }
-    if (!aiConfig.sourceDeviceId) {
+    if (!aiQuickStartReady) {
       // 未設定なら設定画面へ誘導する。ただし region フォールバック録画中は
       // パネル自体が封鎖されている (開くと収録物に焼き込まれる) ので開かない。
       // 切替できないのは「設定が済んでいないから」であって録画中だからではない、
@@ -634,7 +772,7 @@ function RoomInner({
       return;
     }
     setAiEnabled(true);
-  }, [aiEnabled, aiConfig.sourceDeviceId, panelsLocked]);
+  }, [aiEnabled, aiQuickStartReady, panelsLocked, setAiEnabled, setDeviceError]);
 
   /**
    * ダッシュボードの「AI参加者つきで収録開始」。
@@ -648,7 +786,7 @@ function RoomInner({
     } else {
       setAiSetupOpen(true);
     }
-  }, [enterStudio, aiQuickStartReady]);
+  }, [enterStudio, aiQuickStartReady, setAiEnabled]);
 
   // ダッシュボードの録画ボタンのトグル (講師用)。
   const handleDashboardRecord = useCallback(() => {
@@ -1052,18 +1190,18 @@ function RoomInner({
         />
         {aiSetupOpen && (
           <AiParticipantSetupModal
+            key={`studio-ai-setup-${aiValidationRevision}`}
             room={room}
             config={aiConfig}
             onPatchConfig={handlePatchAiConfig}
             enabled={aiEnabled}
-            onChangeEnabled={setAiEnabled}
+            onChangeEnabled={setAiEnabledFromSetup}
             aiStatus={aiStatus}
             publishFailed={aiPublishFailed}
             inputMixerError={aiInputMixerError}
             setInputMixerSendEnabled={aiSetInputMixerSendEnabled}
             setInputMixerIncludeLocalMic={aiSetInputMixerIncludeLocalMic}
             getInputMixerDiagnostics={aiGetInputMixerDiagnostics}
-            onReconnect={() => void aiReconnect()}
             isRecording={isLocalRecording}
             onClose={() => setAiSetupOpen(false)}
           />
@@ -1279,6 +1417,26 @@ function RoomInner({
         <DeviceSettingsModal onClose={closeDeviceSettings} />
       )}
 
+      {/* AI設定は通常モードでも開ける。収録モード側は専用return内で同じパネルを描画する。 */}
+      {isInstructor && aiSetupOpen && (
+        <AiParticipantSetupModal
+          key={`room-ai-setup-${aiValidationRevision}`}
+          room={room}
+          config={aiConfig}
+          onPatchConfig={handlePatchAiConfig}
+          enabled={aiEnabled}
+          onChangeEnabled={setAiEnabledFromSetup}
+          aiStatus={aiStatus}
+          publishFailed={aiPublishFailed}
+          inputMixerError={aiInputMixerError}
+          setInputMixerSendEnabled={aiSetInputMixerSendEnabled}
+          setInputMixerIncludeLocalMic={aiSetInputMixerIncludeLocalMic}
+          getInputMixerDiagnostics={aiGetInputMixerDiagnostics}
+          isRecording={isLocalRecording}
+          onClose={() => setAiSetupOpen(false)}
+        />
+      )}
+
       {/* Instructor dashboard (instructor only) */}
       {isInstructor && (
         <InstructorDashboard
@@ -1293,6 +1451,12 @@ function RoomInner({
           onStartStudioWithAi={startStudioWithAi}
           aiQuickStartReady={aiQuickStartReady}
           aiDisplayName={aiConfig.displayName}
+          aiEnabled={aiEnabled}
+          aiStatus={aiStatus}
+           aiError={aiPublishFailed || !!aiInputMixerError}
+           aiValidatedAt={aiConfig.validation?.remoteRoundtripAt ?? null}
+          onToggleAi={toggleAi}
+          onOpenAiSetup={() => setAiSetupOpen(true)}
           onMoveInstructor={changeRoom}
           onRoomsStatusRefresh={refetchRoomsStatus}
           onSetParticipantMic={setParticipantMic}

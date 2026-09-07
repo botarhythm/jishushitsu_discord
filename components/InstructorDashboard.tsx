@@ -4,6 +4,8 @@ import { useState, useCallback } from 'react';
 import { Participant } from 'livekit-client';
 import { RoomName, ParticipantMetadata, ROOM_LABELS, BREAKOUT_ROOMS } from '@/lib/types';
 import { RoomsStatusMap } from '@/hooks/useRoomsStatus';
+import type { AiProviderStatus } from '@/lib/ai/provider';
+import { isAiLiveKitIdentity } from '@/lib/ai/livekit-participant';
 
 interface InstructorDashboardProps {
   participants: Participant[];
@@ -23,6 +25,12 @@ interface InstructorDashboardProps {
   aiQuickStartReady?: boolean;
   /** AI 参加者の表示名（ボタン文言に使う） */
   aiDisplayName?: string;
+  aiEnabled?: boolean;
+  aiStatus?: AiProviderStatus;
+  aiError?: boolean;
+  aiValidatedAt?: string | null;
+  onToggleAi?: () => void;
+  onOpenAiSetup?: () => void;
   /** 講師自身が表示中のルームを切り替える */
   onMoveInstructor: (room: RoomName) => void | Promise<void>;
   /** BO在室状況を即時再取得する */
@@ -49,6 +57,12 @@ export default function InstructorDashboard({
   onStartStudioWithAi,
   aiQuickStartReady = false,
   aiDisplayName = 'ChatGPT',
+  aiEnabled = false,
+  aiStatus = 'disconnected',
+  aiError = false,
+  aiValidatedAt = null,
+  onToggleAi,
+  onOpenAiSetup,
   onMoveInstructor,
   onRoomsStatusRefresh,
   onSetParticipantMic,
@@ -71,6 +85,7 @@ export default function InstructorDashboard({
     .sort((a, b) => a.raisedAt.localeCompare(b.raisedAt));
 
   const students = participants.filter((p) => {
+    if (isAiLiveKitIdentity(p.identity)) return false;
     try {
       const meta = JSON.parse(p.metadata ?? '{}');
       return meta.role !== 'instructor';
@@ -264,6 +279,60 @@ export default function InstructorDashboard({
         </div>
 
       <div className="flex-1 overflow-y-auto">
+        {onToggleAi && onOpenAiSetup && (
+          <section className="p-3 border-b border-stone-700" aria-labelledby="dashboard-ai-title">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 id="dashboard-ai-title" className="text-xs font-medium text-stone-400 uppercase tracking-wider">
+                🤖 ChatGPT
+              </h3>
+              <span
+                role="status"
+                className={`text-[11px] font-medium ${
+                  aiError
+                    ? 'text-red-300'
+                    : aiStatus === 'connected'
+                      ? 'text-emerald-400'
+                      : aiStatus === 'connecting'
+                        ? 'text-amber-300'
+                        : 'text-stone-500'
+                }`}
+              >
+                {aiError
+                  ? '設定不足 / エラー'
+                  : aiStatus === 'connected'
+                    ? 'AI音声を配信中'
+                    : aiStatus === 'connecting'
+                      ? '接続準備中'
+                      : '停止中'}
+              </span>
+            </div>
+            <button
+              onClick={onToggleAi}
+              className={`w-full rounded-lg px-3 py-2 text-sm font-medium text-white transition-colors ${
+                aiEnabled
+                  ? 'bg-red-700/80 hover:bg-red-600'
+                  : 'bg-amber-700/80 hover:bg-amber-600'
+              }`}
+            >
+              {aiEnabled ? `${aiDisplayName}を停止` : `${aiDisplayName}を参加`}
+            </button>
+            <button
+              onClick={onOpenAiSetup}
+              className="mt-2 w-full rounded-lg bg-stone-700 px-3 py-2 text-sm font-medium text-stone-100 hover:bg-stone-600 transition-colors"
+            >
+              音声設定
+            </button>
+            {aiValidatedAt && (
+              <p className="mt-1.5 text-[11px] text-emerald-400">
+                リモート往復確認: {new Date(aiValidatedAt).toLocaleString('ja-JP')}
+              </p>
+            )}
+            <p className="mt-1.5 text-[11px] leading-snug text-stone-500">
+              同じルームの参加者の声をChatGPTへ送り、返答を全員へ共有します。停止してもChatGPT側の音声会話とVoiceMeeterの直接マイク送出は続くため、完全に止める場合はChatGPT側でミュートまたは音声会話を終了してください。
+            </p>
+          </section>
+        )}
+
         {/* 収録モード（YouTube/Podcast 用レイアウト） */}
         {onEnterStudio && currentRoom === 'main' && (
           <section className="p-3 border-b border-stone-700">

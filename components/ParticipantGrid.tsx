@@ -10,6 +10,7 @@ import {
 import type { TrackReference } from '@livekit/components-react';
 import { Track, Participant } from 'livekit-client';
 import { ParticipantMetadata, RoomName } from '@/lib/types';
+import { isAiLiveKitIdentity } from '@/lib/ai/livekit-participant';
 
 export interface InstructorActionContext {
   currentRoom: RoomName;
@@ -275,6 +276,7 @@ function Tile({
 }) {
   const { participant, trackRef, source } = item;
   const name = participant.name?.trim() || participant.identity;
+  const isAi = isAiLiveKitIdentity(participant.identity);
 
   let meta: ParticipantMetadata | null = null;
   try {
@@ -294,7 +296,7 @@ function Tile({
         {trackRef ? (
           <VideoTrack trackRef={trackRef} className={`h-full w-full ${videoFit}`} />
         ) : (
-          <AvatarPlaceholder name={name} />
+          <AvatarPlaceholder name={name} isAi={isAi} />
         )}
 
         <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-1.5 bg-stone-900/70 px-2 py-1">
@@ -302,6 +304,11 @@ function Tile({
           <span className="text-xs font-medium text-stone-100 truncate" title={name}>
             {name}
           </span>
+          {isAi && (
+            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
+              {participant.isSpeaking ? '応答中' : 'AI'}
+            </span>
+          )}
           {source === 'screen' && (
             <span className="text-[10px] uppercase tracking-wide text-amber-400">screen</span>
           )}
@@ -309,7 +316,7 @@ function Tile({
         </div>
 
         {instructorContext &&
-          participant.identity !== instructorContext.selfIdentity && (
+          participant.identity !== instructorContext.selfIdentity && !isAi && (
             <KickButton participant={participant} instructorContext={instructorContext} />
           )}
       </div>
@@ -326,7 +333,7 @@ function Tile({
         {trackRef ? (
           <VideoTrack trackRef={trackRef} className="w-full h-full object-contain" />
         ) : (
-          <AvatarPlaceholder name={name} />
+          <AvatarPlaceholder name={name} isAi={isAi} />
         )}
       </div>
 
@@ -335,6 +342,11 @@ function Tile({
         <span className="text-xs font-medium text-stone-100 truncate" title={name}>
           {name}
         </span>
+        {isAi && (
+          <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
+            {participant.isSpeaking ? '応答中' : 'AI'}
+          </span>
+        )}
         {source === 'screen' && (
           <span className="text-[10px] uppercase tracking-wide text-amber-400">screen</span>
         )}
@@ -344,19 +356,19 @@ function Tile({
       {extraTopRight && <div className="absolute top-2 right-2">{extraTopRight}</div>}
 
       {instructorContext &&
-        participant.identity !== instructorContext.selfIdentity && (
+        participant.identity !== instructorContext.selfIdentity && !isAi && (
           <KickButton participant={participant} instructorContext={instructorContext} />
         )}
     </div>
   );
 }
 
-function AvatarPlaceholder({ name }: { name: string }) {
+function AvatarPlaceholder({ name, isAi = false }: { name: string; isAi?: boolean }) {
   const initial = name.charAt(0).toUpperCase();
   return (
     <div className="flex h-full w-full flex-col items-center justify-center text-stone-400">
       <div className="flex h-16 w-16 items-center justify-center rounded-full bg-stone-700 text-2xl font-semibold text-stone-200">
-        {initial}
+        {isAi ? '🤖' : initial}
       </div>
     </div>
   );
@@ -404,7 +416,7 @@ function ThumbnailRow({
             {item.trackRef ? (
               <VideoTrack trackRef={item.trackRef} className={`w-full h-full ${videoFit}`} />
             ) : (
-              <AvatarPlaceholder name={name} />
+              <AvatarPlaceholder name={name} isAi={isAiLiveKitIdentity(item.participant.identity)} />
             )}
             <div className="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[10px] px-1 py-0.5 truncate text-center">
               {name}

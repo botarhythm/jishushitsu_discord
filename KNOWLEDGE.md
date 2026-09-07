@@ -1,9 +1,31 @@
 # KNOWLEDGE.md — プロジェクト横断ステータス
 
+```yaml
+lake_capacity:
+  requested_phase: A2
+  selection_source: user
+  effective_phase: A2
+  root_model: gpt-5.6-sol
+  phase_status: implementation-complete
+  quota_observed_at: 2026-09-07T14:07:47Z
+  quota_scope: account
+  quota_remaining_percent: 26
+  quota_resets_at: 1789344029
+  recommendation: honor-user-A2
+  reason: User requested A2 and the task is now running under Sol.
+```
+
+### Lake実装完了: 通常モードのChatGPT参加と音声設定の簡略化
+- 状態: ローカル実装完了。GPT-6 Astra 最終ゲート GO（P0/P1/P2=0）。未デプロイ。
+- 引継ぎ: `tasks/runs/chatgpt-all-participants-a2-handoff.md`
+- ユーザー意図: 収録モード以外でも全参加者がChatGPTと対話でき、今回のマイク設定問題をワンクリックで解消できること。
+- 予約 LiveKit AI 参加者、全参加者音声ミックス、通常モード操作、v4 往復検証、ブラウザ一括適用、Windows 修復スクリプトを実装。
+- 実機受入として複数端末のリモートのみ往復、WebM再生、Windows `-Fix` 実行を残す。
+
 > 複数AI（Claude Code / Antigravity / その他）が共有するプロジェクトの現状・決定事項の単一ソース。
 > Claude の private メモリと常に同期される（Skill: project-knowledge-sync）。
 
-Last synced: 2026-08-21
+Last synced: 2026-08-30
 
 ## 運用フェーズ (Ocean)
 
@@ -54,7 +76,17 @@ Last synced: 2026-08-21
      `ChatGPT Classic`。両方起動しているのが正常**で終了させる必要はない。
      音量ミキサーで出力デバイスを設定するのは音声対話に使っている方の行
      （スクリプトの既定は `-VoiceApp 'ChatGPT Classic'`）
-  3. 録音の「既定の通信デバイス」が `Voicemeeter Out B1` から外れる（ここが ChatGPT の耳）
+  3. 録音の「既定の通信デバイス」が `Voicemeeter Out B1` から外れる（ここが ChatGPT の耳）。
+     **2026-08-30 に実際に発生**（C920 ウェブカメラのマイクに変わっていた）。症状は**片方向断**で
+     紛らわしい: ChatGPT の耳が空気マイクになるため、本人の声は空気経由で届き音声対話は成立して
+     見えるが、相手の声はヘッドホン再生で空気に出ないため届かない。
+     「自分は通じるのに相手だけ通じない」はまずこれを疑う（VoiceMeeter 配線・アプリ側は正常だった）。
+     修正: mmsys.cpl → 録音 → `Voicemeeter Out B1` を既定の通信デバイスへ → ChatGPT 完全再起動
+  4. 「自分の声は相手に届くが自分だけ聞こえない」= 再生既定の Bluetooth イヤホンが
+     Windows 上は接続 OK のまま実際には鳴っていない (マルチポイント/未装着)。
+     2026-08-30 に発生。切り分けは既定デバイスへのテスト音再生
+     (`(New-Object System.Media.SoundPlayer 'C:\Windows\Media\tada.wav').PlaySync()`) が最速。
+     イヤホン再接続で解決
 - 実装: CoreAudio COM で既定4枠を取得 + VoicemeeterRemote64.dll の Remote API で
   IN1 デバイス名 / A・B / MUTE を実値取得 + `VBVMR_GetLevel` でレベル実測
 
@@ -113,3 +145,5 @@ Last synced: 2026-08-21
 - 2026-08-20: 初版作成。AI参加者収録機能（PR #8）の状況を記載
 - 2026-08-21: ChatGPT音声が認識されないときの復旧手順を追加（scripts/check-chatgpt-audio.ps1）。AI参加者機能をマージ済み・本番稼働中に更新
 - 2026-08-21: ChatGPT系アプリの役割を訂正（ChatGPT=Codex / ChatGPT Classic=音声対話。両方起動が正常）
+- 2026-08-30: 既定の通信デバイスが C920 に変わる再発事例を追記（片方向断＝相手の声だけ届かない症状シグネチャ）
+- 2026-08-30: Bluetooth イヤホンによる「自分だけ聞こえない」事例とテスト音での切り分け手順を追記

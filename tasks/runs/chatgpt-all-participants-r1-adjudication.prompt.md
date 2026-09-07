@@ -1,0 +1,3 @@
+# Astra adjudication packet after round 1
+
+Act as the A2 Astra adjudicator. Read the canonical v0 requirements, round-1 immutable report, brief, and named primary evidence. For each F-1-01..04 decide accepted/modified/rejected with concrete evidence, and give exact minimal v1 requirement changes. Resolve design choices where evidence suffices; identify any true product decision requiring user input. Do not edit files. Pay special attention to feasibility on Vercel without a new shared datastore, and whether single-owner behavior can be safely achieved with existing LiveKit participant/track facts instead of inventing atomic metadata guarantees.

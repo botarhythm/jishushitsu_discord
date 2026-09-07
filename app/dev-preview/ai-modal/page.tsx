@@ -60,6 +60,7 @@ export default function DevPreviewPage() {
     micTrack.getSettings = () => ({ deviceId: 'mic', groupId: 'g2' });
     queueMicrotask(() => {
       setRoom({
+        getActiveDevice: () => 'mic',
         localParticipant: {
           getTrackPublication: () => ({ track: { mediaStreamTrack: micTrack } }),
         },
@@ -76,8 +77,9 @@ export default function DevPreviewPage() {
         room={room as never}
         config={config}
         onPatchConfig={async (patch) => {
-          setConfig((prev) => ({ ...prev, ...patch }));
-          return true;
+          const next = { ...config, ...patch };
+          setConfig(next);
+          return { config: next, persisted: true, applied: true, updatedAt: Date.now() };
         }}
         enabled
         onChangeEnabled={() => {}}
@@ -92,7 +94,6 @@ export default function DevPreviewPage() {
           blockedMicLabel: null,
           remoteCount: 0,
         })}
-        onReconnect={() => {}}
         isRecording={false}
         onClose={() => {}}
       />
