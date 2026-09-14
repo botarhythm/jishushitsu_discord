@@ -19,7 +19,13 @@ import {
   playToneProbe,
   type DeviceOption,
 } from '@/lib/audio-devices';
-import { buildWiringPlan, matchesPlan } from '@/lib/ai-wiring-plan';
+import {
+  buildWiringPlan,
+  matchesPlan,
+  needsPlannedMicSwitch,
+  patchTouchesAiWiring,
+  recommendedConfigPatch,
+} from '@/lib/ai-wiring-plan';
 import { AiPreflightPanel } from './AiPreflightPanel';
 import { AiWiringPlanPanel, type PlanTarget } from './AiWiringPlanPanel';
 
@@ -596,19 +602,14 @@ export function AiParticipantSetupModal({
     }
   };
 
-  const applyPlanAll = async () => {
-    const patch: Partial<AiParticipantConfig> = {};
+  /**
+   * @param includeMic 通話マイクも推奨へ切り替えるか (録画中の自動適用では収録音声を変えないため false)
+   * @returns 設定の一括適用が保存競合なく反映されたか
+   */
+  const applyPlanAll = async ({ includeMic = true }: { includeMic?: boolean } = {}): Promise<boolean> => {
+    const patch = recommendedConfigPatch(plan, config);
     const results: Array<{ item: string; before: string; requested: string; after: string; result: string }> = [];
-    if (plan.source && !matchesPlan(config.sourceDeviceId, plan.source)) {
-      patch.sourceDeviceId = plan.source.deviceId;
-      patch.sourceDeviceLabel = plan.source.label;
-    }
-    if (!matchesPlan(config.sinkDeviceId, plan.sink)) {
-      patch.sinkDeviceId = plan.sink?.deviceId ?? null;
-      patch.sinkDeviceLabel = plan.sink?.label;
-    }
-    const plannedSendLocalMic = plan.mode === 'voicemeeter' ? false : true;
-    if (config.sendLocalMic !== plannedSendLocalMic) patch.sendLocalMic = plannedSendLocalMic;
+    const plannedSendLocalMic = plan.mode !== 'voicemeeter';
     const configBefore = config;
     const micBeforeId = room?.getActiveDevice('audioinput') ?? null;
     const micBeforeLabel = inputs.find((d) => d.deviceId === micBeforeId)?.label ?? micInfo?.label ?? '不明';
@@ -629,7 +630,7 @@ export function AiParticipantSetupModal({
           result: '再実行が必要',
         },
       ]);
-      return;
+      return false;
     }
     const readback = applied.persisted
       ? loadAiConfigWithStatus()
@@ -676,8 +677,23 @@ export function AiParticipantSetupModal({
         ),
       }
     );
+    if (plan.mode === 'voicemeeter') {
+      const monitorLabel = (monitorAiLocally: boolean | undefined) =>
+        monitorAiLocally === false ? 'Windowsでモニタ' : 'アプリで再生';
+      results.push({
+        item: 'ChatGPTの声の再生',
+        before: monitorLabel(configBefore.monitorAiLocally),
+        requested: monitorLabel(false),
+        after: applied.persisted && !readback.readOk ? '読取不能' : monitorLabel(latest.monitorAiLocally),
+        result: fieldResult(
+          configBefore.monitorAiLocally === false ? 'windows' : 'app',
+          'windows',
+          latest.monitorAiLocally === false ? 'windows' : 'app'
+        ),
+      });
+    }
     setPersistFailed(!applied.persisted || !readback.readOk);
-    if (plan.mic && plan.mic.deviceId !== micBeforeId) {
+    if (includeMic && plan.mic && plan.mic.deviceId !== micBeforeId) {
       const ok = await switchMic(plan.mic.deviceId);
       const afterId = room?.getActiveDevice('audioinput') ?? null;
       const afterLabel = inputs.find((d) => d.deviceId === afterId)?.label ?? '再取得できません';
@@ -694,11 +710,16 @@ export function AiParticipantSetupModal({
         before: micBeforeLabel,
         requested: plan.mic?.label ?? '対象なし',
         after: inputs.find((d) => d.deviceId === (room?.getActiveDevice('audioinput') ?? null))?.label ?? '不明',
-        result: plan.mic ? '変更不要' : '未実行',
+        result: !plan.mic
+          ? '未実行'
+          : plan.mic.deviceId === micBeforeId
+            ? '変更不要'
+            : '録画中のため未実行',
       });
     }
     setRemoteRoundtripKey(null);
     setBulkResults(results);
+    return true;
   };
 
   /**
@@ -711,11 +732,27 @@ export function AiParticipantSetupModal({
     const modalSignal = modalAbortRef.current?.signal;
     if (!modalSignal || modalSignal.aborted) return;
     void resumeAllAudioContexts();
+    // 起動時は「推奨をまとめて適用」を自動で行う。配線 (音声ソース・送出先・
+    // ローカルマイク経路・通話マイク) が変わる場合は一括適用と同じ経路で結果表を出し、
+    // 検証記録を失効させる。再生方法 (monitorAiLocally) だけの差分は検証に影響しない。
+    const autoPatch = recommendedConfigPatch(plan, config);
+    const wiringAutoChanged =
+      patchTouchesAiWiring(autoPatch) ||
+      (!isRecording && needsPlannedMicSwitch(plan, room?.getActiveDevice('audioinput') ?? null));
+    if (wiringAutoChanged) {
+      const ok = await applyPlanAll({ includeMic: !isRecording });
+      if (!ok || modalSignal.aborted) return;
+    } else if (Object.keys(autoPatch).length > 0) {
+      const result = await patchConfig(autoPatch, modalSignal);
+      if (modalSignal.aborted || !result.applied) return;
+      setPersistFailed(!result.persisted);
+    }
     // 検証は「今の配線に対して」成立していなければならない。指紋の一致で
     // 確かめるため、検証後に配線が変わっていれば (別タブ含む) 自動的に落ちる
     const currentMic = room?.getActiveDevice('audioinput') ?? null;
     const verificationKey = `${aiWiringFingerprint(config)}|mic:${currentMic ?? ''}`;
     const verified =
+      !wiringAutoChanged &&
       verifiedFp !== null &&
       verifiedFp === verificationKey &&
       browserWiringConfirmed &&

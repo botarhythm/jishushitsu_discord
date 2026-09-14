@@ -7,6 +7,7 @@ import {
   suggestSendSinkOutput,
   type DeviceOption,
 } from '@/lib/audio-devices';
+import type { AiParticipantConfig } from '@/lib/studio-participants';
 
 /**
  * この PC で「どこに何を設定すべきか」を、**現在の選択とは無関係に**
@@ -97,4 +98,50 @@ export function buildWiringPlan(inputs: DeviceOption[], outputs: DeviceOption[])
 /** 現在の選択が推奨と一致しているか。null 同士（＝「使用しない」）も一致とみなす */
 export function matchesPlan(currentId: string | null, planned: DeviceOption | null): boolean {
   return (currentId ?? null) === (planned?.deviceId ?? null);
+}
+
+/**
+ * 推奨構成に合わせるための設定差分（アプリ内で持つ設定のみ。通話マイクは含まない）。
+ * 既に一致している項目は含めないので、空なら変更不要。
+ *
+ * VoiceMeeter 推奨構成は「物理マイクは VoiceMeeter から常時 ChatGPT へ」
+ * 「ChatGPT の声は CABLE Output の『このデバイスを聴く』で常時モニタ」が前提なので、
+ * sendLocalMic と monitorAiLocally をどちらも false にする。monitorAiLocally が
+ * true のままだと、Windows のモニタとアプリの再生で ChatGPT の声が二重になる。
+ *
+ * 仮想ケーブルが見つからない (mode=unknown) ときは空を返す。デバイス名を読む権限が
+ * 無いだけでも unknown になるため、ここで送出先を null に書き換えると設定を壊す。
+ */
+export function recommendedConfigPatch(
+  plan: WiringPlan,
+  config: AiParticipantConfig
+): Partial<AiParticipantConfig> {
+  if (plan.mode === 'unknown') return {};
+  const patch: Partial<AiParticipantConfig> = {};
+  if (plan.source && !matchesPlan(config.sourceDeviceId, plan.source)) {
+    patch.sourceDeviceId = plan.source.deviceId;
+    patch.sourceDeviceLabel = plan.source.label;
+  }
+  if (!matchesPlan(config.sinkDeviceId, plan.sink)) {
+    patch.sinkDeviceId = plan.sink?.deviceId ?? null;
+    patch.sinkDeviceLabel = plan.sink?.label;
+  }
+  const plannedSendLocalMic = plan.mode !== 'voicemeeter';
+  if ((config.sendLocalMic !== false) !== plannedSendLocalMic) {
+    patch.sendLocalMic = plannedSendLocalMic;
+  }
+  if (plan.mode === 'voicemeeter' && config.monitorAiLocally !== false) {
+    patch.monitorAiLocally = false;
+  }
+  return patch;
+}
+
+/** 差分が配線（検証記録の指紋）に触れるか。触れるなら検証記録を失効させる */
+export function patchTouchesAiWiring(patch: Partial<AiParticipantConfig>): boolean {
+  return 'sourceDeviceId' in patch || 'sinkDeviceId' in patch || 'sendLocalMic' in patch;
+}
+
+/** 推奨の通話マイクへ切り替える必要があるか */
+export function needsPlannedMicSwitch(plan: WiringPlan, activeMicId: string | null): boolean {
+  return plan.mode !== 'unknown' && !!plan.mic && plan.mic.deviceId !== activeMicId;
 }

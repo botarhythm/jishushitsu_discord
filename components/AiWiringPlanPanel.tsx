@@ -77,6 +77,15 @@ export function AiWiringPlanPanel({
       value: plan.chatgptInput?.label ?? null,
       note: 'ChatGPT はここを「耳」として使う',
     },
+    ...(plan.mode === 'voicemeeter'
+      ? [
+          {
+            where: 'mmsys.cpl → 録音タブ → AI 音声ソースのプロパティ →「このデバイスを聴く」をオン',
+            value: plan.source?.label ?? null,
+            note: 'この構成ではアプリは ChatGPT の声を再生しません（二重に聞こえるのを防ぐため）。ここがオフだと ChatGPT の声が聞こえません',
+          },
+        ]
+      : []),
   ];
 
   const mismatched = appRows.filter((r) => !r.matched);
@@ -146,7 +155,7 @@ export function AiWiringPlanPanel({
 
       <p className="mt-2 text-pretty text-xs leading-relaxed text-stone-300">
         ChatGPT を再起動すると出力デバイスが戻ることがあります。
-        認識しなくなったら、まず Windows 側のこの2つを見比べてください。
+        認識しなくなったら、まず Windows 側のこの設定を見比べてください。
       </p>
     </div>
   );

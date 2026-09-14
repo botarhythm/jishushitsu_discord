@@ -47,6 +47,13 @@ import {
   type AiParticipantConfig,
   type StudioAiDescriptor,
 } from '@/lib/studio-participants';
+import {
+  buildWiringPlan,
+  needsPlannedMicSwitch,
+  patchTouchesAiWiring,
+  recommendedConfigPatch,
+} from '@/lib/ai-wiring-plan';
+import { toDeviceOption } from '@/lib/audio-devices';
 import { AutoLogoutModal } from './AutoLogoutModal';
 import { ChatPanel } from './ChatPanel';
 import { StudioChatPanel } from './StudioChatPanel';
@@ -644,7 +651,7 @@ function RoomInner({
     isAiWiringValidated(aiConfig, room.getActiveDevice('audioinput') ?? null) &&
     aiDevicePresent === true;
 
-  // 設定パネルを開いている間だけ未検証のテスト接続を許可する。通常参加と
+  // 未検証のテスト接続は設定パネルの明示操作で始めたときだけ許可する。通常参加と
   // ルーム移動後の再開は、現在の通話マイクを含む検証済み配線に限定する。
   const aiRuntimeEnabled =
     isInstructor &&
@@ -679,12 +686,71 @@ function RoomInner({
   // aiDevicePresent の非同期更新前に判定されて AI が落ちていた)。
   // 開始許可は AI の停止・配線変更・ルーム移動 (RoomInner 再マウント) で破棄される。
 
+  // パネルからの有効化は常にテスト接続の許可を立てる。起動時の推奨自動適用で
+  // 直前に検証が失効していても、描画前の古い aiQuickStartReady で許可を落とさない。
   const setAiEnabledFromSetup = useCallback(
     (next: boolean) => {
-      setAiTestRequested(next && !aiQuickStartReady);
+      setAiTestRequested(next);
       setAiEnabled(next);
     },
-    [aiQuickStartReady, setAiEnabled]
+    [setAiEnabled]
+  );
+
+  // 非同期の起動処理から最新の設定を読むための ref
+  const aiConfigRef = useRef(aiConfig);
+  useEffect(() => {
+    aiConfigRef.current = aiConfig;
+  }, [aiConfig]);
+
+  /**
+   * AI 起動時の「推奨をまとめて適用」。接続中のデバイスから推奨構成を求め、
+   * 一致していない項目だけを合わせる (設定パネルの一括適用と同じ推奨)。
+   * 配線が変わった場合は検証記録を失効させる — 検証していない配線を検証済みとして
+   * ワンクリック起動させないため。録画中は通話マイク (収録音声) を切り替えない。
+   * @returns ready: 適用後の配線が検証済みで必要なデバイスが揃っているか
+   */
+  const applyRecommendedAiWiring = useCallback(
+    async (options: { allowMicSwitch: boolean }) => {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const plan = buildWiringPlan(
+        devices.filter((d) => d.kind === 'audioinput').map(toDeviceOption),
+        devices.filter((d) => d.kind === 'audiooutput').map(toDeviceOption)
+      );
+      let config = aiConfigRef.current;
+      const patch = recommendedConfigPatch(plan, config);
+      const wiringPatched = patchTouchesAiWiring(patch);
+      if (Object.keys(patch).length > 0) {
+        const result = await handlePatchAiConfig(
+          wiringPatched ? { ...patch, validatedFingerprint: null, validation: null } : patch
+        );
+        config = result.config;
+      }
+      let micSwitched = false;
+      if (
+        options.allowMicSwitch &&
+        plan.mic &&
+        needsPlannedMicSwitch(plan, room.getActiveDevice('audioinput') ?? null)
+      ) {
+        try {
+          await room.switchActiveDevice('audioinput', plan.mic.deviceId);
+          micSwitched = room.getActiveDevice('audioinput') === plan.mic.deviceId;
+        } catch (e) {
+          console.warn('[AI] 推奨の通話マイクへ切り替えられませんでした', e);
+        }
+      }
+      const callMic = room.getActiveDevice('audioinput') ?? null;
+      const has = (kind: MediaDeviceKind, id: string | null) =>
+        !!id && devices.some((d) => d.kind === kind && d.deviceId === id);
+      return {
+        ready:
+          isAiWiringValidated(config, callMic) &&
+          has('audioinput', config.sourceDeviceId) &&
+          has('audiooutput', config.sinkDeviceId) &&
+          has('audioinput', callMic),
+        wiringChanged: wiringPatched || micSwitched,
+      };
+    },
+    [handlePatchAiConfig, room]
   );
 
   // 収録モードに入った経緯が「ダッシュボードの録画ボタン」かどうか。
@@ -728,6 +794,48 @@ function RoomInner({
    * AI 参加者の ON/OFF。設定が済んでいなければ設定画面へ誘導する。
    * 収録前に素早く出し入れできるよう、収録バーから1クリックで切り替えられる。
    */
+  /**
+   * AI の起動。まず推奨設定を自動適用し、その結果の配線が検証済みなら
+   * そのまま参加させ、そうでなければ設定画面へ誘導する。
+   */
+  const aiStartingRef = useRef(false);
+  const startAiWithRecommended = useCallback(() => {
+    if (aiStartingRef.current) return;
+    aiStartingRef.current = true;
+    void (async () => {
+      try {
+        const { ready, wiringChanged } = await applyRecommendedAiWiring({
+          allowMicSwitch: !isLocalRecording,
+        });
+        if (ready) {
+          setAiEnabled(true);
+          return;
+        }
+        // 未設定なら設定画面へ誘導する。ただし region フォールバック録画中は
+        // パネル自体が封鎖されている (開くと収録物に焼き込まれる) ので開かない。
+        // 切替できないのは「設定が済んでいないから」であって録画中だからではない、
+        // と分かる文言にする。
+        if (panelsLocked) {
+          setDeviceError(
+            '録画中は設定画面を開けません。配線設定済みの場合のみ切替できます。'
+          );
+          return;
+        }
+        if (wiringChanged) {
+          setDeviceError(
+            '推奨の音声設定を自動で適用し、配線が変わりました。設定画面で動作を確認してから ChatGPT を参加させてください。'
+          );
+        }
+        setAiSetupOpen(true);
+      } catch (e) {
+        console.error('[AI] 起動時の推奨設定の適用に失敗', e);
+        setDeviceError('音声デバイスを確認できなかったため、ChatGPT を参加させられませんでした。');
+      } finally {
+        aiStartingRef.current = false;
+      }
+    })();
+  }, [applyRecommendedAiWiring, isLocalRecording, panelsLocked, setAiEnabled, setDeviceError]);
+
   const toggleAi = useCallback(() => {
     // 録画中の切替は解禁済み (T-20260821-03)。タブ音声はゲイン 0/1 のゲートで
     // 滑らかに開閉され、AI トラックはレジストリ経由で録画中の add/remove に追従する。
@@ -736,22 +844,8 @@ function RoomInner({
       setAiEnabled(false);
       return;
     }
-    if (!aiQuickStartReady) {
-      // 未設定なら設定画面へ誘導する。ただし region フォールバック録画中は
-      // パネル自体が封鎖されている (開くと収録物に焼き込まれる) ので開かない。
-      // 切替できないのは「設定が済んでいないから」であって録画中だからではない、
-      // と分かる文言にする。
-      if (panelsLocked) {
-        setDeviceError(
-          '録画中は設定画面を開けません。配線設定済みの場合のみ切替できます。'
-        );
-        return;
-      }
-      setAiSetupOpen(true);
-      return;
-    }
-    setAiEnabled(true);
-  }, [aiEnabled, aiQuickStartReady, panelsLocked, setAiEnabled, setDeviceError]);
+    startAiWithRecommended();
+  }, [aiEnabled, setAiEnabled, startAiWithRecommended]);
 
   /**
    * ダッシュボードの「AI参加者つきで収録開始」。
@@ -760,12 +854,8 @@ function RoomInner({
    */
   const startStudioWithAi = useCallback(() => {
     enterStudio();
-    if (aiQuickStartReady) {
-      setAiEnabled(true);
-    } else {
-      setAiSetupOpen(true);
-    }
-  }, [enterStudio, aiQuickStartReady, setAiEnabled]);
+    startAiWithRecommended();
+  }, [enterStudio, startAiWithRecommended]);
 
   // ダッシュボードの録画ボタンのトグル (講師用)。
   const handleDashboardRecord = useCallback(() => {
