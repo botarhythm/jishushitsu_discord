@@ -300,7 +300,9 @@ export default function InstructorDashboard({
                 {aiError
                   ? '設定不足 / エラー'
                   : aiStatus === 'connected'
-                    ? 'AI音声を配信中'
+                    ? aiQuickStartReady
+                      ? 'AI音声を配信中'
+                      : 'AI音声を配信中（未検証）'
                     : aiStatus === 'connecting'
                       ? '接続準備中'
                       : '停止中'}

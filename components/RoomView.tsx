@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   LiveKitRoom,
-  RoomAudioRenderer,
   useRoomContext,
   useParticipants,
   useLocalParticipant,
@@ -53,7 +52,7 @@ import { ChatPanel } from './ChatPanel';
 import { StudioChatPanel } from './StudioChatPanel';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
 import { PreJoinScreen } from './PreJoinScreen';
-import { AI_LIVEKIT_IDENTITY } from '@/lib/ai/livekit-participant';
+import { CallAudioRenderer } from './CallAudioRenderer';
 
 type InitialRec = 'off' | 'audio' | 'screen' | 'both';
 
@@ -86,6 +85,9 @@ export default function RoomView(props: RoomViewProps) {
     (next: boolean) => setAiEnabledState(props.role === 'instructor' && next),
     [props.role]
   );
+  // ChatGPT の声を Windows 側で直接モニタしているか (設定は RoomInner が持つ)。
+  // 音声レンダラーは収録モード切替で再マウントさせないためこの層に置くので、値だけ持ち上げる。
+  const [aiMonitoredExternally, setAiMonitoredExternally] = useState(false);
 
   if (!joined) {
     return (
@@ -125,13 +127,16 @@ export default function RoomView(props: RoomViewProps) {
         },
       }}
     >
-      <RoomAudioRenderer />
+      <CallAudioRenderer
+        silenceOwnAi={props.role === 'instructor' && aiEnabled && aiMonitoredExternally}
+      />
       <RoomInner
         {...props}
         initialMicOn={initialMicOn}
         initialCameraOn={initialCameraOn}
         aiEnabled={aiEnabled}
         setAiEnabled={setAiEnabled}
+        setAiMonitoredExternally={setAiMonitoredExternally}
       />
     </LiveKitRoom>
   );
@@ -148,11 +153,13 @@ function RoomInner({
   onRoomChange,
   aiEnabled,
   setAiEnabled,
+  setAiMonitoredExternally,
 }: RoomViewProps & {
   initialMicOn?: boolean;
   initialCameraOn?: boolean;
   aiEnabled: boolean;
   setAiEnabled: (next: boolean) => void;
+  setAiMonitoredExternally: (monitored: boolean) => void;
 }) {
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
@@ -492,36 +499,10 @@ function RoomInner({
   } | null>(null);
 
   // 講師だけはChatGPT Classicの外部モニターとLiveKit再生が重複し得る。
-  // AIトラックの再生音量だけを0にし、録画が読むMediaStreamTrackは残す。
+  // 再生音量の制御は CallAudioRenderer が行う (録画が読むMediaStreamTrackは残す)。
   useEffect(() => {
-    const syncAiPlayback = () => {
-      const participant = room.remoteParticipants.get(AI_LIVEKIT_IDENTITY);
-      participant?.audioTrackPublications.forEach((publication) => {
-        const track = publication.track;
-        const volumeTrack = track as { setVolume?: (volume: number) => void } | undefined;
-        let ownerIdentity: string | null = null;
-        try {
-          ownerIdentity = (JSON.parse(participant.metadata ?? '{}') as { ownerIdentity?: string })
-            .ownerIdentity ?? null;
-        } catch {
-          ownerIdentity = null;
-        }
-        const shouldMuteOwnedMonitor =
-          isInstructor &&
-          aiEnabled &&
-          ownerIdentity === localParticipant.identity &&
-          aiConfig.monitorAiLocally === false;
-        volumeTrack?.setVolume?.(shouldMuteOwnedMonitor ? 0 : 1);
-      });
-    };
-    syncAiPlayback();
-    room.on(RoomEvent.TrackSubscribed, syncAiPlayback);
-    room.on(RoomEvent.ParticipantConnected, syncAiPlayback);
-    return () => {
-      room.off(RoomEvent.TrackSubscribed, syncAiPlayback);
-      room.off(RoomEvent.ParticipantConnected, syncAiPlayback);
-    };
-  }, [isInstructor, aiEnabled, localParticipant.identity, room, aiConfig.monitorAiLocally]);
+    setAiMonitoredExternally(aiConfig.monitorAiLocally === false);
+  }, [aiConfig.monitorAiLocally, setAiMonitoredExternally]);
 
   // AI 有効化時のスロット自動割当: ai トークンが未割当なら空きスロット (下段=index 2 優先) へ。
   // split のままなら 3 人用の trio へ自動切替。無効化時は ai トークンを外す。
@@ -693,13 +674,10 @@ function RoomInner({
     },
   });
 
-  useEffect(() => {
-    if (aiSetupOpen || !aiTestRequested) return;
-    queueMicrotask(() => {
-      setAiTestRequested(false);
-      setAiEnabled(false);
-    });
-  }, [aiSetupOpen, aiTestRequested, setAiEnabled]);
+  // 未検証のテスト接続は設定パネルの明示操作でだけ始まるが、パネルを閉じても止めない
+  // (以前は閉じた瞬間に停止しており、検証済みで有効化→自動で閉じる経路でも
+  // aiDevicePresent の非同期更新前に判定されて AI が落ちていた)。
+  // 開始許可は AI の停止・配線変更・ルーム移動 (RoomInner 再マウント) で破棄される。
 
   const setAiEnabledFromSetup = useCallback(
     (next: boolean) => {
@@ -754,6 +732,7 @@ function RoomInner({
     // 録画中の切替は解禁済み (T-20260821-03)。タブ音声はゲイン 0/1 のゲートで
     // 滑らかに開閉され、AI トラックはレジストリ経由で録画中の add/remove に追従する。
     if (aiEnabled) {
+      setAiTestRequested(false);
       setAiEnabled(false);
       return;
     }
