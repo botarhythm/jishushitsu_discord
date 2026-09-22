@@ -1365,7 +1365,10 @@ function RoomInner({
             {/* モバイル時のみ: ダッシュボード開閉ボタン（講師のみ） */}
             {isInstructor && (
               <button
-                onClick={() => setDashboardOpen(true)}
+                onClick={() => {
+                  setAiSetupOpen(false);
+                  setDashboardOpen(true);
+                }}
                 className="md:hidden inline-flex items-center gap-1 rounded-lg border border-stone-600 bg-stone-700 px-2.5 py-1.5 text-xs font-medium text-stone-200 hover:bg-stone-600 active:scale-95"
                 aria-label="ダッシュボードを開く"
               >
@@ -1490,6 +1493,7 @@ function RoomInner({
       {isInstructor && aiSetupOpen && (
         <AiParticipantSetupModal
           key={`room-ai-setup-${aiValidationRevision}`}
+          layout="sidebar"
           room={room}
           config={aiConfig}
           onPatchConfig={handlePatchAiConfig}
@@ -1508,6 +1512,10 @@ function RoomInner({
 
       {/* Instructor dashboard (instructor only) */}
       {isInstructor && (
+        <div
+          data-ai-setup-open={aiSetupOpen}
+          className="contents data-[ai-setup-open=true]:hidden xl:data-[ai-setup-open=true]:contents"
+        >
         <InstructorDashboard
           participants={participants}
           currentRoom={currentRoom}
@@ -1530,6 +1538,7 @@ function RoomInner({
           onRoomsStatusRefresh={refetchRoomsStatus}
           onSetParticipantMic={setParticipantMic}
         />
+        </div>
       )}
 
       {/* モバイルホスト向け警告（モバイル時のみ自動表示） */}
