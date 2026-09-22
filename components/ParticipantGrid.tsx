@@ -5,15 +5,13 @@ import {
   VideoTrack,
   useTracks,
   useParticipants,
-  useRoomContext,
   isTrackReference,
 } from '@livekit/components-react';
 import type { TrackReference } from '@livekit/components-react';
 import { Track, Participant } from 'livekit-client';
 import { ParticipantMetadata, RoomName } from '@/lib/types';
 import { isAiLiveKitIdentity } from '@/lib/ai/livekit-participant';
-import { AI_PARTICIPANT_ID, useRemoteAiTile } from '@/hooks/useAiParticipant';
-import { aiAudioTrackName, type AiTileState } from '@/lib/studio-participants';
+import type { AiTileState } from '@/lib/studio-participants';
 import { AiEnergyOrb } from './AiEnergyOrb';
 
 export interface InstructorActionContext {
@@ -41,18 +39,7 @@ const TILE_ASPECT = 4 / 3;
 const TILE_GAP = 8;
 
 export function ParticipantGrid({ aiTile, ...props }: ParticipantGridProps) {
-  const room = useRoomContext();
-  const participants = useParticipants();
-  const aiParticipant = participants.find((p) => isAiLiveKitIdentity(p.identity));
-  const remoteAiTile = useRemoteAiTile(room, aiParticipant ? {
-    id: AI_PARTICIPANT_ID,
-    ownerIdentity: aiParticipant.identity,
-    trackName: aiAudioTrackName(AI_PARTICIPANT_ID),
-    displayName: aiParticipant.name?.trim() || 'ChatGPT',
-    avatar: '🤖',
-    providerKind: 'desktop',
-  } : null);
-  const orb = aiTile ?? remoteAiTile;
+  const orb = aiTile;
 
   return (
     <div className="relative h-full min-h-0 w-full">

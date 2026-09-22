@@ -36,7 +36,8 @@ import { ControlBar } from './ControlBar';
 import { StudioStage, AudienceStrip, type StudioLayout, STUDIO_LAYOUT_SLOTS, MAX_STUDIO_SLOTS } from './StudioStage';
 import { StudioBar } from './StudioBar';
 import { AiParticipantSetupModal } from './AiParticipantSetupModal';
-import { useAiParticipant, useRemoteAiTile, AI_PARTICIPANT_ID } from '@/hooks/useAiParticipant';
+import { useAiParticipant, AI_PARTICIPANT_ID } from '@/hooks/useAiParticipant';
+import { useRoomAiTile } from '@/hooks/useRoomAiTile';
 import {
   aiSlotToken,
   isAiSlotToken,
@@ -1012,10 +1013,9 @@ function RoomInner({
     };
   }, [room, localParticipant]);
 
-  // リモート側 (非ホスト参加者) の AI タイル状態。
-  // 配信された descriptor から購読トラック (ownerIdentity + trackName 完全一致) を解決し、
-  // そのトラックへのローカル RMS で speaking を判定する (追加シグナリング不要)。
-  const remoteAiTile = useRemoteAiTile(room, remoteStudio?.ai ?? null);
+  // 収録ホスト以外のPCで起動されたAIも、ルームの参加者から解決する。
+  // オーブはStudioStage内に描画するため、どのPCのクロップ録画にも含まれる。
+  const roomAiTile = useRoomAiTile(aiTile);
 
   // ── チャットUI / デバイス設定UI ──
   const [chatUnread, setChatUnread] = useState(0);
@@ -1232,8 +1232,8 @@ function RoomInner({
                 slotTokens={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
                 showNameplates={showNameplates}
                 stageRef={studioStageRef}
-                aiTiles={aiTile ? { [AI_PARTICIPANT_ID]: aiTile } : undefined}
-                aiOrb={aiTile}
+                aiTiles={roomAiTile ? { [AI_PARTICIPANT_ID]: roomAiTile } : undefined}
+                aiOrb={roomAiTile}
                 onSpotlight={(token) => changeStudioSlot(0, token)}
               />
             </div>
@@ -1409,11 +1409,11 @@ function RoomInner({
                   )}
                   showNameplates={remoteStudio.showNameplates}
                   aiTiles={
-                    remoteAiTile && remoteStudio.ai
-                      ? { [remoteStudio.ai.id]: remoteAiTile }
+                    roomAiTile
+                      ? { [AI_PARTICIPANT_ID]: roomAiTile }
                       : undefined
                   }
-                  aiOrb={remoteAiTile}
+                  aiOrb={roomAiTile}
                 />
               </div>
               {remoteStudio.showAudience && remoteStudio.layout !== 'spotlight-strip' && (
@@ -1427,7 +1427,7 @@ function RoomInner({
             </div>
           ) : (
             <ParticipantGrid
-              aiTile={aiTile}
+              aiTile={roomAiTile}
               focused={focusedParticipant}
               onFocus={setFocusedParticipant}
               instructorContext={
