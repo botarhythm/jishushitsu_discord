@@ -356,6 +356,8 @@ function RoomInner({
     // 単一取り込みポリシー: 通話音声は全員分を LiveKit の明示トラックから録る。
     // RoomAudioRenderer のタブ再生を同時に混ぜると人間・AIとも二重になるため常時除外する。
     excludeTabAudio: true,
+    // LiveKitから人間・AIの全音声を取得するため、OS側のタブ音声ループバックは不要。
+    captureTabAudio: false,
   });
   /**
    * サイドパネル (チャット・AI設定) を開閉できるか。

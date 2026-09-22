@@ -88,6 +88,8 @@ interface UseLocalRecordingOptions {
    * これにより録画中の AI 参加者 ON/OFF を解禁できる。
    */
   excludeTabAudio?: boolean;
+  /** false: タブ音声を取得しない。全音声を明示トラックから録る通話で使う。 */
+  captureTabAudio?: boolean;
 }
 
 interface RemoteAudioNode {
@@ -134,6 +136,7 @@ export function useLocalRecording({
   onRegionCaptureUnavailable,
   extraAudioTracks = null,
   excludeTabAudio = false,
+  captureTabAudio = true,
 }: UseLocalRecordingOptions = {}) {
   const [isRecording, setIsRecording] = useState(false);
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -263,7 +266,9 @@ export function useLocalRecording({
     return r.finalizePromise;
   }, []);
 
-  stopRef.current = stop;
+  useEffect(() => {
+    stopRef.current = stop;
+  }, [stop]);
 
   // 録画中のタブ閉じ/リロードを警告する。IndexedDB のバックアップから復旧はできるが、
   // 手間がかかるうえ最後の1秒分は欠けるため、まず止めるよう促す。
@@ -329,7 +334,7 @@ export function useLocalRecording({
     try {
       displayStream = await navigator.mediaDevices.getDisplayMedia({
         video: videoConstraints,
-        audio: true,
+        audio: captureTabAudio,
         // 非標準だが Chromium 系で有効。型定義に無いので as 経由で付与。
         // preferCurrentTab: true → Chrome は「このタブを共有しますか?」確認のみを表示し、
         // 自習室タブの描画内容だけ (ツールバー・タブ帯・メニュー・他タブを除く) を直接録る。
@@ -684,9 +689,11 @@ export function useLocalRecording({
     }
 
     const candidates = [
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
+      // コーデックを固定せず、ブラウザの既定エンコーダーを使う。
+      // AI音声・通話・録画を同じPCで処理する際にVP9を強制しない。
       'video/webm',
+      'video/webm;codecs=vp8,opus',
+      'video/webm;codecs=vp9,opus',
       'video/mp4',
     ];
     const mimeType =
@@ -861,7 +868,7 @@ export function useLocalRecording({
       // 成功・失敗・早期 return のいずれでも starting を解除する
       finishStarting();
     }
-  }, [includeMicrophone, room, onRegionCaptureUnavailable]);
+  }, [includeMicrophone, room, onRegionCaptureUnavailable, captureTabAudio, cleanup, downloadBlob]);
 
   return {
     isRecording,
