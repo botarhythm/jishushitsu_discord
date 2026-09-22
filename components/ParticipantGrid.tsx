@@ -5,12 +5,16 @@ import {
   VideoTrack,
   useTracks,
   useParticipants,
+  useRoomContext,
   isTrackReference,
 } from '@livekit/components-react';
 import type { TrackReference } from '@livekit/components-react';
 import { Track, Participant } from 'livekit-client';
 import { ParticipantMetadata, RoomName } from '@/lib/types';
 import { isAiLiveKitIdentity } from '@/lib/ai/livekit-participant';
+import { AI_PARTICIPANT_ID, useRemoteAiTile } from '@/hooks/useAiParticipant';
+import { aiAudioTrackName, type AiTileState } from '@/lib/studio-participants';
+import { AiEnergyOrb } from './AiEnergyOrb';
 
 export interface InstructorActionContext {
   currentRoom: RoomName;
@@ -21,6 +25,7 @@ interface ParticipantGridProps {
   focused: string | null;
   onFocus: (id: string | null) => void;
   instructorContext?: InstructorActionContext;
+  aiTile?: AiTileState | null;
 }
 
 interface TileItem {
@@ -35,7 +40,37 @@ const TILE_ASPECT = 4 / 3;
 /** タイル間ギャップ(px)。Tailwind gap-2 = 0.5rem = 8px と一致させる。 */
 const TILE_GAP = 8;
 
-export function ParticipantGrid({ focused, onFocus, instructorContext }: ParticipantGridProps) {
+export function ParticipantGrid({ aiTile, ...props }: ParticipantGridProps) {
+  const room = useRoomContext();
+  const participants = useParticipants();
+  const aiParticipant = participants.find((p) => isAiLiveKitIdentity(p.identity));
+  const remoteAiTile = useRemoteAiTile(room, aiParticipant ? {
+    id: AI_PARTICIPANT_ID,
+    ownerIdentity: aiParticipant.identity,
+    trackName: aiAudioTrackName(AI_PARTICIPANT_ID),
+    displayName: aiParticipant.name?.trim() || 'ChatGPT',
+    avatar: '🤖',
+    providerKind: 'desktop',
+  } : null);
+  const orb = aiTile ?? remoteAiTile;
+
+  return (
+    <div className="relative h-full min-h-0 w-full">
+      <HumanParticipantGrid {...props} />
+      {orb && (
+        <div className="pointer-events-none absolute inset-0" data-testid="room-ai-orb">
+          <AiEnergyOrb state={orb} />
+          <span className="absolute inset-x-0 bottom-[3%] text-center text-sm font-medium text-sky-100 drop-shadow-md">
+            {orb.info.displayName}
+            {orb.visualState === 'error' && ' — 音声ソース切断'}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HumanParticipantGrid({ focused, onFocus, instructorContext }: ParticipantGridProps) {
   const tracks = useTracks(
     [Track.Source.ScreenShare, Track.Source.Camera],
     { onlySubscribed: false }
@@ -47,11 +82,13 @@ export function ParticipantGrid({ focused, onFocus, instructorContext }: Partici
     const seen = new Set<string>();
     for (const t of tracks) {
       if (!isTrackReference(t)) continue;
+      if (isAiLiveKitIdentity(t.participant.identity)) continue;
       const src = t.source === Track.Source.ScreenShare ? 'screen' : 'camera';
       list.push({ participant: t.participant, trackRef: t, source: src });
       seen.add(`${t.participant.identity}:${src}`);
     }
     for (const p of participants) {
+      if (isAiLiveKitIdentity(p.identity)) continue;
       const hasCam = seen.has(`${p.identity}:camera`);
       const hasScreen = seen.has(`${p.identity}:screen`);
       if (!hasCam && !hasScreen) {

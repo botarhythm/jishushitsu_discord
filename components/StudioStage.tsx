@@ -218,7 +218,7 @@ export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTi
 
         {/* AI のエネルギー球。スロットを使わず中央に重ねるため、
             人物側のレイアウトと縦横比はそのまま保たれる。 */}
-        {aiOrb && spec.kind !== 'spotlight' && (
+        {aiOrb && (
           <div className="pointer-events-none absolute inset-0">
             {/* キャンバスはステージ全体。球の位置と大きさは描画側の比率で決めるので、
                 コロナやブルームが要素の矩形で切り取られない。 */}

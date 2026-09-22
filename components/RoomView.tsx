@@ -1425,6 +1425,7 @@ function RoomInner({
             </div>
           ) : (
             <ParticipantGrid
+              aiTile={aiTile}
               focused={focusedParticipant}
               onFocus={setFocusedParticipant}
               instructorContext={
