@@ -61,6 +61,8 @@ import { StudioChatPanel } from './StudioChatPanel';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
 import { PreJoinScreen } from './PreJoinScreen';
 import { CallAudioRenderer } from './CallAudioRenderer';
+import { CallDiagnosticsBar } from './CallDiagnosticsBar';
+import { CallDiagnostics } from '@/lib/call-diagnostics';
 
 type InitialRec = 'off' | 'audio' | 'screen' | 'both';
 
@@ -170,6 +172,8 @@ function RoomInner({
   setAiMonitoredExternally: (monitored: boolean) => void;
 }) {
   const room = useRoomContext();
+  const callDiagnostics = useMemo(() => new CallDiagnostics(room), [room]);
+  useEffect(() => callDiagnostics.start(), [callDiagnostics]);
   const { localParticipant } = useLocalParticipant();
   const participants = useParticipants();
 
@@ -1206,10 +1210,16 @@ function RoomInner({
       });
   }, [room, exportChatIfAny]);
 
+  useEffect(() => {
+    callDiagnostics.setMode({ ai: aiEnabled, videoRecording: isLocalRecording,
+      audioRecording: isRecording, studio: studioMode });
+  }, [callDiagnostics, aiEnabled, isLocalRecording, isRecording, studioMode]);
+
   // ── 収録モード表示（講師のみ）。通常レイアウトを丸ごと差し替える ──
   if (isInstructor && studioMode) {
     return (
-      <div className="relative h-dvh w-screen overflow-hidden bg-black">
+      <div className="relative flex h-dvh w-screen flex-col overflow-hidden bg-black">
+        <CallDiagnosticsBar diagnostics={callDiagnostics} />
         <InAppBrowserWarning />
         <StartAudioBanner />
         {deviceError && (
@@ -1224,7 +1234,7 @@ function RoomInner({
         )}
         {/* 収録ステージ列。サイドパネルは flex 兄弟ではなく position: fixed の
             オーバーレイなので、開閉してもこの列 (= クロップ対象) は一切動かない。 */}
-        <div className="flex h-full w-full">
+        <div className="flex min-h-0 w-full flex-1">
           <div className="flex h-full min-w-0 flex-1 flex-col">
             <div className="min-h-0 flex-1">
               <StudioStage
@@ -1346,6 +1356,7 @@ function RoomInner({
     <div className={`flex h-dvh overflow-hidden theme-${currentRoom}`}>
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0">
+        <CallDiagnosticsBar diagnostics={callDiagnostics} />
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2 bg-stone-800 border-b border-stone-700">
           <div className="flex items-center gap-3">
