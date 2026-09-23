@@ -40,6 +40,19 @@ export type CaptureExclusionMode = 'element' | 'region';
  */
 const TAB_GATE_TIME_CONSTANT = 0.02;
 
+/**
+ * 収録ステージの寸法監視を「録画開始 (MediaRecorder.start) 直後」から
+ * どれだけ静観するか (ms)。
+ *
+ * 録画開始の前後には、こちらが操作していないレイアウト変動が必ず入る:
+ * Chrome の「このタブを共有しています」バーが出てビューポート高が縮み、
+ * ステージ幅 (max-width: calc(100dvh * 16 / 9)) がそれに追従する。
+ * この分を「録画中にステージが伸縮した」と読むと、正常な収録でも
+ * 破損警告が出る (誤検知)。start 直後のこの窓の中の変化は基準値の
+ * 更新として扱い、警告は出さずログだけ残す。
+ */
+const CROP_SIZE_SETTLE_MS = 1000;
+
 interface QualityPreset {
   width: number;
   height: number;
@@ -174,6 +187,12 @@ export function useLocalRecording({
   const startingRef = useRef(false);
   /** 録画中にクロップ対象が伸縮していないか監視する (解像度変動=ファイル破損の検知) */
   const cropResizeObserverRef = useRef<ResizeObserver | null>(null);
+  /**
+   * 上の監視の基準寸法を確定させる (= 警告を有効にする) 関数。
+   * MediaRecorder.start() の直後に呼ぶ。それ以前のレイアウト変動は
+   * 収録ファイルの宣言解像度が決まる前の出来事なので警告対象にしない。
+   */
+  const armCropSizeGuardRef = useRef<(() => void) | null>(null);
 
   const resourcesRef = useRef<RecordingResources | null>(null);
   const stopRef = useRef<() => Promise<Blob | null>>(() => Promise.resolve(null));
@@ -222,6 +241,7 @@ export function useLocalRecording({
   const cleanup = useCallback(() => {
     cropResizeObserverRef.current?.disconnect();
     cropResizeObserverRef.current = null;
+    armCropSizeGuardRef.current = null;
     const r = resourcesRef.current;
     if (!r) return;
     r.detachListeners();
@@ -366,6 +386,13 @@ export function useLocalRecording({
     // 黙って録画していた。その経路では収録バー・チャット・各種モーダル・講師向け情報が
     // 丸ごと録画に入り、収録物として使えないものが出来上がる。要求が満たせないなら
     // 録画を開始しない (Codex/Gemini 両レビュー 2026-08-21 の必須条件)。
+
+    // 前回の録画のステージ寸法監視が残っていると、cropTarget 無しの録画で
+    // 古い要素を基準に警告してしまう。この録画の分をこれから張り直す。
+    cropResizeObserverRef.current?.disconnect();
+    cropResizeObserverRef.current = null;
+    armCropSizeGuardRef.current = null;
+
     const cropRequested = cropTarget !== undefined && cropTarget !== null;
     const cropEl = typeof cropTarget === 'function' ? cropTarget() : cropTarget;
     if (cropRequested) {
@@ -434,19 +461,41 @@ export function useLocalRecording({
       // 出力解像度が途中で変わり、WebM のトラック宣言寸法と実フレームが食い違う
       // 壊れたファイルになり得る。UI 側の封鎖をすり抜けた場合 (ウィンドウリサイズ、
       // OS の表示倍率変更、想定外の UI) の最後の防波堤として検知し、警告する。
-      cropResizeObserverRef.current?.disconnect();
-      const initial = cropEl.getBoundingClientRect();
-      let warned = false;
-      const observer = new ResizeObserver((entries) => {
-        if (warned) return;
-        const r = entries[0]?.contentRect;
-        if (!r) return;
+      //
+      // 基準寸法をここ (クロップ確定時) で取ってはいけない。この直後には
+      // 共有バーの出現によるビューポート高の変化が必ず来るうえ、マイク取得や
+      // AudioContext 構築の待ちを挟むので、MediaRecorder が動き出すまでには
+      // まだ間がある。まだ何も録っていない時点の伸縮を警告しても誤検知にしか
+      // ならない。基準の確定は recorder.start() 直後 (armCropSizeGuardRef) まで
+      // 遅らせ、さらにそこから CROP_SIZE_SETTLE_MS だけは基準の追従に充てる。
+      const guard: { base: { w: number; h: number } | null; armedAt: number; warned: boolean } = {
+        base: null,
+        armedAt: 0,
+        warned: false,
+      };
+      const observer = new ResizeObserver(() => {
+        // base が null の間 (= 録画開始前) は監視を素通しする
+        if (!guard.base || guard.warned) return;
+        // entries の contentRect (パディング内側) ではなく基準と同じ box を取り直す
+        const r = cropEl.getBoundingClientRect();
         // 端数の揺れは無視する (1px 未満の再レイアウト)
-        if (Math.abs(r.width - initial.width) < 1 && Math.abs(r.height - initial.height) < 1) return;
-        warned = true;
+        if (Math.abs(r.width - guard.base.w) < 1 && Math.abs(r.height - guard.base.h) < 1) return;
+        const from = guard.base;
+        const to = { w: r.width, h: r.height };
+        if (performance.now() - guard.armedAt < CROP_SIZE_SETTLE_MS) {
+          // 整定窓の中。共有バー由来の追従とみなして基準を更新するだけに留める。
+          // 見逃しの可能性は残るので、事後に追えるようログは残す。
+          guard.base = to;
+          console.warn(
+            '[useLocalRecording] 録画開始直後に収録ステージの寸法が変化しました (整定とみなし基準を更新)',
+            { from, to }
+          );
+          return;
+        }
+        guard.warned = true;
         console.error(
           '[useLocalRecording] 録画中に収録ステージの寸法が変化しました',
-          { from: { w: initial.width, h: initial.height }, to: { w: r.width, h: r.height } }
+          { from, to }
         );
         setError(
           '録画中に収録範囲のサイズが変わりました。この収録ファイルは編集ソフトで正しく読み込めない可能性があります。録画を停止して録り直すことを強くおすすめします。'
@@ -454,6 +503,16 @@ export function useLocalRecording({
       });
       observer.observe(cropEl);
       cropResizeObserverRef.current = observer;
+      armCropSizeGuardRef.current = () => {
+        const r = cropEl.getBoundingClientRect();
+        guard.base = { w: r.width, h: r.height };
+        guard.armedAt = performance.now();
+        guard.warned = false;
+        console.info('[useLocalRecording] 収録ステージの寸法監視を開始', {
+          w: r.width,
+          h: r.height,
+        });
+      };
     }
 
     let micStream: MediaStream | null = null;
@@ -862,6 +921,10 @@ export function useLocalRecording({
     recordSessionEvent({ type: "recording_started" });
     health.start();
     recorder.start(1000);
+    // 収録ステージの寸法監視はここから。これより前の伸縮 (共有バーの出現による
+    // ビューポート変化など) は収録ファイルの宣言解像度が決まる前の出来事なので
+    // 警告対象にしない。cropTarget を渡していない録画では null (監視自体が無い)。
+    armCropSizeGuardRef.current?.();
     setStartedAt(Date.now());
     setIsRecording(true);
     } finally {
