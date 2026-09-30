@@ -11,7 +11,8 @@ import {
   useTracks,
   isTrackReference,
 } from '@livekit/components-react';
-import { AudioPresets, Track, RoomEvent } from 'livekit-client';
+import { Track, RoomEvent } from 'livekit-client';
+import { createCallRoomOptions } from '@/lib/call-media-options';
 import { downloadChatHistory } from '@/lib/chat-export';
 import { describeMediaDeviceFailure, isPermissionFailure } from '@/lib/media-device-error';
 import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS, mergeParticipantMetadata } from '@/lib/types';
@@ -88,6 +89,7 @@ export default function RoomView(props: RoomViewProps) {
   const [joined, setJoined] = useState(false);
   const [initialMicOn, setInitialMicOn] = useState(true);
   const [initialCameraOn, setInitialCameraOn] = useState(true);
+  const roomOptions = useMemo(() => createCallRoomOptions(), []);
   // ルーム移動では RoomInner が再マウントされるため、AI の利用意図だけをこの層で保持する。
   // ページ退出や再ログインでは初期値 false に戻り、保存済み設定だけで自動起動しない。
   const [aiEnabled, setAiEnabledState] = useState(false);
@@ -121,21 +123,7 @@ export default function RoomView(props: RoomViewProps) {
       audio={initialMicOn}
       video={initialCameraOn}
       className="h-dvh flex flex-col bg-stone-900"
-      options={{
-        adaptiveStream: true,
-        dynacast: true,
-        publishDefaults: {
-          // DTX (無音時の送信停止) を切る。Opus の VAD は小さめの声やライン入力を
-          // 「無音」と誤判定して語頭・語尾を削り、これが収録音声の「飛び飛び」の
-          // 主因になる。収録を前提とするアプリなので、無音時の帯域より連続性を取る。
-          dtx: false,
-          // RED (冗長送信) は維持。パケットロス時の欠落を埋める。
-          red: true,
-          // 既定の music (48kbps) から引き上げる。ポッドキャスト収録の素材として
-          // 使うため、話し声の帯域を削らない。
-          audioPreset: AudioPresets.musicHighQuality,
-        },
-      }}
+      options={roomOptions}
     >
       <CallAudioRenderer
         silenceOwnAi={props.role === 'instructor' && aiEnabled && aiMonitoredExternally}

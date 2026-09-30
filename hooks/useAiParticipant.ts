@@ -17,6 +17,7 @@ import { ChatGptInputMixer } from '@/lib/ai/chatgpt-input-mixer';
 import { RmsSpeakingDetector } from '@/lib/ai/speaking-detector';
 import { recordSessionEvent } from '@/lib/session-clock';
 import { AI_LIVEKIT_IDENTITY } from '@/lib/ai/livekit-participant';
+import { createCallRoomOptions } from '@/lib/call-media-options';
 
 /** AI 参加者の固定 ID。再接続・トラック差し替えでも不変（要件§26） */
 export const AI_PARTICIPANT_ID = 'chatgpt';
@@ -248,7 +249,7 @@ export function useAiParticipant({
           return;
         }
 
-        const aiRoom = new LiveKitRoom();
+        const aiRoom = new LiveKitRoom(createCallRoomOptions());
         ownedAiRoom = aiRoom;
         aiRoomRef.current = aiRoom;
         aiRoom.on(RoomEvent.Reconnecting, () => {

@@ -1,11 +1,10 @@
 'use client';
 
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import {
   VideoTrack,
   useTracks,
   useParticipants,
-  useRoomContext,
   isTrackReference,
 } from '@livekit/components-react';
 import type { TrackReference } from '@livekit/components-react';
@@ -18,7 +17,6 @@ import {
 import { parseSlotToken, type AiTileState } from '@/lib/studio-participants';
 import { AiAvatarTile } from './AiAvatarTile';
 import { AiEnergyOrb } from './AiEnergyOrb';
-import { configureStudioVideoPlayout } from '@/lib/studio-video-playout';
 
 // 後方互換 re-export（従来 StudioStage からインポートしていたモジュール向け）
 export {
@@ -60,8 +58,6 @@ interface StudioStageProps {
  *   未知のレイアウトIDは split にフォールバックし、決して空ステージにしない。
  */
 export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTiles, aiOrb, onSpotlight }: StudioStageProps) {
-  const room = useRoomContext();
-  useEffect(() => configureStudioVideoPlayout(room), [room]);
   const tracks = useTracks([Track.Source.Camera, Track.Source.ScreenShare], {
     onlySubscribed: false,
   });
