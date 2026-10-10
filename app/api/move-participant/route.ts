@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RoomServiceClient, DataPacket_Kind } from 'livekit-server-sdk';
 import { requireInstructor } from '@/lib/auth-guard';
+import { isRoomName, livekitRoomFor } from '@/lib/space';
 
 interface MoveParticipantRequest {
   participantIdentity: string;
@@ -15,6 +16,9 @@ export async function POST(request: NextRequest) {
   try {
     const body: MoveParticipantRequest = await request.json();
     const { participantIdentity, targetRoomName, currentRoomName } = body;
+    if (!participantIdentity || !isRoomName(targetRoomName) || !isRoomName(currentRoomName)) {
+      return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+    }
 
     const apiKey = process.env.LIVEKIT_API_KEY!;
     const apiSecret = process.env.LIVEKIT_API_SECRET!;
@@ -37,7 +41,8 @@ export async function POST(request: NextRequest) {
     const encoder = new TextEncoder();
     const data = encoder.encode(message);
 
-    await roomService.sendData(currentRoomName, data, DataPacket_Kind.RELIABLE, {
+    // targetRoom は論理名のまま送る (受け取った側が /api/token で自分の回の部屋へ入り直す)
+    await roomService.sendData(livekitRoomFor(auth.session.space, currentRoomName), data, DataPacket_Kind.RELIABLE, {
       destinationIdentities: [participantIdentity],
     });
 

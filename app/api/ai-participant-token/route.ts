@@ -3,16 +3,12 @@ import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import { requireInstructor } from '@/lib/auth-guard';
 import { livekitIdentityFor } from '@/lib/session';
 import { AI_LIVEKIT_IDENTITY, AI_PARTICIPANT_METADATA } from '@/lib/ai/livekit-participant';
-import { ROOM_LABELS, type RoomName } from '@/lib/types';
+import { isRoomName, livekitRoomFor } from '@/lib/space';
 
 interface TokenBody {
   roomName?: string;
   displayName?: string;
   avatar?: string;
-}
-
-function isRoomName(value: string): value is RoomName {
-  return Object.prototype.hasOwnProperty.call(ROOM_LABELS, value);
 }
 
 export async function POST(request: NextRequest) {
@@ -33,8 +29,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
   }
 
+  const livekitRoom = livekitRoomFor(auth.session.space, roomName);
   const roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
-  const participants = await roomService.listParticipants(roomName).catch(() => null);
+  const participants = await roomService.listParticipants(livekitRoom).catch(() => null);
   if (!participants) {
     return NextResponse.json({ error: 'ルーム状態を確認できません' }, { status: 503 });
   }
@@ -62,7 +59,7 @@ export async function POST(request: NextRequest) {
   });
   token.addGrant({
     roomJoin: true,
-    room: roomName,
+    room: livekitRoom,
     canPublish: true,
     canSubscribe: false,
     canPublishData: false,

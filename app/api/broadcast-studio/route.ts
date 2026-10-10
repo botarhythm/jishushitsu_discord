@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RoomServiceClient } from 'livekit-server-sdk';
 import { requireInstructor } from '@/lib/auth-guard';
+import { isRoomName, livekitRoomFor } from '@/lib/space';
 import { livekitIdentityFor } from '@/lib/session';
 import { STUDIO_LAYOUTS } from '@/lib/studio-layouts';
 import { AI_LIVEKIT_IDENTITY } from '@/lib/ai/livekit-participant';
@@ -117,9 +118,10 @@ export async function POST(request: NextRequest) {
     // 他人の音声を AI として扱わせられる。
     const hostIdentity = livekitIdentityFor(auth.session);
 
-    if (!roomName || typeof roomName !== 'string' || roomName.length > 64) {
-      return NextResponse.json({ error: 'roomName が必要です' }, { status: 400 });
+    if (!isRoomName(roomName)) {
+      return NextResponse.json({ error: 'roomName が不正です' }, { status: 400 });
     }
+    const livekitRoom = livekitRoomFor(auth.session.space, roomName);
 
     const isV2 = typeof body.schemaVersion === 'number';
     if (isV2) {
@@ -158,7 +160,7 @@ export async function POST(request: NextRequest) {
     let existing: Record<string, unknown> = {};
     let existingRevision: number | null = null;
     try {
-      const rooms = await roomService.listRooms([roomName]);
+      const rooms = await roomService.listRooms([livekitRoom]);
       const current = rooms[0]?.metadata;
       if (current) {
         existing = JSON.parse(current) as Record<string, unknown>;
@@ -203,7 +205,7 @@ export async function POST(request: NextRequest) {
         : null,
     });
 
-    await roomService.updateRoomMetadata(roomName, metadata);
+    await roomService.updateRoomMetadata(livekitRoom, metadata);
 
     return NextResponse.json({ success: true });
   } catch (error) {

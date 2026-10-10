@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RoomServiceClient, DataPacket_Kind } from 'livekit-server-sdk';
 import { requireInstructor } from '@/lib/auth-guard';
+import { isRoomName, livekitRoomFor } from '@/lib/space';
 
 interface SetParticipantMicRequest {
   participantIdentity: string;
@@ -26,7 +27,7 @@ export async function POST(request: NextRequest) {
     const body: SetParticipantMicRequest = await request.json();
     const { participantIdentity, roomName, enabled } = body;
 
-    if (!participantIdentity || !roomName) {
+    if (!participantIdentity || !isRoomName(roomName)) {
       return NextResponse.json(
         { error: 'participantIdentity と roomName が必要です' },
         { status: 400 }
@@ -51,7 +52,7 @@ export async function POST(request: NextRequest) {
     const encoder = new TextEncoder();
     const data = encoder.encode(message);
 
-    await roomService.sendData(roomName, data, DataPacket_Kind.RELIABLE, {
+    await roomService.sendData(livekitRoomFor(auth.session.space, roomName), data, DataPacket_Kind.RELIABLE, {
       destinationIdentities: [participantIdentity],
     });
 

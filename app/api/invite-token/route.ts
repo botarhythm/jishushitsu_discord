@@ -1,57 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireInstructor } from '@/lib/auth-guard';
-import { issueInviteToken, type InitialRecMode } from '@/lib/invite-token';
-import type { UserRole } from '@/lib/types';
+import {
+  DEFAULT_INVITE_TTL_HOURS,
+  isInviteTtlHours,
+  issueInviteToken,
+} from '@/lib/invite-token';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 interface IssueBody {
-  role?: string;
-  initialRec?: string;
-}
-
-function isRole(v: unknown): v is UserRole {
-  return v === 'instructor' || v === 'student';
-}
-
-function isInitialRec(v: unknown): v is InitialRecMode {
-  return v === 'off' || v === 'audio' || v === 'screen' || v === 'both';
+  ttlHours?: unknown;
 }
 
 /**
- * 招待リンクを発行する。
+ * 招待リンクを発行する (Discord 講師セッション必須)。
  *
- * 2 つの認証経路:
- *   - Discord 講師セッション (Cookie) — 既存
- *   - サーバー間呼び出し (X-Service-Secret ヘッダー) — EchoNote 連携用
- *
- * サーバー間呼び出しでは role を任意に指定可能 (instructor / student)。
- * Discord 経由は student 固定 (講師が受講生を招待するシナリオ)。
+ * - role は student 固定 (講師権限をリンクで共有しない)
+ * - リンクは講師が今いる回 (セッションの space) に固定される
+ * - 期限は body.ttlHours で選ぶ (INVITE_TTL_CHOICES_HOURS のいずれか。既定 24h)
  */
 export async function POST(request: NextRequest) {
-  const serviceSecret = process.env.SERVICE_SHARED_SECRET;
-  const headerSecret = request.headers.get('x-service-secret');
-  const isS2S = !!serviceSecret && !!headerSecret && headerSecret === serviceSecret;
+  const auth = await requireInstructor();
+  if (!auth.ok) return auth.response;
 
-  let role: UserRole = 'student';
-  let initialRec: InitialRecMode = 'off';
-
-  if (isS2S) {
-    const body: IssueBody = await request.json().catch(() => ({}));
-    if (isRole(body.role)) role = body.role;
-    if (isInitialRec(body.initialRec)) initialRec = body.initialRec;
-  } else {
-    const auth = await requireInstructor();
-    if (!auth.ok) return auth.response;
-    // 講師セッションからの発行は student のみ (instructor を共有しない)
-    role = 'student';
+  const body: IssueBody = await request.json().catch(() => ({}));
+  if (body.ttlHours !== undefined && !isInviteTtlHours(body.ttlHours)) {
+    return NextResponse.json({ error: 'ttlHours が不正です' }, { status: 400 });
   }
+  const ttlHours = isInviteTtlHours(body.ttlHours) ? body.ttlHours : DEFAULT_INVITE_TTL_HOURS;
+  const space = auth.session.space ?? '';
 
   const { token, expiresAt } = await issueInviteToken({
-    roomName: 'main',
-    role,
-    initialRec,
+    role: 'student',
+    space,
+    ttlHours,
   });
   const origin = request.nextUrl.origin;
   // openExternalBrowser=1 は LINE アプリ内ブラウザの公式パラメータで、リンクを
@@ -61,5 +44,5 @@ export async function POST(request: NextRequest) {
   // クエリを読まない)。
   const url = `${origin}/join/${token}?openExternalBrowser=1`;
 
-  return NextResponse.json({ url, token, expiresAt, role, initialRec });
+  return NextResponse.json({ url, expiresAt, ttlHours, space });
 }

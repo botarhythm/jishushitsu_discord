@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { RoomServiceClient } from 'livekit-server-sdk';
 import { requireSession } from '@/lib/auth-guard';
 import { RoomName, BREAKOUT_ROOMS } from '@/lib/types';
+import { livekitRoomFor } from '@/lib/space';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -26,7 +27,9 @@ export async function GET(_request: NextRequest) {
     const roomStatuses = await Promise.all(
       rooms.map(async (roomName) => {
         try {
-          const participants = await roomService.listParticipants(roomName);
+          const participants = await roomService.listParticipants(
+            livekitRoomFor(auth.session.space, roomName)
+          );
           
           const users = participants.flatMap((p) => {
             let role = 'student';

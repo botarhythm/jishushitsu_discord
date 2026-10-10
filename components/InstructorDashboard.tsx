@@ -6,6 +6,7 @@ import { RoomName, ParticipantMetadata, ROOM_LABELS, BREAKOUT_ROOMS } from '@/li
 import { RoomsStatusMap } from '@/hooks/useRoomsStatus';
 import type { AiProviderStatus } from '@/lib/ai/provider';
 import { isAiLiveKitIdentity } from '@/lib/ai/livekit-participant';
+import { confirmAndRemoveParticipant } from '@/lib/remove-participant-client';
 
 interface InstructorDashboardProps {
   participants: Participant[];
@@ -154,19 +155,11 @@ export default function InstructorDashboard({
   const removeParticipant = useCallback(
     async (participantIdentity: string, participantName: string, sourceRoom: RoomName = currentRoom) => {
       if (isMoving) return;
-      if (!confirm(`${participantName}さんを退出させますか？`)) return;
-
-      setIsMoving(participantIdentity);
 
       try {
-        const res = await fetch('/api/remove-participant', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            roomName: sourceRoom,
-            participantIdentity,
-          }),
-        });
+        setIsMoving(participantIdentity);
+        const res = await confirmAndRemoveParticipant(participantIdentity, participantName, sourceRoom);
+        if (!res) return;
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));

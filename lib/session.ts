@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
-import { SignJWT, jwtVerify } from 'jose';
+import { SignJWT, decodeJwt, jwtVerify } from 'jose';
+import { DEFAULT_SPACE, isValidSpace } from '@/lib/space';
 
 export type UserRole = 'instructor' | 'student';
 export type SessionKind = 'discord' | 'guest';
@@ -19,11 +20,20 @@ export interface SessionPayload {
   inviteJti?: string;
   /** 入室直後に自動 ON にしたい録音/録画モード (招待リンク発行時に指定) */
   initialRec?: InitialRecMode;
+  /** 所属する回 (lib/space.ts)。未指定は既定の回 */
+  space?: string;
+}
+
+export interface SignSessionOptions {
+  /**
+   * セッションの失効時刻 (epoch 秒)。guest は招待リンクの期限に合わせる。
+   * 未指定なら発行から 12 時間。
+   */
+  expiresAt?: number;
 }
 
 const SESSION_COOKIE = 'lk_session';
 const SESSION_TTL_SEC = 12 * 60 * 60; // 12時間
-const GUEST_SESSION_TTL_SEC = 60 * 60; // 1時間 (guest は短命)
 
 function getSecret(): Uint8Array {
   const secret = process.env.SESSION_SECRET;
@@ -34,8 +44,11 @@ function getSecret(): Uint8Array {
 }
 
 /** Discord/Guest 認証成功時に session JWT を発行 */
-export async function signSession(payload: SessionPayload): Promise<string> {
-  const ttl = payload.kind === 'guest' ? GUEST_SESSION_TTL_SEC : SESSION_TTL_SEC;
+export async function signSession(
+  payload: SessionPayload,
+  opts: SignSessionOptions = {}
+): Promise<string> {
+  const expiresAt = opts.expiresAt ?? Math.floor(Date.now() / 1000) + SESSION_TTL_SEC;
   return new SignJWT({
     discordId: payload.discordId,
     displayName: payload.displayName,
@@ -44,10 +57,11 @@ export async function signSession(payload: SessionPayload): Promise<string> {
     kind: payload.kind ?? 'discord',
     inviteJti: payload.inviteJti,
     initialRec: payload.initialRec,
+    space: payload.space || undefined,
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
-    .setExpirationTime(`${ttl}s`)
+    .setExpirationTime(expiresAt)
     .sign(getSecret());
 }
 
@@ -66,6 +80,7 @@ export async function verifySession(jwt: string): Promise<SessionPayload | null>
       kind: payload.kind ?? 'discord',
       inviteJti: payload.inviteJti,
       initialRec: payload.initialRec,
+      space: payload.space ?? DEFAULT_SPACE,
     };
   } catch {
     return null;
@@ -80,6 +95,7 @@ function isSessionPayload(obj: unknown): obj is {
   kind?: SessionKind;
   inviteJti?: string;
   initialRec?: InitialRecMode;
+  space?: string;
 } {
   if (!obj || typeof obj !== 'object') return false;
   const o = obj as Record<string, unknown>;
@@ -96,20 +112,36 @@ function isSessionPayload(obj: unknown): obj is {
     (o.role === 'instructor' || o.role === 'student') &&
     (o.kind === undefined || o.kind === 'discord' || o.kind === 'guest') &&
     (o.inviteJti === undefined || typeof o.inviteJti === 'string') &&
+    (o.space === undefined || isValidSpace(o.space)) &&
     validInitialRec
   );
 }
 
-/** Route Handler / Server Function 内で session Cookieを書き込む */
+/**
+ * Route Handler / Server Function 内で session Cookieを書き込む。
+ * Cookie の寿命は JWT の期限にそろえる (Cookie だけ残って 401 になる状態を作らない)。
+ */
 export async function setSessionCookie(jwt: string): Promise<void> {
   const c = await cookies();
+  const exp = decodeJwt(jwt).exp;
+  const now = Math.floor(Date.now() / 1000);
+  const maxAge = typeof exp === 'number' ? Math.max(0, exp - now) : SESSION_TTL_SEC;
   c.set(SESSION_COOKIE, jwt, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
     path: '/',
-    maxAge: SESSION_TTL_SEC,
+    maxAge,
   });
+}
+
+/** 現在のセッション JWT の失効時刻 (epoch 秒)。未認証なら null */
+export async function getSessionExpiresAt(): Promise<number | null> {
+  const c = await cookies();
+  const token = c.get(SESSION_COOKIE)?.value;
+  if (!token || !(await verifySession(token))) return null;
+  const exp = decodeJwt(token).exp;
+  return typeof exp === 'number' ? exp : null;
 }
 
 /** ログアウト時に session Cookie を削除 */

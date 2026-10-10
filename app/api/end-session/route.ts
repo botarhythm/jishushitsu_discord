@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RoomServiceClient, DataPacket_Kind } from 'livekit-server-sdk';
 import { requireInstructor } from '@/lib/auth-guard';
+import { isRoomName, livekitRoomFor } from '@/lib/space';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,9 +18,9 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json().catch(() => ({}));
-    const roomName = typeof body?.roomName === 'string' ? body.roomName : '';
-    if (!roomName) {
-      return NextResponse.json({ error: 'roomName が必要です' }, { status: 400 });
+    const roomName = body?.roomName;
+    if (!isRoomName(roomName)) {
+      return NextResponse.json({ error: 'roomName が不正です' }, { status: 400 });
     }
 
     const apiKey = process.env.LIVEKIT_API_KEY!;
@@ -36,7 +37,7 @@ export async function POST(request: NextRequest) {
     });
 
     await roomService.sendData(
-      roomName,
+      livekitRoomFor(auth.session.space, roomName),
       new TextEncoder().encode(message),
       DataPacket_Kind.RELIABLE,
       {}

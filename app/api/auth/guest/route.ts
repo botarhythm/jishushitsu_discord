@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  isInviteConsumed,
-  markInviteConsumed,
-  verifyInviteToken,
-} from '@/lib/invite-token';
+import { RoomServiceClient } from 'livekit-server-sdk';
+import { verifyInviteToken } from '@/lib/invite-token';
+import { isInviteRevoked } from '@/lib/invite-revocation';
 import { setSessionCookie, signSession } from '@/lib/session';
 
 export const runtime = 'nodejs';
@@ -16,7 +14,9 @@ interface GuestAuthBody {
 
 /**
  * 招待トークンを使って guest セッション Cookie を発行する。
- * 1 トークン 1 回限り (consume 後は 410 Gone)。
+ *
+ * 1 人 1 リンク。同じリンクでの再入室は許す (参加者 ID は jti 固定なので同一人物として扱われる)。
+ * セッションの期限はリンクの期限にそろえる。講師が失効させたリンクは 410。
  */
 export async function POST(request: NextRequest) {
   const body: GuestAuthBody = await request.json().catch(() => ({}));
@@ -37,23 +37,33 @@ export async function POST(request: NextRequest) {
       { status: 401 }
     );
   }
-  if (isInviteConsumed(payload.jti)) {
+
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  const livekitUrl = process.env.LIVEKIT_URL;
+  if (!apiKey || !apiSecret || !livekitUrl) {
+    return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
+  }
+  const roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
+  if (await isInviteRevoked(roomService, payload.space, payload.jti)) {
     return NextResponse.json(
-      { error: 'このリンクは既に使用済みです。講師に新しいリンクを依頼してください。' },
+      { error: 'このリンクは講師によって無効にされました。講師に新しいリンクを依頼してください。' },
       { status: 410 }
     );
   }
 
-  markInviteConsumed(payload.jti);
-
-  const jwt = await signSession({
-    discordId: `guest:${payload.jti}`,
-    displayName,
-    role: payload.role,
-    kind: 'guest',
-    inviteJti: payload.jti,
-    initialRec: payload.initialRec,
-  });
+  const jwt = await signSession(
+    {
+      discordId: `guest:${payload.jti}`,
+      displayName,
+      role: payload.role,
+      kind: 'guest',
+      inviteJti: payload.jti,
+      initialRec: payload.initialRec,
+      space: payload.space,
+    },
+    { expiresAt: payload.expiresAt }
+  );
   await setSessionCookie(jwt);
 
   return NextResponse.json({ ok: true, role: payload.role, initialRec: payload.initialRec });

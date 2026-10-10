@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 
 interface RecordingToastProps {
-  audioOn: boolean;
   screenOn: boolean;
 }
 
@@ -15,35 +14,26 @@ interface Flash {
 }
 
 /**
- * 画面右下に「録音中」「録画中」のステータスを表示する常駐トースト。
+ * 画面右下に「録画中」のステータスを表示する常駐トースト。
  *
  * - 開始/停止の瞬間は一時的に強めにフラッシュ (背景色 + アニメーション)
  * - 進行中はバッジで常時表示し、ユーザが収録状態を見失わないようにする
- * - どちらも OFF の場合は何も描画しない
+ * - OFF の場合は何も描画しない
  */
-export function RecordingToast({ audioOn, screenOn }: RecordingToastProps) {
+export function RecordingToast({ screenOn }: RecordingToastProps) {
   const [flash, setFlash] = useState<Flash | null>(null);
-  const prevAudioRef = useRef(audioOn);
   const prevScreenRef = useRef(screenOn);
 
   useEffect(() => {
-    const prevAudio = prevAudioRef.current;
     const prevScreen = prevScreenRef.current;
     let next: Flash | null = null;
-    if (audioOn !== prevAudio) {
-      next = {
-        kind: audioOn ? 'start' : 'stop',
-        label: audioOn ? '録音を開始しました' : '録音を停止しました',
-        nonce: Date.now(),
-      };
-    } else if (screenOn !== prevScreen) {
+    if (screenOn !== prevScreen) {
       next = {
         kind: screenOn ? 'start' : 'stop',
         label: screenOn ? '録画を開始しました' : '録画を停止しました',
         nonce: Date.now(),
       };
     }
-    prevAudioRef.current = audioOn;
     prevScreenRef.current = screenOn;
 
     if (!next) return;
@@ -53,9 +43,9 @@ export function RecordingToast({ audioOn, screenOn }: RecordingToastProps) {
       setFlash((f) => (f && f.nonce === captured ? null : f));
     }, 2500);
     return () => clearTimeout(t);
-  }, [audioOn, screenOn]);
+  }, [screenOn]);
 
-  if (!audioOn && !screenOn && !flash) return null;
+  if (!screenOn && !flash) return null;
 
   return (
     <div className="pointer-events-none fixed bottom-20 right-4 z-50 flex flex-col items-end gap-2 md:bottom-24 md:right-6">
@@ -71,27 +61,14 @@ export function RecordingToast({ audioOn, screenOn }: RecordingToastProps) {
         </div>
       )}
 
-      {(audioOn || screenOn) && (
-        <div className="flex gap-2">
-          {audioOn && (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-red-500/60 bg-red-600/30 px-2.5 py-1 text-xs font-medium text-red-100 shadow-md backdrop-blur">
-              <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-red-400" />
-              </span>
-              録音中
-            </span>
-          )}
-          {screenOn && (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/60 bg-amber-600/30 px-2.5 py-1 text-xs font-medium text-amber-100 shadow-md backdrop-blur">
-              <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-300 opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-300" />
-              </span>
-              録画中
-            </span>
-          )}
-        </div>
+      {screenOn && (
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/60 bg-amber-600/30 px-2.5 py-1 text-xs font-medium text-amber-100 shadow-md backdrop-blur">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-300 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-300" />
+          </span>
+          録画中
+        </span>
       )}
     </div>
   );

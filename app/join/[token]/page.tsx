@@ -59,7 +59,7 @@ export default function JoinPage() {
             講師から共有された招待リンクで参加します。
             <br />
             <span className="text-xs text-stone-500">
-              このリンクは一度退出すると無効になります。
+              このリンクはあなた専用です。通信が切れても同じリンクで入り直せます。
             </span>
           </p>
 

@@ -101,7 +101,7 @@ export interface AiTileState {
 }
 
 /**
- * 音声 publication の分類。全 consumer（録画ミキサー / EchoNote / モニタ /
+ * 音声 publication の分類。全 consumer（録画ミキサー / モニタ /
  * ChatGPT入力ミキサー）はこの1関数で判定を共有する。
  *
  * - 'human': マイク音声（人間の声）

@@ -11,6 +11,7 @@ import type { TrackReference } from '@livekit/components-react';
 import { Track, Participant } from 'livekit-client';
 import { ParticipantMetadata, RoomName } from '@/lib/types';
 import { isAiLiveKitIdentity } from '@/lib/ai/livekit-participant';
+import { confirmAndRemoveParticipant } from '@/lib/remove-participant-client';
 import type { AiTileState } from '@/lib/studio-participants';
 import { AiEnergyOrb } from './AiEnergyOrb';
 
@@ -466,18 +467,14 @@ function KickButton({
   const handleClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (pending) return;
-    if (!confirm(`${name}さんを退出させますか？`)) return;
     setPending(true);
     try {
-      const res = await fetch('/api/remove-participant', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomName: instructorContext.currentRoom,
-          participantIdentity: participant.identity,
-        }),
-      });
-      if (!res.ok) {
+      const res = await confirmAndRemoveParticipant(
+        participant.identity,
+        name,
+        instructorContext.currentRoom
+      );
+      if (res && !res.ok) {
         const err = await res.json().catch(() => ({}));
         alert(`退出処理に失敗しました: ${err.error ?? res.status}`);
       }

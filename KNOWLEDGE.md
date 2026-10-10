@@ -37,6 +37,13 @@ Last synced: 2026-08-30
 ### [project-jishushitsu] デジタル原っぱ大学 自習室
 - LiveKit ベースのオンライン学習 WebRTC アプリ（Next.js 16 / Vercel）。本番: session.botarhythm.com
 - 正本リポジトリ: botarhythm/jishushitsu_discord（origin/main 一本）
+- 位置づけ（2026-10-10 店主決定）: **デジハラの道具**（ポッドキャスト収録＋会期中のオンライン学習）。コーチング機能は足さない
+- 招待リンク（2026-10-10 / T-20261010-02）: 1 人 1 リンク・同じリンクで再入室可・期限は発行時に 2/6/24/72h（既定 24h）。
+  ゲストのセッション期限＝リンクの期限。リンクは講師の「回」(space) に固定され、LiveKit の部屋名は `<回ID>--main` 等に分かれる
+  （既定の回は従来どおり `main`/`bo-N`）。失効は退出時に「リンクも無効」→ 回の部屋の room metadata `revokedInvites` に記録
+  （外部ストレージなし。回の部屋が全部閉じると記録も消える）。検証: `VERIFY_LIVE=1 node --test scripts/verify-guest-invite.mjs`
+- EchoNote 連携は廃止（2026-10-10）。音声録音（EchoNote 送信用）と S2S の招待発行（`X-Service-Secret`）も撤去。録画はタブ録画のローカル保存のみ
+- 未コミットだった通話診断 v2（2026-09-28・実通話未検証）はブランチ `wip/call-diagnostics-v2` に退避（ローカルのみ）
 
 ### [project-ai-participant] AI参加者収録機能（本番稼働中）
 - 収録モードを「人間2名 + ChatGPTデスクトップ音声」の3者ビデオポッドキャスト収録に拡張。
@@ -114,7 +121,7 @@ Last synced: 2026-08-30
 
 ## 決定事項 / 方針
 
-- [project-jishushitsu-echonote-decouple] EchoNote とは別プロダクトとして独立開発。資産流用はするが結合しない
+- [project-jishushitsu-echonote-decouple] EchoNote とは別プロダクト。2026-10-10 に連携コードも撤去（`docs/echonote-integration.md` は廃止の記録）
 - [feedback-nextjs16] Next.js 16 は破壊的変更が多い — コードを書く前に `node_modules/next/dist/docs/` を読む
 - 収録アーキテクチャ: 録画は「自タブ Region Capture + AudioContext ミキシング」方式を維持。
   Recorder は参加者を知らない（AudioTrackRegistry 経由）。AI 判定はトラック単位 RMS のみ
@@ -136,7 +143,8 @@ Last synced: 2026-08-30
 ## 外部参照
 
 - [reference-github] https://github.com/botarhythm/jishushitsu_discord （塚ちゃんの PR は fork 経由）
-- [reference-echonote] EchoNote: `~/Documents/gemini/EchoNote`、Railway ホスティング
+- [reference-echonote] EchoNote: `~/Documents/gemini/EchoNote`、Railway ホスティング（自習室との連携は廃止）
+- 旧 `digihara-jishushitsu.vercel.app` はまだ 200 で開く。botarhythm アカウント／botarhythms-projects の配下に無く、ここから停止できない（所有アカウントの特定が必要）
 - AI参加者の要件定義: `~/Downloads/jishushitsu_discord_A2A_requirements.md`
 - AI参加者セットアップ手順: `docs/ai-participant-setup.md` / アプリ内 `/help/ai-participant`（スクショ入り正本）
 - ChatGPT音声の診断・復旧: `scripts/check-chatgpt-audio.ps1`
@@ -148,3 +156,4 @@ Last synced: 2026-08-30
 - 2026-08-21: ChatGPT系アプリの役割を訂正（ChatGPT=Codex / ChatGPT Classic=音声対話。両方起動が正常）
 - 2026-08-30: 既定の通信デバイスが C920 に変わる再発事例を追記（片方向断＝相手の声だけ届かない症状シグネチャ）
 - 2026-08-30: Bluetooth イヤホンによる「自分だけ聞こえない」事例とテスト音での切り分け手順を追記
+- 2026-10-10: T-20261010-02（穴埋め）。招待リンクの期限・再入室・回ごとの部屋・失効、EchoNote 連携の撤去。通話診断 v2 を wip ブランチへ退避

@@ -1,35 +1,43 @@
 import { SignJWT, jwtVerify } from 'jose';
 import { randomUUID } from 'crypto';
-import { RoomName, UserRole } from '@/lib/types';
+import { UserRole } from '@/lib/types';
+import { DEFAULT_SPACE, isValidSpace } from '@/lib/space';
 
 /**
- * 講師 (または EchoNote 経由のサーバー間呼び出し) が発行する「招待リンク」用 JWT。
+ * 講師が発行する「招待リンク」用 JWT。
  *
  * - Discord 認証をスキップして名前入力のみで自習室に入れる
- * - 有効期限は短め (デフォルト 2 時間)
- * - 1 回 consume されたら再使用不可 (module-level Set で best-effort)
- * - role と initialRec をトークンに埋め込み、入室時の振る舞いを決める
- *
- * 注意: consume 状態はプロセスメモリにしか持たないため、Vercel のような
- * 複数インスタンス環境では別インスタンスで再使用される余地がある。
- * 厳密な one-shot 保証が必要になったら KV/Redis に移すこと。
+ * - 有効期限は発行時に選ぶ (既定 24 時間・上限 72 時間)。前日の告知にも使える
+ * - **1 人 1 リンク**。同じリンクでの再入室を許す (通信切れ・別端末からの入り直し)。
+ *   LiveKit の参加者 ID はリンクの jti から作るので、同じリンクで入り直すと同じ参加者として扱われる
+ * - リンクは発行した講師の「回」(space) に固定される。別の回の部屋には入れない
+ * - 失効は lib/invite-revocation.ts (回の部屋が開いている間に効く)
  */
 
-const INVITE_TTL_SEC = 2 * 60 * 60;
+export const INVITE_TTL_CHOICES_HOURS = [2, 6, 24, 72] as const;
+export type InviteTtlHours = (typeof INVITE_TTL_CHOICES_HOURS)[number];
+export const DEFAULT_INVITE_TTL_HOURS: InviteTtlHours = 24;
 
-/** 入室直後に自動 ON にしたい録音/録画。`audio` は LiveKit 音声 mix → EchoNote 送信、`screen` はタブ録画。 */
+export function isInviteTtlHours(v: unknown): v is InviteTtlHours {
+  return INVITE_TTL_CHOICES_HOURS.includes(v as InviteTtlHours);
+}
+
+/** 入室直後に自動 ON にしたい録画。`screen` はタブ録画 (ローカル保存)。 */
 export type InitialRecMode = 'off' | 'audio' | 'screen' | 'both';
 
 export interface InviteTokenPayload {
   jti: string;
-  roomName: RoomName;
   role: UserRole;
   initialRec: InitialRecMode;
+  space: string;
+  /** 失効時刻 (epoch 秒) */
+  expiresAt: number;
 }
 
 export interface IssueInviteOptions {
-  roomName: RoomName;
   role: UserRole;
+  space: string;
+  ttlHours?: InviteTtlHours;
   initialRec?: InitialRecMode;
 }
 
@@ -45,12 +53,15 @@ export async function issueInviteToken(opts: IssueInviteOptions): Promise<{
   expiresAt: number;
 }> {
   const jti = randomUUID();
-  const expiresAt = Math.floor(Date.now() / 1000) + INVITE_TTL_SEC;
+  const ttlHours = opts.ttlHours ?? DEFAULT_INVITE_TTL_HOURS;
+  const expiresAt = Math.floor(Date.now() / 1000) + ttlHours * 60 * 60;
   const initialRec: InitialRecMode = opts.initialRec ?? 'off';
   const token = await new SignJWT({
-    roomName: opts.roomName,
+    // 旧トークンとの互換のため roomName は残す (入室先は常にメイン)
+    roomName: 'main',
     role: opts.role,
     initialRec,
+    space: opts.space || undefined,
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setJti(jti)
@@ -58,10 +69,6 @@ export async function issueInviteToken(opts: IssueInviteOptions): Promise<{
     .setExpirationTime(expiresAt)
     .sign(getSecret());
   return { token, jti, expiresAt };
-}
-
-function isValidRoomName(v: unknown): v is RoomName {
-  return v === 'main' || v === 'bo-1' || v === 'bo-2' || v === 'bo-3';
 }
 
 function isValidRole(v: unknown): v is UserRole {
@@ -80,37 +87,16 @@ export async function verifyInviteToken(
       algorithms: ['HS256'],
     });
     const jti = typeof payload.jti === 'string' ? payload.jti : null;
-    if (!jti) return null;
-    if (!isValidRoomName(payload.roomName)) return null;
+    if (!jti || typeof payload.exp !== 'number') return null;
+    const space = payload.space === undefined ? DEFAULT_SPACE : payload.space;
+    if (!isValidSpace(space)) return null;
     // 後方互換: 古いトークン (role 未設定) は student として扱う
     const role: UserRole = isValidRole(payload.role) ? payload.role : 'student';
     const initialRec: InitialRecMode = isValidInitialRec(payload.initialRec)
       ? payload.initialRec
       : 'off';
-    return { jti, roomName: payload.roomName, role, initialRec };
+    return { jti, role, initialRec, space, expiresAt: payload.exp };
   } catch {
     return null;
   }
-}
-
-// ── consume 管理 (best-effort, in-memory) ──
-// Map<jti, expiresAt(秒)> 形式で「使用済み」を持つ。
-// 期限切れの jti は次回アクセス時に剥がす。
-const consumed = new Map<string, number>();
-
-function gc(now: number): void {
-  for (const [jti, exp] of consumed) {
-    if (exp < now) consumed.delete(jti);
-  }
-}
-
-export function isInviteConsumed(jti: string): boolean {
-  const now = Math.floor(Date.now() / 1000);
-  gc(now);
-  return consumed.has(jti);
-}
-
-export function markInviteConsumed(jti: string): void {
-  const now = Math.floor(Date.now() / 1000);
-  consumed.set(jti, now + INVITE_TTL_SEC);
 }

@@ -12,8 +12,6 @@ interface ControlBarProps {
   isLocalRecording: boolean;
   /** true の間は録画ボタンを無効化する (iPhone等 getDisplayMedia 非対応環境向け) */
   recordingUnsupported?: boolean;
-  isAudioRecording: boolean;
-  showAudioRecordingButton: boolean;
   /** 講師がメインルームに居る場合に表示するセッション終了ボタンのコールバック */
   onEndSession?: () => void;
   recordingQuality: RecordingQuality;
@@ -25,7 +23,6 @@ interface ControlBarProps {
   onToggleScreenShare: () => void;
   onToggleRaiseHand: () => void;
   onToggleLocalRecording: () => void;
-  onToggleAudioRecording: () => void;
   onToggleChat: () => void;
   onOpenDeviceSettings: () => void;
   onReturnToMain: () => void;
@@ -42,8 +39,6 @@ export function ControlBar({
   isBreakout,
   isLocalRecording,
   recordingUnsupported = false,
-  isAudioRecording,
-  showAudioRecordingButton,
   onEndSession,
   recordingQuality,
   onChangeRecordingQuality,
@@ -54,7 +49,6 @@ export function ControlBar({
   onToggleScreenShare,
   onToggleRaiseHand,
   onToggleLocalRecording,
-  onToggleAudioRecording,
   onToggleChat,
   onOpenDeviceSettings,
   onReturnToMain,
@@ -146,22 +140,6 @@ export function ControlBar({
           <option value="high">高画質 (大容量)</option>
         </select>
       </div>
-
-      {showAudioRecordingButton && (
-        <button
-          onClick={onToggleAudioRecording}
-          className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
-            isAudioRecording
-              ? 'bg-red-600 text-white shadow-lg shadow-red-500/30 animate-pulse'
-              : 'bg-stone-700 text-stone-400 hover:bg-stone-600 hover:text-stone-300'
-          }`}
-          aria-label={isAudioRecording ? '録音を停止' : '録音を開始'}
-          aria-pressed={isAudioRecording}
-        >
-          <span className="text-lg">{isAudioRecording ? '⏹️' : '🎙️'}</span>
-          <span>{isAudioRecording ? '録音停止' : '録音'}</span>
-        </button>
-      )}
 
       {!isInstructor && !isBreakout && (
         <button

@@ -1,6 +1,6 @@
 # デジタル原っぱ大学 自習室
 
-オンライン学習支援 WebRTC アプリです。**Discord OAuth2 認証**でアクセスを対象サーバーのメンバーに限定し、LiveKit Cloud + Next.js で構築しています。ブレイクアウトルーム・挙手通知・強制移動・自動退出・ローカル録画・EchoNote連携 (任意) を備えます。
+オンライン学習支援 WebRTC アプリです。**Discord OAuth2 認証**でアクセスを対象サーバーのメンバーに限定し、LiveKit Cloud + Next.js で構築しています。ブレイクアウトルーム・挙手通知・強制移動・自動退出・ローカル録画・招待リンク (回ごと) を備えます。
 
 ## 主要機能
 
@@ -13,8 +13,7 @@
 | 強制移動 / 強制退出 / 強制ミュート | 講師ダッシュボードから受講生を操作 |
 | **自動退出** (受講生) | 入室から1時間で継続確認 → 5分応答なしで退出漏れとして自動退出 |
 | **ローカル録画** (全員) | `getDisplayMedia` でタブ録画 + マイクmix、WebM 自動DL |
-| セッション音声録音 | 講師ロール時、メイン/各BOを別ファイルとして録音 (EchoNote 設定時のみ) |
-| EchoNote 連携 (任意) | 終了時に録音を [EchoNote](https://github.com/botarhythm/EchoNote) へ自動送信 → 文字起こし＋AI要約 |
+| 招待リンク / 回 | Discord なしで入れる 1 人 1 リンク。期限を選べ (2〜72h)、回 (授業・収録) ごとに部屋が分かれる |
 
 ## 技術スタック
 
@@ -42,7 +41,8 @@ jishushitsu/
 │       │   └── logout/route.ts                   # セッションCookie削除
 │       ├── token/route.ts                        # LiveKit token (session認証)
 │       ├── end-session/route.ts                  # 講師による全員終了
-│       ├── echonote/{status,upload}/route.ts     # EchoNote 連携
+│       ├── invite-token/route.ts                 # 招待リンク発行 (講師のみ)
+│       ├── space/route.ts                        # 回の確認・切り替え (講師のみ)
 │       └── {mute,remove,move}-participant/route.ts
 ├── components/
 │   ├── LandingContent.tsx                        # ランディング (Discordログイン)
@@ -54,18 +54,19 @@ jishushitsu/
 ├── hooks/
 │   ├── useAutoLogout.ts                          # 1h+5min 自動退出タイマー
 │   ├── useLocalRecording.ts                      # タブ録画 (getDisplayMedia)
-│   ├── useSessionRecorder.ts                     # 講師音声録音 (EchoNote用)
 │   └── useEndSession.ts                          # 終了モーダル制御
 ├── lib/
 │   ├── session.ts                                # JWT発行/検証 + Cookie操作
 │   ├── discord.ts                                # Discord OAuth2 helper
 │   ├── auth-guard.ts                             # requireSession / requireInstructor
-│   ├── echonote.ts                               # 講師→EchoNoteエンドポイント解決
+│   ├── space.ts                                  # 回 → LiveKit 部屋名の変換
+│   ├── invite-token.ts                           # 招待リンク JWT
+│   ├── invite-revocation.ts                      # 招待リンクの失効
 │   └── types.ts
 ├── docs/
 │   ├── admin-manual.md
 │   ├── participant-manual.md
-│   └── echonote-integration.md
+│   └── echonote-integration.md                   # 廃止の記録
 ├── .env.local                                    # 環境変数 (Git管理外)
 ├── .env.local.example                            # テンプレート
 └── README.md
@@ -138,23 +139,10 @@ npm run dev
 |--------|------|
 | `DISCORD_INSTRUCTOR_ROLE_ID` | 旧来のロールベース講師判定。`DISCORD_INSTRUCTOR_USER_IDS` を設定していれば実質上書きされる。新規には使用しない |
 
-#### EchoNote 連携 / S2S (任意)
+#### 廃止した変数 (2026-10-10)
 
-| 変数名 | 説明 |
-|--------|------|
-| `SERVICE_SHARED_SECRET` | EchoNote から `/api/invite-token` を Discord 認証なしで叩く際の共有秘密。EchoNote 側の `JISHUSHITSU_SERVICE_SECRET` と一致させる |
-
-#### EchoNote 連携 (任意 / 講師ごとに別インスタンス可)
-
-`INSTRUCTOR_<N>_DISCORD_ID` をキーに、その講師の EchoNote URL/Token を紐付けます。N は 1〜10 まで使用可能。
-
-| 変数名 | 説明 |
-|--------|------|
-| `INSTRUCTOR_<N>_DISCORD_ID` | 講師の Discord User ID |
-| `INSTRUCTOR_<N>_ECHONOTE_URL` | その講師の EchoNote インスタンスのベースURL |
-| `INSTRUCTOR_<N>_ECHONOTE_TOKEN` | その講師の EchoNote `ECHONOTE_INGEST_TOKEN` |
-
-未設定の講師は録音→要約フローが無効化され (録音そのものを実行しない)、終了モーダルは「全員終了」「自分だけ退出」のみのシンプルな表示になります。
+EchoNote 連携と、サーバー間で招待リンクを発行する入口を廃止した ([記録](./docs/echonote-integration.md))。
+`SERVICE_SHARED_SECRET`・`INSTRUCTOR_<N>_DISCORD_ID`・`INSTRUCTOR_<N>_ECHONOTE_URL`・`INSTRUCTOR_<N>_ECHONOTE_TOKEN` はコードから参照されない。Vercel からの削除は店主が行う。
 
 ## 認証フロー
 
@@ -166,12 +154,15 @@ npm run dev
 6. 最初に見つかった guild のメンバー情報を採用し、「講師」ロール所持なら `role=instructor`、それ以外は `student` として JWT を発行し httpOnly Cookie に保存
 7. `/room` にリダイレクト → LiveKit token を `/api/token` で取得して入室
 
-### ワンタイム招待リンク (ゲスト経路)
+### 招待リンク (ゲスト経路) と回
 
 Discord 認証を経由しない経路として `/api/invite-token` で発行する `/join/<token>` がある。
-- 講師セッション (Cookie) からの発行: 受講生用 student role
-- EchoNote 等の外部サービスからの `X-Service-Secret` ヘッダー付き発行: instructor / student いずれも指定可
-- token は 1 回限り (consume 後は 410)、TTL 2 時間、退出 (`/api/auth/logout`) で session Cookie 削除
+- 発行できるのは Discord の講師セッション (Cookie) だけ。role は student 固定
+- **1 人 1 リンク**。同じリンクで入り直せる (LiveKit の参加者 ID はリンクごとに固定)
+- 期限は発行時に 2 / 6 / 24 / 72 時間から選ぶ (既定 24 時間)。ゲストのセッションもリンクの期限まで有効
+- リンクは講師が今いる**回** (`/api/space` で切り替え) に固定される。LiveKit 上の部屋名は `<回ID>--main` のように回ごとに分かれ、既定の回は従来どおり `main` / `bo-1` …
+- 講師が参加者を退出させるときに「リンクも無効にする」を選ぶと、その回の部屋の metadata に失効が記録され、同じリンクでは入れなくなる (410)。記録は回の部屋が開いている間だけ残る (外部ストレージなし)
+- 退出 (`/api/auth/logout`) で session Cookie 削除
 
 ## デプロイ (Vercel)
 
@@ -193,7 +184,7 @@ Discord 認証を経由しない経路として `/api/invite-token` で発行す
 
 - [管理者（講師）マニュアル](./docs/admin-manual.md)
 - [参加者マニュアル](./docs/participant-manual.md)
-- [EchoNote 連携](./docs/echonote-integration.md)
+- [EchoNote 連携 (廃止)](./docs/echonote-integration.md)
 - [Discord 認証 / 許可 guild 運用](./docs/discord-auth.md)
 - [LiveKit 公式ドキュメント](https://docs.livekit.io/)
 - [Discord OAuth2 リファレンス](https://discord.com/developers/docs/topics/oauth2)

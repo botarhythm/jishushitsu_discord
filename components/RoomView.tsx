@@ -17,14 +17,11 @@ import { downloadChatHistory } from '@/lib/chat-export';
 import { describeMediaDeviceFailure, isPermissionFailure } from '@/lib/media-device-error';
 import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS, mergeParticipantMetadata } from '@/lib/types';
 import InstructorDashboard from './InstructorDashboard';
-import { useSessionRecorder } from '@/hooks/useSessionRecorder';
-import { useChunkUpload } from '@/hooks/useChunkUpload';
 import { useRoomsStatus } from '@/hooks/useRoomsStatus';
 import { useEndSession } from '@/hooks/useEndSession';
 import { useAutoLogout } from '@/hooks/useAutoLogout';
 import { useLocalRecording, type RecordingQuality } from '@/hooks/useLocalRecording';
 import { EndSessionModal } from './EndSessionModal';
-import { RecordingIndicator } from './RecordingIndicator';
 import { RecordingToast } from './RecordingToast';
 import { MobileHostWarning } from './MobileHostWarning';
 import { DeviceErrorBanner } from './DeviceErrorBanner';
@@ -243,39 +240,6 @@ function RoomInner({
       room.off(RoomEvent.ParticipantMetadataChanged, refreshRoomsStatus);
     };
   }, [isInstructor, refetchRoomsStatus, room]);
-
-  // ── EchoNote 設定確認 (アップロード先 API が利用可能か) ──
-  const [echoNoteConfigured, setEchoNoteConfigured] = useState(false);
-  useEffect(() => {
-    if (!isInstructor) return;
-    fetch('/api/echonote/status', { method: 'POST' })
-      .then((r) => r.json())
-      .then((d) => setEchoNoteConfigured(!!d.configured))
-      .catch(() => setEchoNoteConfigured(false));
-  }, [isInstructor]);
-
-  // ── 録音 (LiveKit 音声 mix → EchoNote 送信用) のユーザ制御 ──
-  // initialRec に audio / both が含まれていれば入室時に自動 ON。以降はボタンで切替。
-  const [audioRecordingOn, setAudioRecordingOn] = useState<boolean>(
-    isInstructor && (initialRec === 'audio' || initialRec === 'both')
-  );
-  const recordingEnabled = isInstructor && audioRecordingOn;
-  // チャンク逐次アップロードのオーケストレーション（30分ごと／ルーム移動／終了時に送信）
-  const chunkUpload = useChunkUpload({ echoNoteConfigured });
-  const {
-    isRecording,
-    currentRoomLabel,
-    startedAt: recordingStartedAt,
-    completedRecordings,
-    finalize,
-  } = useSessionRecorder({
-    enabled: recordingEnabled,
-    currentRoom,
-    onChunkReady: chunkUpload.handleChunkReady,
-  });
-  const toggleAudioRecording = useCallback(() => {
-    setAudioRecordingOn((v) => !v);
-  }, []);
 
   // チャットパネルの開閉。収録モードではクロップが確保できなかった瞬間に
   // 強制的に閉じる必要があるため (録画タブ全体に映り込んでしまう)、録画フックより先に宣言する。
@@ -1030,20 +994,12 @@ function RoomInner({
   const {
     endModalOpen,
     openEndModal,
-    endModalDurationSec,
-    uploading,
-    uploadProgress,
-    uploadResult,
+    ending,
+    endResult,
     handleEndChoice,
     handleCloseEndModal,
   } = useEndSession({
     currentRoom,
-    echoNoteConfigured,
-    finalize,
-    chunkUpload,
-    isRecording,
-    completedCount: completedRecordings.length,
-    recordingStartedAt,
     stopLocalRecording,
     onBeforeLeave: exportChatIfAny,
   });
@@ -1200,8 +1156,8 @@ function RoomInner({
 
   useEffect(() => {
     callDiagnostics.setMode({ ai: aiEnabled, videoRecording: isLocalRecording,
-      audioRecording: isRecording, studio: studioMode });
-  }, [callDiagnostics, aiEnabled, isLocalRecording, isRecording, studioMode]);
+      audioRecording: false, studio: studioMode });
+  }, [callDiagnostics, aiEnabled, isLocalRecording, studioMode]);
 
   // ── 収録モード表示（講師のみ）。通常レイアウトを丸ごと差し替える ──
   if (isInstructor && studioMode) {
@@ -1321,17 +1277,8 @@ function RoomInner({
         {inviteOpen && <InviteModal onClose={closeInvite} />}
         {endModalOpen && (
           <EndSessionModal
-            isRecording={isRecording}
-            echoNoteConfigured={echoNoteConfigured}
-            uploading={uploading}
-            uploadProgress={uploadProgress}
-            uploadResult={uploadResult}
-            completedSummaries={completedRecordings.map((r) => ({
-              roomLabel: ROOM_LABELS[r.room],
-              durationSec: Math.floor(r.durationMs / 1000),
-            }))}
-            activeRoomLabel={currentRoomLabel ? ROOM_LABELS[currentRoomLabel] : undefined}
-            activeDurationSec={endModalDurationSec}
+            ending={ending}
+            endResult={endResult}
             onChoose={handleEndChoice}
             onClose={handleCloseEndModal}
           />
@@ -1354,12 +1301,6 @@ function RoomInner({
                 ブレイクアウト中
               </span>
             )}
-            <RecordingIndicator
-              isRecording={isRecording}
-              startedAt={recordingStartedAt}
-              roomLabel={currentRoomLabel ? ROOM_LABELS[currentRoomLabel] : undefined}
-              completedCount={completedRecordings.length}
-            />
           </div>
           <div className="flex items-center gap-2">
             <span className="text-stone-400 text-sm hidden sm:inline">{participantName}</span>
@@ -1456,8 +1397,6 @@ function RoomInner({
           isBreakout={isBreakout}
           isLocalRecording={isLocalRecording}
           recordingUnsupported={!isLocalRecordingSupported}
-          isAudioRecording={isRecording}
-          showAudioRecordingButton={isInstructor && echoNoteConfigured}
           onEndSession={isInstructor && !isBreakout ? openEndModal : undefined}
           recordingQuality={recordingQuality}
           onChangeRecordingQuality={setRecordingQuality}
@@ -1468,7 +1407,6 @@ function RoomInner({
           onToggleScreenShare={toggleScreenShare}
           onToggleRaiseHand={toggleRaiseHand}
           onToggleLocalRecording={isInstructor ? handleDashboardRecord : toggleLocalRecording}
-          onToggleAudioRecording={toggleAudioRecording}
           onToggleChat={toggleChat}
           onOpenDeviceSettings={openDeviceSettings}
           onReturnToMain={returnToMain}
@@ -1562,7 +1500,7 @@ function RoomInner({
       )}
 
       {/* 録音/録画ステータストースト (全員) */}
-      <RecordingToast audioOn={isRecording} screenOn={isLocalRecording} />
+      <RecordingToast screenOn={isLocalRecording} />
 
       {/* 招待モーダル（講師のみ） */}
       {isInstructor && inviteOpen && <InviteModal onClose={closeInvite} />}
@@ -1578,17 +1516,8 @@ function RoomInner({
       {/* End session modal (instructor only) */}
       {isInstructor && endModalOpen && (
         <EndSessionModal
-          isRecording={isRecording}
-          echoNoteConfigured={echoNoteConfigured}
-          uploading={uploading}
-          uploadProgress={uploadProgress}
-          uploadResult={uploadResult}
-          completedSummaries={completedRecordings.map((r) => ({
-            roomLabel: ROOM_LABELS[r.room],
-            durationSec: Math.floor(r.durationMs / 1000),
-          }))}
-          activeRoomLabel={currentRoomLabel ? ROOM_LABELS[currentRoomLabel] : undefined}
-          activeDurationSec={endModalDurationSec}
+          ending={ending}
+          endResult={endResult}
           onChoose={handleEndChoice}
           onClose={handleCloseEndModal}
         />
