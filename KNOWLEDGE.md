@@ -144,7 +144,7 @@ Last synced: 2026-08-30
 
 - [reference-github] https://github.com/botarhythm/jishushitsu_discord （塚ちゃんの PR は fork 経由）
 - [reference-echonote] EchoNote: `~/Documents/gemini/EchoNote`、Railway ホスティング（自習室との連携は廃止）
-- 旧 `digihara-jishushitsu.vercel.app` はまだ 200 で開く。botarhythm アカウント／botarhythms-projects の配下に無く、ここから停止できない（所有アカウントの特定が必要）
+- 旧 `digihara-jishushitsu.vercel.app` はまだ 200 で開く。botarhythm アカウント／botarhythms-projects の配下に無く、ここから停止できない。塚ちゃんの Vercel アカウントのプロジェクトである可能性が高い（店主見立て・未確認）。停止は塚ちゃんに依頼する
 - AI参加者の要件定義: `~/Downloads/jishushitsu_discord_A2A_requirements.md`
 - AI参加者セットアップ手順: `docs/ai-participant-setup.md` / アプリ内 `/help/ai-participant`（スクショ入り正本）
 - ChatGPT音声の診断・復旧: `scripts/check-chatgpt-audio.ps1`
