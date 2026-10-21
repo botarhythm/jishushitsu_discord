@@ -5,9 +5,16 @@ import { useMediaDeviceSelect } from '@livekit/components-react';
 
 interface DeviceSettingsModalProps {
   onClose: () => void;
+  /** 画面共有で音声も共有するか */
+  screenShareAudio: boolean;
+  onScreenShareAudioChange: (enabled: boolean) => void;
 }
 
-export function DeviceSettingsModal({ onClose }: DeviceSettingsModalProps) {
+export function DeviceSettingsModal({
+  onClose,
+  screenShareAudio,
+  onScreenShareAudioChange,
+}: DeviceSettingsModalProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -38,6 +45,20 @@ export function DeviceSettingsModal({ onClose }: DeviceSettingsModalProps) {
         <div className="px-5 py-4 space-y-4">
           <DeviceSelect kind="audioinput" label="マイク" />
           <DeviceSelect kind="videoinput" label="カメラ" />
+          <label className="flex items-start gap-2.5">
+            <input
+              type="checkbox"
+              checked={screenShareAudio}
+              onChange={(e) => onScreenShareAudioChange(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-amber-500"
+            />
+            <span className="text-sm text-stone-200">
+              画面共有で音声も共有する
+              <span className="mt-0.5 block text-xs text-stone-500 leading-relaxed">
+                次に画面共有を始めたときから反映されます。Chrome では「タブ」の共有か、Windows の「画面全体」の共有で音声を送れます（ウィンドウ共有では音声は送れません）。
+              </span>
+            </span>
+          </label>
           <p className="text-xs text-stone-500 leading-relaxed">
             USB接続のカメラ・マイクが一覧に出ない場合は、ブラウザの権限ダイアログで一度許可してください。
           </p>

@@ -11,7 +11,7 @@ import {
   useTracks,
   isTrackReference,
 } from '@livekit/components-react';
-import { Track, RoomEvent } from 'livekit-client';
+import { Track, RoomEvent, type AudioCaptureOptions } from 'livekit-client';
 import { createCallRoomOptions } from '@/lib/call-media-options';
 import { downloadChatHistory } from '@/lib/chat-export';
 import { describeMediaDeviceFailure, isPermissionFailure } from '@/lib/media-device-error';
@@ -57,6 +57,7 @@ import { AutoLogoutModal } from './AutoLogoutModal';
 import { ChatPanel } from './ChatPanel';
 import { StudioChatPanel } from './StudioChatPanel';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
+import { loadScreenShareAudio, saveScreenShareAudio } from '@/lib/screen-share-audio';
 import { PreJoinScreen } from './PreJoinScreen';
 import { CallAudioRenderer } from './CallAudioRenderer';
 import { CallDiagnosticsBar } from './CallDiagnosticsBar';
@@ -169,6 +170,12 @@ function RoomInner({
   const [isMicOn, setIsMicOn] = useState(initialMicOn);
   const [isCameraOn, setIsCameraOn] = useState(initialCameraOn);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  // 画面共有で音声も共有するか (端末ごとの設定、既定 ON)。次回の共有開始から反映される
+  const [screenShareAudio, setScreenShareAudio] = useState(() => loadScreenShareAudio());
+  const handleScreenShareAudioChange = useCallback((enabled: boolean) => {
+    setScreenShareAudio(enabled);
+    saveScreenShareAudio(enabled);
+  }, []);
   const [raisedHand, setRaisedHand] = useState(false);
   const [focusedParticipant, setFocusedParticipant] = useState<string | null>(null);
   const isInstructor = role === 'instructor';
@@ -1091,13 +1098,24 @@ function RoomInner({
       if (isScreenSharing) {
         await localParticipant.setScreenShareEnabled(false);
       } else {
-        await localParticipant.setScreenShareEnabled(true);
+        await localParticipant.setScreenShareEnabled(
+          true,
+          screenShareAudio
+            ? {
+                // restrictOwnAudio: 画面全体の共有で OS 音声を取るとき、自習室タブ自身の
+                // 再生音 (相手の声・AI の声) を除外する。相手に自分の声が返るのを防ぐ。
+                // 非対応ブラウザでは未知の制約として無視される。
+                audio: { restrictOwnAudio: true } as AudioCaptureOptions,
+                systemAudio: 'include',
+              }
+            : { audio: false }
+        );
       }
       setIsScreenSharing(!isScreenSharing);
     } catch {
       setIsScreenSharing(false);
     }
-  }, [localParticipant, isScreenSharing]);
+  }, [localParticipant, isScreenSharing, screenShareAudio]);
 
   const toggleRaiseHand = useCallback(async () => {
     const newState = !raisedHand;
@@ -1273,7 +1291,13 @@ function RoomInner({
         />
 
         {/* デバイス設定 / 招待 / 終了モーダルは収録モードでも利用可能 */}
-        {deviceSettingsOpen && <DeviceSettingsModal onClose={closeDeviceSettings} />}
+        {deviceSettingsOpen && (
+          <DeviceSettingsModal
+            onClose={closeDeviceSettings}
+            screenShareAudio={screenShareAudio}
+            onScreenShareAudioChange={handleScreenShareAudioChange}
+          />
+        )}
         {inviteOpen && <InviteModal onClose={closeInvite} />}
         {endModalOpen && (
           <EndSessionModal
@@ -1426,7 +1450,11 @@ function RoomInner({
 
       {/* Device settings modal */}
       {deviceSettingsOpen && (
-        <DeviceSettingsModal onClose={closeDeviceSettings} />
+        <DeviceSettingsModal
+          onClose={closeDeviceSettings}
+          screenShareAudio={screenShareAudio}
+          onScreenShareAudioChange={handleScreenShareAudioChange}
+        />
       )}
 
       {/* AI設定は通常モードでも開ける。収録モード側は専用return内で同じパネルを描画する。 */}

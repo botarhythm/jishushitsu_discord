@@ -640,6 +640,49 @@ export function useLocalRecording({
         }
       }
 
+      // 自分が画面共有で送っている音声 (動画・資料の音)。
+      // 自タブでは再生されず (タブ音声にも入らない)、リモート購読の対象でもないため、
+      // ここで足さないと「相手には聞こえているのに収録には入らない」状態になる。
+      // 共有は録画の途中で始まる・止まるので、publish / unpublish に追従して張り替える。
+      let detachLocalScreenAudioListener: () => void = () => {};
+      if (room) {
+        let screenAudioNode: { track: MediaStreamTrack; source: MediaStreamAudioSourceNode } | null = null;
+        const disconnectScreenAudio = () => {
+          if (!screenAudioNode) return;
+          try {
+            screenAudioNode.source.disconnect();
+          } catch {
+            // ignore
+          }
+          connectedTrackIds.delete(screenAudioNode.track.id);
+          screenAudioNode = null;
+        };
+        const syncLocalScreenAudio = () => {
+          if (!audioContext || !audioDestination) return;
+          const pub = room.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio);
+          const mst = pub?.track?.mediaStreamTrack ?? null;
+          if (screenAudioNode?.track === mst) return;
+          disconnectScreenAudio();
+          if (!mst || connectedTrackIds.has(mst.id)) return;
+          try {
+            const source = audioContext.createMediaStreamSource(new MediaStream([mst]));
+            source.connect(audioDestination);
+            screenAudioNode = { track: mst, source };
+            connectedTrackIds.add(mst.id);
+          } catch (e) {
+            console.warn('[useLocalRecording] 画面共有音声の接続失敗', e);
+          }
+        };
+        syncLocalScreenAudio();
+        room.on(RoomEvent.LocalTrackPublished, syncLocalScreenAudio);
+        room.on(RoomEvent.LocalTrackUnpublished, syncLocalScreenAudio);
+        detachLocalScreenAudioListener = () => {
+          room.off(RoomEvent.LocalTrackPublished, syncLocalScreenAudio);
+          room.off(RoomEvent.LocalTrackUnpublished, syncLocalScreenAudio);
+          disconnectScreenAudio();
+        };
+      }
+
       // LiveKit リモート音声トラックを追加
       const addRemoteTrack = (
         track: RemoteTrack,
@@ -743,6 +786,7 @@ export function useLocalRecording({
           room.off(RoomEvent.TrackUnsubscribed, removeRemoteTrack);
         }
         detachLocalMicListener();
+        detachLocalScreenAudioListener();
         detachExtraTracks();
       };
     }
