@@ -1015,6 +1015,28 @@ export function useLocalRecording({
     health.start();
     recorder.start(1000);
     speakerTracker?.start();
+    // 在室区間。「区間が無い」のが話していないからか、いなかったからかを
+    // 使う側で区別できるようにする (DegiHara の要望)。録画開始時点の参加者は 0 秒から
+    if (room && speakerTracker && resourcesRef.current) {
+      const tracker = speakerTracker;
+      const kindOf = (identity: string) => (isAiLiveKitIdentity(identity) ? 'ai' : 'human');
+      const lp = room.localParticipant;
+      tracker.markPresent(lp.identity || 'local', lp.name?.trim() || lp.identity || '録画者', 'human');
+      room.remoteParticipants.forEach((p) =>
+        tracker.markPresent(p.identity, p.name?.trim() || p.identity, kindOf(p.identity))
+      );
+      const onJoin = (p: RemoteParticipant) =>
+        tracker.markPresent(p.identity, p.name?.trim() || p.identity, kindOf(p.identity));
+      const onLeave = (p: RemoteParticipant) => tracker.markAbsent(p.identity);
+      room.on(RoomEvent.ParticipantConnected, onJoin);
+      room.on(RoomEvent.ParticipantDisconnected, onLeave);
+      const detachAudio = resourcesRef.current.detachListeners;
+      resourcesRef.current.detachListeners = () => {
+        detachAudio();
+        room.off(RoomEvent.ParticipantConnected, onJoin);
+        room.off(RoomEvent.ParticipantDisconnected, onLeave);
+      };
+    }
     // 収録ステージの寸法監視はここから。これより前の伸縮 (共有バーの出現による
     // ビューポート変化など) は収録ファイルの宣言解像度が決まる前の出来事なので
     // 警告対象にしない。cropTarget を渡していない録画では null (監視自体が無い)。

@@ -95,6 +95,100 @@ export function stepVad(
   return { state };
 }
 
+/** 話者ごとの音量の分布 (しきい値が各自のマイクに合っているかを使う側で確かめるため) */
+export interface LevelStats {
+  speaker: string;
+  /** 測ったフレーム数 (frameMs ごと) */
+  frames: number;
+  /** 下位10% / 中央値 / 上位10% の dBFS (1 dB 刻み)。無音は FLOOR_DB に丸める */
+  p10: number;
+  median: number;
+  p90: number;
+  /** しきい値以上だったフレームの割合 (0〜1) */
+  voicedRatio: number;
+}
+
+const FLOOR_DB = -100;
+
+/** dBFS を 1 dB 刻みで数えるヒストグラム（純粋。長時間でもメモリは一定） */
+export class LevelHistogram {
+  private bins = new Array<number>(-FLOOR_DB + 1).fill(0);
+  private total = 0;
+  private voiced = 0;
+
+  add(db: number, thresholdDb: number): void {
+    const v = Number.isFinite(db) ? Math.min(0, Math.max(FLOOR_DB, Math.round(db))) : FLOOR_DB;
+    this.bins[v - FLOOR_DB]++;
+    this.total++;
+    if (db >= thresholdDb) this.voiced++;
+  }
+
+  stats(speaker: string): LevelStats | null {
+    if (this.total === 0) return null;
+    return {
+      speaker,
+      frames: this.total,
+      p10: this.quantile(0.1),
+      median: this.quantile(0.5),
+      p90: this.quantile(0.9),
+      voicedRatio: round3(this.voiced / this.total),
+    };
+  }
+
+  private quantile(q: number): number {
+    const target = q * this.total;
+    let acc = 0;
+    for (let i = 0; i < this.bins.length; i++) {
+      acc += this.bins[i];
+      if (acc >= target) return i + FLOOR_DB;
+    }
+    return 0;
+  }
+}
+
+/** 参加者の在室区間。途中参加・途中退出・再入室を区間の列で持つ */
+export interface PresenceInfo {
+  id: string;
+  name: string;
+  kind: SpeakerKind;
+  intervals: { start: number; end: number }[];
+}
+
+/** 入退室の記録（純粋。時刻は録画相対の ms を受け取る） */
+export class PresenceLog {
+  private people = new Map<string, { name: string; kind: SpeakerKind; open: number | null; done: [number, number][] }>();
+
+  join(id: string, name: string, kind: SpeakerKind, t: number): void {
+    const p = this.people.get(id);
+    if (!p) {
+      this.people.set(id, { name, kind, open: t, done: [] });
+      return;
+    }
+    p.name = name;
+    if (p.open == null) p.open = t;
+  }
+
+  leave(id: string, t: number): void {
+    const p = this.people.get(id);
+    if (!p || p.open == null) return;
+    p.done.push([p.open, t]);
+    p.open = null;
+  }
+
+  /** 録画終了時点 (t) で在室中の人の区間を閉じて返す */
+  close(t: number): PresenceInfo[] {
+    return [...this.people].map(([id, p]) => ({
+      id,
+      name: p.name,
+      kind: p.kind,
+      intervals: [...p.done, ...(p.open == null ? [] : [[p.open, t] as [number, number]])].map(([s, e]) => ({
+        start: round3(s / 1000),
+        end: round3(e / 1000),
+      })),
+    }));
+  }
+}
+
 interface TrackEntry {
   info: SpeakerInfo;
   analyser: AnalyserNode;
@@ -105,6 +199,10 @@ interface TrackEntry {
 export interface SpeakerLog {
   speakers: SpeakerInfo[];
   segments: SpeechSegment[];
+  /** 録画中の在室区間 (録画開始時点の参加者は start=0) */
+  presence: PresenceInfo[];
+  /** 話者ごとの音量の分布 */
+  levels: LevelStats[];
   /** 記録を止めた時点の録画相対秒 */
   durationSec: number;
   detector: VadParams;
@@ -115,6 +213,8 @@ export class SpeakerActivityTracker {
   /** 一度でも登場した話者 (途中退出しても speakers に残す) */
   private speakers = new Map<string, SpeakerInfo>();
   private segments: SpeechSegment[] = [];
+  private presence = new PresenceLog();
+  private histograms = new Map<string, LevelHistogram>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private buffer: Float32Array<ArrayBuffer> | null = null;
   private stopped = false;
@@ -161,6 +261,19 @@ export class SpeakerActivityTracker {
     this.timer = setInterval(() => this.tick(), this.params.frameMs);
   }
 
+  /** 参加者が部屋にいる（録画開始時点の参加者・途中参加）。録画開始前の呼び出しは捨てる */
+  markPresent(id: string, name: string, kind: SpeakerKind): void {
+    const t = sessionTime();
+    if (t == null || this.stopped) return;
+    this.presence.join(id, name, kind, t);
+  }
+
+  markAbsent(id: string): void {
+    const t = sessionTime();
+    if (t == null || this.stopped) return;
+    this.presence.leave(id, t);
+  }
+
   /** 記録を確定して返す。2回目以降は null（冪等） */
   stop(): SpeakerLog | null {
     if (this.stopped) return null;
@@ -171,6 +284,10 @@ export class SpeakerActivityTracker {
     return {
       speakers: [...this.speakers.values()],
       segments: [...this.segments].sort((a, b) => a.start - b.start),
+      presence: this.presence.close(now ?? 0),
+      levels: [...this.histograms]
+        .map(([id, h]) => h.stats(id))
+        .filter((s): s is LevelStats => s !== null),
       durationSec: round3((now ?? 0) / 1000),
       detector: this.params,
     };
@@ -186,6 +303,9 @@ export class SpeakerActivityTracker {
     if (t == null) return;
     for (const entry of this.entries.values()) {
       const db = this.levelDb(entry.analyser);
+      let hist = this.histograms.get(entry.info.id);
+      if (!hist) this.histograms.set(entry.info.id, (hist = new LevelHistogram()));
+      hist.add(db, this.params.thresholdDb);
       const r = stepVad(entry.state, db, t, this.params);
       entry.state = r.state;
       if (r.started) {
@@ -240,6 +360,9 @@ export function buildSpeakersJson(
       detector: log.detector,
       speakers: log.speakers,
       segments: log.segments,
+      // 以下は version 1 のまま後から足した項目 (読む側は無くても動くこと)
+      presence: log.presence,
+      levels: log.levels,
     },
     null,
     2
