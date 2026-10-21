@@ -44,6 +44,9 @@ Last synced: 2026-08-30
   （外部ストレージなし。回の部屋が全部閉じると記録も消える）。検証: `VERIFY_LIVE=1 node --test scripts/verify-guest-invite.mjs`
 - EchoNote 連携は廃止（2026-10-10）。音声録音（EchoNote 送信用）と S2S の招待発行（`X-Service-Secret`）も撤去。録画はタブ録画のローカル保存のみ
 - 未コミットだった通話診断 v2（2026-09-28・実通話未検証）はブランチ `wip/call-diagnostics-v2` に退避（ローカルのみ）
+- 通話診断バー（接続状態・「今、遅れた」・「診断を保存」）は 2026-10-22 に UI から外した。接続安定性がひとまず改善したため（店主指示）。
+  収集器 `lib/call-diagnostics.ts`・`components/CallDiagnosticsBar.tsx`・`scripts/verify-call-diagnostics.mjs` は残してある。
+  再発時は `RoomView` に収集器の生成と `start()`、`setMode` の effect、バー2箇所（通常画面・収録画面）を戻す
 
 ### [project-ai-participant] AI参加者収録機能（本番稼働中）
 - 収録モードを「人間2名 + ChatGPTデスクトップ音声」の3者ビデオポッドキャスト収録に拡張。
@@ -157,3 +160,4 @@ Last synced: 2026-08-30
 - 2026-08-30: 既定の通信デバイスが C920 に変わる再発事例を追記（片方向断＝相手の声だけ届かない症状シグネチャ）
 - 2026-08-30: Bluetooth イヤホンによる「自分だけ聞こえない」事例とテスト音での切り分け手順を追記
 - 2026-10-10: T-20261010-02（穴埋め）。招待リンクの期限・再入室・回ごとの部屋・失効、EchoNote 連携の撤去。通話診断 v2 を wip ブランチへ退避
+- 2026-10-22: 通話診断バーを UI から撤去（収集器のファイルは残置。戻し方は project-jishushitsu に記載）

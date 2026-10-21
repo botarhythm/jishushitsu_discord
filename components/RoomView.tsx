@@ -67,8 +67,6 @@ import { DeviceSettingsModal } from './DeviceSettingsModal';
 import { loadScreenShareAudio, saveScreenShareAudio } from '@/lib/screen-share-audio';
 import { PreJoinScreen } from './PreJoinScreen';
 import { CallAudioRenderer } from './CallAudioRenderer';
-import { CallDiagnosticsBar } from './CallDiagnosticsBar';
-import { CallDiagnostics } from '@/lib/call-diagnostics';
 
 type InitialRec = 'off' | 'audio' | 'screen' | 'both';
 
@@ -163,8 +161,6 @@ function RoomInner({
   setAiMonitoredExternally: (monitored: boolean) => void;
 }) {
   const room = useRoomContext();
-  const callDiagnostics = useMemo(() => new CallDiagnostics(room), [room]);
-  useEffect(() => callDiagnostics.start(), [callDiagnostics]);
   // マイク/カメラの ON/OFF 表示は LiveKit の実際の publish 状態から決める。
   // 以前は別の useState で持っていたため、入室時の取得失敗・OS による停止・
   // 講師操作の取りこぼしで表示と実態がずれ、「ON にできない」ように見えていた。
@@ -1265,16 +1261,10 @@ function RoomInner({
       });
   }, [room, exportChatIfAny]);
 
-  useEffect(() => {
-    callDiagnostics.setMode({ ai: aiEnabled, videoRecording: isLocalRecording,
-      audioRecording: false, studio: studioMode });
-  }, [callDiagnostics, aiEnabled, isLocalRecording, studioMode]);
-
   // ── 収録モード表示（講師のみ）。通常レイアウトを丸ごと差し替える ──
   if (isInstructor && studioMode) {
     return (
       <div className="relative flex h-dvh w-screen flex-col overflow-hidden bg-black">
-        <CallDiagnosticsBar diagnostics={callDiagnostics} />
         <InAppBrowserWarning />
         <StartAudioBanner />
         {deviceError && (
@@ -1411,7 +1401,6 @@ function RoomInner({
     <div className={`flex h-dvh overflow-hidden theme-${currentRoom}`}>
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0">
-        <CallDiagnosticsBar diagnostics={callDiagnostics} />
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2 bg-stone-800 border-b border-stone-700">
           <div className="flex items-center gap-3">
