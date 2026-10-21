@@ -15,6 +15,9 @@ import { injectWebmSeekMetadata, loadTsEbml } from '@/lib/webm-seek-metadata';
 import { buildRecordingFilename, downloadBlobAs } from '@/lib/recording-file';
 import { estimateStorageHeadroom, RecordingChunkWriter } from '@/lib/recording-store';
 import { describeRecordingHealth, RecordingHealthMonitor } from '@/lib/recording-health';
+import { buildSpeakersJson, SpeakerActivityTracker, type SpeakerInfo } from '@/lib/speaker-activity';
+import { isAiLiveKitIdentity } from '@/lib/ai/livekit-participant';
+import { AI_AUDIO_TRACK_PREFIX } from '@/lib/studio-participants';
 
 export type RecordingQuality = 'streaming' | 'standard' | 'high';
 
@@ -125,6 +128,8 @@ interface RecordingResources {
    */
   tabGain: GainNode | null;
   remoteAudioNodes: Map<string, RemoteAudioNode>;
+  /** 話者ごとの発話区間の記録 (speakers.json)。音声をミックスしない録画では null */
+  speakerTracker: SpeakerActivityTracker | null;
   detachListeners: () => void;
   /**
    * 冪等な確定処理の完了 Promise。正常 stop / recorder.onerror のどこから
@@ -245,6 +250,7 @@ export function useLocalRecording({
     const r = resourcesRef.current;
     if (!r) return;
     r.detachListeners();
+    r.speakerTracker?.dispose();
     r.displayStream.getTracks().forEach((t) => t.stop());
     r.micStream?.getTracks().forEach((t) => t.stop());
     r.remoteAudioNodes.forEach((n) => {
@@ -520,6 +526,7 @@ export function useLocalRecording({
     let audioDestination: MediaStreamAudioDestinationNode | null = null;
     /** タブ音声の開閉ゲート (録画中の excludeTabAudio 変化をここで反映する) */
     let tabGain: GainNode | null = null;
+    let speakerTracker: SpeakerActivityTracker | null = null;
     const remoteAudioNodes = new Map<string, RemoteAudioNode>();
     let finalStream = displayStream;
     let detachListeners: () => void = () => {};
@@ -537,6 +544,14 @@ export function useLocalRecording({
         audioContext = new AudioContext();
       }
       audioDestination = audioContext.createMediaStreamDestination();
+      // ミックスへ繋ぐ各ソースを分岐させて、話者ごとの発話区間を記録する
+      speakerTracker = new SpeakerActivityTracker(audioContext);
+      const tracker = speakerTracker;
+      const localSpeaker = (suffix = ''): SpeakerInfo => {
+        const lp = room?.localParticipant;
+        const id = (lp?.identity || 'local') + suffix;
+        return { id, name: lp?.name?.trim() || lp?.identity || '録画者', kind: suffix ? 'screen' : 'human' };
+      };
 
       // 接続済みトラックの重複排除 (同じ MediaStreamTrack を複数経路で二重ミックスしない)
       const connectedTrackIds = new Set<string>();
@@ -608,6 +623,7 @@ export function useLocalRecording({
             source.connect(audioDestination);
             localMicNode = { track: mst, source };
             connectedTrackIds.add(mst.id);
+            tracker.add('local-mic', localSpeaker(), source);
             return true;
           } catch (e) {
             console.warn('[useLocalRecording] ローカルマイク接続失敗', e);
@@ -634,6 +650,7 @@ export function useLocalRecording({
             micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const micSrc = audioContext.createMediaStreamSource(micStream);
             micSrc.connect(audioDestination);
+            tracker.add('local-mic', localSpeaker(), micSrc);
           } catch (micErr) {
             console.warn('[useLocalRecording] マイク取得失敗:', micErr);
           }
@@ -656,6 +673,7 @@ export function useLocalRecording({
           }
           connectedTrackIds.delete(screenAudioNode.track.id);
           screenAudioNode = null;
+          tracker.remove('local-screen');
         };
         const syncLocalScreenAudio = () => {
           if (!audioContext || !audioDestination) return;
@@ -669,6 +687,7 @@ export function useLocalRecording({
             source.connect(audioDestination);
             screenAudioNode = { track: mst, source };
             connectedTrackIds.add(mst.id);
+            tracker.add('local-screen', localSpeaker('#screen'), source);
           } catch (e) {
             console.warn('[useLocalRecording] 画面共有音声の接続失敗', e);
           }
@@ -686,7 +705,7 @@ export function useLocalRecording({
       // LiveKit リモート音声トラックを追加
       const addRemoteTrack = (
         track: RemoteTrack,
-        _pub: RemoteTrackPublication,
+        pub: RemoteTrackPublication,
         participant: RemoteParticipant
       ) => {
         if (track.kind !== Track.Kind.Audio) return;
@@ -702,6 +721,18 @@ export function useLocalRecording({
           source.connect(audioDestination);
           remoteAudioNodes.set(key, { identity: participant.identity, trackSid: track.sid ?? '', source, stream: ms });
           if (mstId) connectedTrackIds.add(mstId);
+          const isScreen = pub.source === Track.Source.ScreenShareAudio;
+          const isAi =
+            isAiLiveKitIdentity(participant.identity) || !!pub.trackName?.startsWith(AI_AUDIO_TRACK_PREFIX);
+          tracker.add(
+            key,
+            {
+              id: participant.identity + (isScreen ? '#screen' : ''),
+              name: participant.name?.trim() || participant.identity,
+              kind: isScreen ? 'screen' : isAi ? 'ai' : 'human',
+            },
+            source
+          );
         } catch (e) {
           console.warn('[useLocalRecording] リモート音声接続失敗', e);
         }
@@ -718,6 +749,7 @@ export function useLocalRecording({
             }
             node.stream.getAudioTracks().forEach((t) => connectedTrackIds.delete(t.id));
             remoteAudioNodes.delete(key);
+            tracker.remove(key);
           }
         }
       };
@@ -749,6 +781,7 @@ export function useLocalRecording({
             source.connect(audioDestination);
             extraNodes.set(id, { source, trackId: track.id });
             connectedTrackIds.add(track.id);
+            tracker.add(`extra:${id}`, { id, name: id, kind: 'other' }, source);
           } catch (e) {
             console.warn('[useLocalRecording] 追加音声トラック接続失敗', e);
           }
@@ -763,6 +796,7 @@ export function useLocalRecording({
           }
           connectedTrackIds.delete(node.trackId);
           extraNodes.delete(id);
+          tracker.remove(`extra:${id}`);
         };
         extraRegistry.list().forEach(({ id, track }) => connectExtra(id, track));
         const unsubscribe = extraRegistry.subscribe((ev) => {
@@ -867,6 +901,8 @@ export function useLocalRecording({
       if (finalized) return;
       const healthReport = health.stop();
       console.info('[recording-health]', healthReport);
+      // 収録の時計が止まる (cleanup) 前に、発話中の区間を今の時刻で閉じて確定する
+      const speakerLog = speakerTracker?.stop() ?? null;
       recordSessionEvent({ type: "recording_stopped", reason });
       console.info("[session-clock]", summarizeSessionEvents());
       if (finalized) return;
@@ -891,6 +927,18 @@ export function useLocalRecording({
               })
             : rawBlob;
           downloadBlob(seekable, recordingStartedAt);
+          if (speakerLog) {
+            // 文字起こしで話者を割り当てるための発話区間ログ。録画と同じ名前 + .speakers.json
+            const videoName = buildRecordingFilename(filePrefixRef.current, seekable.type, recordingStartedAt);
+            const json = buildSpeakersJson(speakerLog, {
+              recordingFile: videoName,
+              startedAt: recordingStartedAt,
+            });
+            downloadBlobAs(
+              new Blob([json], { type: 'application/json' }),
+              videoName.replace(/\.[^.]+$/, '.speakers.json')
+            );
+          }
           const healthMessage = describeRecordingHealth(healthReport);
           // 既に出ている警告（インデックス付与失敗など）のほうが具体的なので上書きしない
           if (healthMessage) setError((prev) => prev ?? healthMessage);
@@ -940,6 +988,7 @@ export function useLocalRecording({
       audioDestination,
       tabGain,
       remoteAudioNodes,
+      speakerTracker,
       detachListeners,
       finalizePromise,
       chunkWriterPromise,
@@ -965,6 +1014,7 @@ export function useLocalRecording({
     recordSessionEvent({ type: "recording_started" });
     health.start();
     recorder.start(1000);
+    speakerTracker?.start();
     // 収録ステージの寸法監視はここから。これより前の伸縮 (共有バーの出現による
     // ビューポート変化など) は収録ファイルの宣言解像度が決まる前の出来事なので
     // 警告対象にしない。cropTarget を渡していない録画では null (監視自体が無い)。
