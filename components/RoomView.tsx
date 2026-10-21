@@ -21,6 +21,7 @@ import {
 import { createCallRoomOptions } from '@/lib/call-media-options';
 import { downloadChatHistory } from '@/lib/chat-export';
 import { describeMediaDeviceFailure, isPermissionFailure } from '@/lib/media-device-error';
+import { errorDetail, reportDeviceFailure } from '@/lib/device-report';
 import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS, mergeParticipantMetadata } from '@/lib/types';
 import InstructorDashboard from './InstructorDashboard';
 import { useRoomsStatus } from '@/hooks/useRoomsStatus';
@@ -202,9 +203,14 @@ function RoomInner({
     setDeviceErrorState(message === null ? null : { message });
   }, []);
   useEffect(() => {
-    const handleMediaDevicesError = () => {
+    const handleMediaDevicesError = (error?: Error, kind?: MediaDeviceKind) => {
       const cameraErr = localParticipant.lastCameraError;
       const micErr = localParticipant.lastMicrophoneError;
+      void reportDeviceFailure(kind === 'videoinput' ? 'camera' : 'mic', 'media-devices-error', error, {
+        kind: kind ?? null,
+        lastMicrophoneError: micErr ? errorDetail(micErr) : null,
+        lastCameraError: cameraErr ? errorDetail(cameraErr) : null,
+      });
       const showReload = isPermissionFailure(cameraErr) || isPermissionFailure(micErr);
       // カメラ/マイクが同時に失敗する (LINE等のアプリ内蔵ブラウザで両方とも権限を
       // 仲介できないケースで典型的) 場合、片方だけを優先して表示すると
@@ -219,7 +225,10 @@ function RoomInner({
       } else if (cameraErr) {
         setDeviceErrorState({ message: describeMediaDeviceFailure(cameraErr, 'カメラ'), showReload });
       } else if (micErr) {
-        setDeviceErrorState({ message: describeMediaDeviceFailure(micErr, 'マイク'), showReload });
+        setDeviceErrorState({
+          message: `${describeMediaDeviceFailure(micErr, 'マイク')}\n（詳細: ${errorDetail(micErr)}）`,
+          showReload,
+        });
       } else {
         setDeviceErrorState({ message: describeMediaDeviceFailure(undefined, 'カメラ/マイク') });
       }
@@ -259,16 +268,33 @@ function RoomInner({
     async (device: 'mic' | 'camera', enabled: boolean): Promise<boolean> => {
       const isMic = device === 'mic';
       const label = isMic ? 'マイク' : 'カメラ';
+      const source = isMic ? Track.Source.Microphone : Track.Source.Camera;
       try {
         if (isMic) await localParticipant.setMicrophoneEnabled(enabled);
         else await localParticipant.setCameraEnabled(enabled);
-        if (enabled) await reviveEndedTrack(isMic ? Track.Source.Microphone : Track.Source.Camera);
+        if (enabled) await reviveEndedTrack(source);
+        const actual = isMic ? localParticipant.isMicrophoneEnabled : localParticipant.isCameraEnabled;
+        if (actual !== enabled) {
+          // エラーは出なかったのに指示どおりになっていない。原因の切り分けのため記録する
+          const pub = localParticipant.getTrackPublication(source);
+          void reportDeviceFailure(device, 'resolved-but-unchanged', 'state mismatch', {
+            requested: enabled,
+            hasPublication: !!pub,
+            isMuted: pub?.isMuted ?? null,
+            trackState: pub?.track?.mediaStreamTrack?.readyState ?? null,
+          });
+          setDeviceErrorState({
+            message: `${label}を${enabled ? 'ON' : 'OFF'}にできませんでした。もう一度お試しください。`,
+          });
+          return false;
+        }
         return true;
       } catch (e) {
         console.warn(`[device] ${label}の切り替えに失敗`, e);
         const err = e instanceof Error ? e : undefined;
+        void reportDeviceFailure(device, enabled ? 'enable' : 'disable', e);
         setDeviceErrorState({
-          message: describeMediaDeviceFailure(err, label),
+          message: `${describeMediaDeviceFailure(err, label)}\n（詳細: ${errorDetail(e)}）`,
           showReload: isPermissionFailure(err),
         });
         return false;
