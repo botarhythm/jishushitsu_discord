@@ -7,15 +7,21 @@ interface DeviceErrorBannerProps {
       ブラウザの設定画面へは Web からリンクできないため、案内文の手順を実行した後の
       最終ステップ (再読み込み) だけをボタンとして提供する。 */
   showReload?: boolean;
+  /** 'info': エラーではないお知らせ (講師がマイク/カメラを操作した等) */
+  tone?: 'error' | 'info';
 }
 
 /** カメラ/マイク取得失敗を伝える警告バナー。通常レイアウト/収録モードの両方で使う。 */
-export function DeviceErrorBanner({ message, onDismiss, showReload = false }: DeviceErrorBannerProps) {
+export function DeviceErrorBanner({ message, onDismiss, showReload = false, tone = 'error' }: DeviceErrorBannerProps) {
+  const box =
+    tone === 'info'
+      ? 'border-sky-500/40 bg-sky-950/95 text-sky-100'
+      : 'border-red-500/40 bg-red-950/95 text-red-100';
   return (
     <div className="pointer-events-none fixed left-1/2 top-4 z-50 w-full max-w-md -translate-x-1/2 px-4">
-      <div className="pointer-events-auto flex items-start gap-3 rounded-xl border border-red-500/40 bg-red-950/95 p-3 text-sm text-red-100 shadow-2xl backdrop-blur-sm">
+      <div className={`pointer-events-auto flex items-start gap-3 rounded-xl border p-3 text-sm shadow-2xl backdrop-blur-sm ${box}`}>
         <span className="text-lg" aria-hidden>
-          ⚠️
+          {tone === 'info' ? 'ℹ️' : '⚠️'}
         </span>
         <div className="flex-1">
           <p className="whitespace-pre-line leading-relaxed">{message}</p>

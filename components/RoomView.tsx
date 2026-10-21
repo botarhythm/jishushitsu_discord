@@ -11,7 +11,13 @@ import {
   useTracks,
   isTrackReference,
 } from '@livekit/components-react';
-import { Track, RoomEvent, type AudioCaptureOptions } from 'livekit-client';
+import {
+  Track,
+  RoomEvent,
+  type AudioCaptureOptions,
+  type LocalAudioTrack,
+  type LocalVideoTrack,
+} from 'livekit-client';
 import { createCallRoomOptions } from '@/lib/call-media-options';
 import { downloadChatHistory } from '@/lib/chat-export';
 import { describeMediaDeviceFailure, isPermissionFailure } from '@/lib/media-device-error';
@@ -144,8 +150,6 @@ function RoomInner({
   isGuest = false,
   currentRoom,
   initialRec = 'off',
-  initialMicOn = true,
-  initialCameraOn = true,
   onRoomChange,
   aiEnabled,
   setAiEnabled,
@@ -160,15 +164,17 @@ function RoomInner({
   const room = useRoomContext();
   const callDiagnostics = useMemo(() => new CallDiagnostics(room), [room]);
   useEffect(() => callDiagnostics.start(), [callDiagnostics]);
-  const { localParticipant } = useLocalParticipant();
+  // マイク/カメラの ON/OFF 表示は LiveKit の実際の publish 状態から決める。
+  // 以前は別の useState で持っていたため、入室時の取得失敗・OS による停止・
+  // 講師操作の取りこぼしで表示と実態がずれ、「ON にできない」ように見えていた。
+  const { localParticipant, isMicrophoneEnabled: isMicOn, isCameraEnabled: isCameraOn } =
+    useLocalParticipant();
   const participants = useParticipants();
 
   // ルーム内に画面共有が存在するか (収録モードの自動レイアウト切替に使用)
   const screenShareTracks = useTracks([Track.Source.ScreenShare], { onlySubscribed: false });
   const screenShareActive = screenShareTracks.some((t) => isTrackReference(t));
   const { roomsStatus, refetch: refetchRoomsStatus } = useRoomsStatus();
-  const [isMicOn, setIsMicOn] = useState(initialMicOn);
-  const [isCameraOn, setIsCameraOn] = useState(initialCameraOn);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   // 画面共有で音声も共有するか (端末ごとの設定、既定 ON)。次回の共有開始から反映される
   const [screenShareAudio, setScreenShareAudio] = useState(() => loadScreenShareAudio());
@@ -223,6 +229,72 @@ function RoomInner({
       room.off(RoomEvent.MediaDevicesError, handleMediaDevicesError);
     };
   }, [room, localParticipant]);
+
+  /** 講師の操作など、エラーではないが本人に知らせたいこと */
+  const [deviceNotice, setDeviceNotice] = useState<string | null>(null);
+
+  /**
+   * publish 済みのトラックが OS 側で終了している (readyState === 'ended') なら取り直す。
+   *
+   * Android Chrome では画面ロック・アプリ切替・通話着信などでマイク/カメラのトラックが
+   * 終了することがある。LiveKit の publication は残るため、その状態で ON にしても
+   * 終了済みのトラックを unmute するだけで音も映像も戻らない。
+   */
+  const reviveEndedTrack = useCallback(
+    async (source: Track.Source.Microphone | Track.Source.Camera) => {
+      const track = localParticipant.getTrackPublication(source)?.track;
+      if (!track || track.mediaStreamTrack?.readyState !== 'ended') return;
+      console.warn('[device] トラックが終了していたため取り直します', source);
+      await (track as LocalAudioTrack | LocalVideoTrack).restartTrack();
+    },
+    [localParticipant]
+  );
+
+  /**
+   * マイク/カメラの ON/OFF。本人のボタンと講師からの指示の共通経路。
+   * 失敗したら必ず理由を表示する (MediaDevicesError が発火しない失敗経路もあるため)。
+   * @returns 指示どおりの状態にできたか
+   */
+  const setLocalDevice = useCallback(
+    async (device: 'mic' | 'camera', enabled: boolean): Promise<boolean> => {
+      const isMic = device === 'mic';
+      const label = isMic ? 'マイク' : 'カメラ';
+      try {
+        if (isMic) await localParticipant.setMicrophoneEnabled(enabled);
+        else await localParticipant.setCameraEnabled(enabled);
+        if (enabled) await reviveEndedTrack(isMic ? Track.Source.Microphone : Track.Source.Camera);
+        return true;
+      } catch (e) {
+        console.warn(`[device] ${label}の切り替えに失敗`, e);
+        const err = e instanceof Error ? e : undefined;
+        setDeviceErrorState({
+          message: describeMediaDeviceFailure(err, label),
+          showReload: isPermissionFailure(err),
+        });
+        return false;
+      }
+    },
+    [localParticipant, reviveEndedTrack]
+  );
+
+  // バックグラウンドから戻ったとき、OS に止められたトラックを取り直す
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (localParticipant.isMicrophoneEnabled) {
+        reviveEndedTrack(Track.Source.Microphone).catch((e) =>
+          console.warn('[device] マイクの取り直しに失敗', e)
+        );
+      }
+      if (localParticipant.isCameraEnabled) {
+        reviveEndedTrack(Track.Source.Camera).catch((e) =>
+          console.warn('[device] カメラの取り直しに失敗', e)
+        );
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [localParticipant, reviveEndedTrack]);
 
   useEffect(() => {
     if (!isInstructor) return;
@@ -1047,11 +1119,17 @@ function RoomInner({
       const data = JSON.parse(new TextDecoder().decode(msg.payload));
       if (data.type === 'move-to-room') {
         void changeRoom(data.payload.targetRoom as RoomName);
-      } else if (data.type === 'set-mic') {
-        // 講師からのマイク制御指示。本人操作と同じソフトミュートなので、後から再度ONにできる。
+      } else if (data.type === 'set-mic' || data.type === 'set-camera') {
+        // 講師からのマイク/カメラ制御指示。本人操作と同じソフトミュートなので、
+        // 本人がいつでも切り替え直せる。
         const enabled = !!(data.payload && data.payload.enabled);
-        localParticipant.setMicrophoneEnabled(enabled).catch(() => {});
-        setIsMicOn(enabled);
+        const isMic = data.type === 'set-mic';
+        void setLocalDevice(isMic ? 'mic' : 'camera', enabled).then((ok) => {
+          // 自分の映像・音声が講師の操作で送られ始めたことは本人に必ず知らせる
+          if (ok && enabled) {
+            setDeviceNotice(`講師があなたの${isMic ? 'マイク' : 'カメラ'}をONにしました。OFF にするときは下のボタンを押してください。`);
+          }
+        });
       } else if (data.type === 'end-session') {
         if (!isInstructor) {
           alert('講師がセッションを終了しました。退出します。');
@@ -1074,24 +1152,12 @@ function RoomInner({
   });
 
   const toggleMic = useCallback(async () => {
-    try {
-      await localParticipant.setMicrophoneEnabled(!isMicOn);
-      setIsMicOn(!isMicOn);
-    } catch (e) {
-      // UI 表示は RoomEvent.MediaDevicesError ハンドラ側で行う。ここでは
-      // 未処理の Promise rejection にしない (ボタン押下時に何も起きないよう見せない) ためだけに捕捉する。
-      console.warn('[toggleMic] setMicrophoneEnabled failed', e);
-    }
-  }, [localParticipant, isMicOn]);
+    await setLocalDevice('mic', !localParticipant.isMicrophoneEnabled);
+  }, [localParticipant, setLocalDevice]);
 
   const toggleCamera = useCallback(async () => {
-    try {
-      await localParticipant.setCameraEnabled(!isCameraOn);
-      setIsCameraOn(!isCameraOn);
-    } catch (e) {
-      console.warn('[toggleCamera] setCameraEnabled failed', e);
-    }
-  }, [localParticipant, isCameraOn]);
+    await setLocalDevice('camera', !localParticipant.isCameraEnabled);
+  }, [localParticipant, setLocalDevice]);
 
   const toggleScreenShare = useCallback(async () => {
     try {
@@ -1132,21 +1198,22 @@ function RoomInner({
   // クライアント側 publishData は講師ブラウザで届かないことがあるため、移動機能と
   // 同じくサーバー側 sendData 経由（/api/set-participant-mic）で配信する。
   // サーバー強制ミュートと違い、ON指示で参加者本人のマイクを再開できる。
-  const setParticipantMic = useCallback(
-    async (participantIdentity: string, enabled: boolean) => {
+  const setParticipantDevice = useCallback(
+    async (participantIdentity: string, device: 'mic' | 'camera', enabled: boolean) => {
+      const label = device === 'mic' ? 'マイク' : 'カメラ';
       try {
         const res = await fetch('/api/set-participant-mic', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ participantIdentity, roomName: currentRoom, enabled }),
+          body: JSON.stringify({ participantIdentity, roomName: currentRoom, enabled, device }),
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          alert(`マイク操作に失敗しました: ${err.error ?? res.status}`);
+          alert(`${label}操作に失敗しました: ${err.error ?? res.status}`);
         }
       } catch (e) {
-        console.error('set-participant-mic failed:', e);
-        alert('マイク操作に失敗しました。もう一度お試しください。');
+        console.error('set-participant-device failed:', e);
+        alert(`${label}操作に失敗しました。もう一度お試しください。`);
       }
     },
     [currentRoom]
@@ -1193,6 +1260,9 @@ function RoomInner({
         )}
         {studioSyncError && (
           <DeviceErrorBanner message={studioSyncError} onDismiss={() => setStudioSyncError(null)} />
+        )}
+        {deviceNotice && !deviceError && (
+          <DeviceErrorBanner tone="info" message={deviceNotice} onDismiss={() => setDeviceNotice(null)} />
         )}
         {/* 収録ステージ列。サイドパネルは flex 兄弟ではなく position: fixed の
             オーバーレイなので、開閉してもこの列 (= クロップ対象) は一切動かない。 */}
@@ -1504,7 +1574,7 @@ function RoomInner({
           onOpenAiSetup={() => setAiSetupOpen(true)}
           onMoveInstructor={changeRoom}
           onRoomsStatusRefresh={refetchRoomsStatus}
-          onSetParticipantMic={setParticipantMic}
+          onSetParticipantDevice={setParticipantDevice}
         />
         </div>
       )}
@@ -1525,6 +1595,9 @@ function RoomInner({
           showReload={deviceError.showReload}
           onDismiss={() => setDeviceError(null)}
         />
+      )}
+      {deviceNotice && !deviceError && (
+        <DeviceErrorBanner tone="info" message={deviceNotice} onDismiss={() => setDeviceNotice(null)} />
       )}
 
       {/* 録音/録画ステータストースト (全員) */}

@@ -36,8 +36,8 @@ interface InstructorDashboardProps {
   onMoveInstructor: (room: RoomName) => void | Promise<void>;
   /** BO在室状況を即時再取得する */
   onRoomsStatusRefresh?: () => void | Promise<void>;
-  /** 対象参加者のマイクをON/OFFする（data-channelソフトミュート） */
-  onSetParticipantMic: (participantIdentity: string, enabled: boolean) => void;
+  /** 対象参加者のマイク/カメラをON/OFFする（data-channelソフトミュート） */
+  onSetParticipantDevice: (participantIdentity: string, device: 'mic' | 'camera', enabled: boolean) => void;
 }
 
 interface RaisedHandEntry {
@@ -66,7 +66,7 @@ export default function InstructorDashboard({
   onOpenAiSetup,
   onMoveInstructor,
   onRoomsStatusRefresh,
-  onSetParticipantMic,
+  onSetParticipantDevice,
 }: InstructorDashboardProps) {
   const [isMoving, setIsMoving] = useState<string | null>(null);
 
@@ -463,6 +463,7 @@ export default function InstructorDashboard({
               } catch {}
 
               const isMicOn = participant.isMicrophoneEnabled;
+              const isCameraOn = participant.isCameraEnabled;
               const participantName = participant.name ?? participant.identity;
 
               return (
@@ -474,16 +475,28 @@ export default function InstructorDashboard({
                     </span>
                     <div className="flex items-center gap-1.5">
                       <button
-                        onClick={() => onSetParticipantMic(participant.identity, !isMicOn)}
+                        onClick={() => onSetParticipantDevice(participant.identity, 'mic', !isMicOn)}
                         className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
                           isMicOn
                             ? 'bg-green-700/50 text-green-200 hover:bg-green-700/70'
                             : 'bg-stone-600 text-stone-300 hover:bg-stone-500'
                         }`}
                         title={isMicOn ? 'マイクをOFFにする' : 'マイクをONにする'}
-                        aria-label={isMicOn ? 'マイクをOFFにする' : 'マイクをONにする'}
+                        aria-label={`${participantName}のマイクを${isMicOn ? 'OFF' : 'ON'}にする`}
                       >
                         {isMicOn ? '🎤' : '🔇'}
+                      </button>
+                      <button
+                        onClick={() => onSetParticipantDevice(participant.identity, 'camera', !isCameraOn)}
+                        className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
+                          isCameraOn
+                            ? 'bg-green-700/50 text-green-200 hover:bg-green-700/70'
+                            : 'bg-stone-600 text-stone-300 hover:bg-stone-500'
+                        }`}
+                        title={isCameraOn ? 'カメラをOFFにする' : 'カメラをONにする'}
+                        aria-label={`${participantName}のカメラを${isCameraOn ? 'OFF' : 'ON'}にする`}
+                      >
+                        {isCameraOn ? '📷' : '📵'}
                       </button>
                       <span
                         className={`w-2 h-2 rounded-full ${

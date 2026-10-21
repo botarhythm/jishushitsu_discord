@@ -7,12 +7,14 @@ interface SetParticipantMicRequest {
   participantIdentity: string;
   /** 対象参加者が所属するルーム（= 講師の現在ルーム） */
   roomName: string;
-  /** true: マイクON指示 / false: マイクOFF指示 */
+  /** true: ON指示 / false: OFF指示 */
   enabled: boolean;
+  /** 操作する機器。省略時はマイク (従来の呼び出しとの互換) */
+  device?: 'mic' | 'camera';
 }
 
 /**
- * 講師が対象参加者のマイクをON/OFFする。
+ * 講師が対象参加者のマイク/カメラをON/OFFする。
  *
  * クライアント側 `localParticipant.publishData` は講師ブラウザの publisher
  * データチャネル経由で届かないことがあるため、移動機能と同じく
@@ -25,13 +27,16 @@ export async function POST(request: NextRequest) {
 
   try {
     const body: SetParticipantMicRequest = await request.json();
-    const { participantIdentity, roomName, enabled } = body;
+    const { participantIdentity, roomName, enabled, device = 'mic' } = body;
 
     if (!participantIdentity || !isRoomName(roomName)) {
       return NextResponse.json(
         { error: 'participantIdentity と roomName が必要です' },
         { status: 400 }
       );
+    }
+    if (device !== 'mic' && device !== 'camera') {
+      return NextResponse.json({ error: 'device は mic か camera です' }, { status: 400 });
     }
 
     const apiKey = process.env.LIVEKIT_API_KEY!;
@@ -45,7 +50,7 @@ export async function POST(request: NextRequest) {
     const roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
 
     const message = JSON.stringify({
-      type: 'set-mic',
+      type: device === 'camera' ? 'set-camera' : 'set-mic',
       payload: { enabled: !!enabled },
     });
 
