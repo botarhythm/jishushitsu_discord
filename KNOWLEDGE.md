@@ -47,6 +47,13 @@ Last synced: 2026-08-30
 - 通話診断バー（接続状態・「今、遅れた」・「診断を保存」）は 2026-10-22 に UI から外した。接続安定性がひとまず改善したため（店主指示）。
   収集器 `lib/call-diagnostics.ts`・`components/CallDiagnosticsBar.tsx`・`scripts/verify-call-diagnostics.mjs` は残してある。
   再発時は `RoomView` に収集器の生成と `start()`、`setMode` の effect、バー2箇所（通常画面・収録画面）を戻す
+- 通話不良の調査は、まず LiveKit Cloud ダッシュボード（プロジェクト `Jishushitsu` / `p_2zgonqytyc6`）の参加者別記録を見る（60 日分残る）。
+  2026-10-29 の不良は もっちゃん（店主のメインのノート PC）の上り送信だけが止まる形だった。原因は、通話中の画面のワイヤレス投影（Miracast）と
+  2.4 GHz の Wi-Fi を 1 枚の無線で併用したことと見ている（店主が投影を確認、Windows の WLAN/PnP ログと時刻が一致）。
+  通話中はワイヤレス投影を使わない（HDMI 有線で投影）。同じ形の不良は 9/7 から繰り返しているが、過去の回には投影の記録はなく、別の要因。
+  読み方と集計結果は `docs/reviews/2026-10-29-livekit-session-analysis.md`
+- 接続テスト `/connection-test`（2026-10-29）: ログイン済みなら誰でも実行でき、通話中でも切れない。SDK の ConnectionCheck と、
+  本番設定で 20 秒送り続ける持続検査（自動接続／中継固定）を比べる。症状が出た PC で実行し「結果をコピー」を送ってもらう
 
 ### [project-ai-participant] AI参加者収録機能（本番稼働中）
 - 収録モードを「人間2名 + ChatGPTデスクトップ音声」の3者ビデオポッドキャスト収録に拡張。
