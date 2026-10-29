@@ -8,9 +8,15 @@ import { createCallRoomOptions } from '@/lib/call-media-options';
  * (docs/reviews/2026-10-29-livekit-session-analysis.md)。SDK の ConnectionCheck は
  * 10 秒の UDP/TCP 比較までなので、本番と同じ送信設定 (createCallRoomOptions) で
  * 映像と音声を送り続け、実際に出ていった量と往復遅延を数秒ごとに測る。
- * 'relay' は TURN 中継に固定した経路で、UDP 直結が詰まる環境での逃げ道になるかを見る。
+ *
+ * 送信量はブラウザが送り出した量 (bytesSent) なので、それだけでは「届いたか」が分からない。
+ * サーバー (SFU) が返す受信報告 (RTCP RR → remote-inbound-rtp) が途絶えていないかも見る。
+ *
+ * 'relay' は TURN 中継に固定（中継との間は UDP）、'tls' はさらに TURN/TLS (TCP 443) に切り替える。
+ * UDP が詰まる環境で、どの経路なら通話を逃がせるかを見る。
+ * SDK に UDP 直結を強制する手段 (force-udp) はないため、'auto' が何を選んだかは経路で読む。
  */
-export type UploadMode = 'auto' | 'relay';
+export type UploadMode = 'auto' | 'relay' | 'tls';
 
 export interface UploadSample {
   /** 開始からの秒 */
@@ -26,6 +32,10 @@ export interface UploadSample {
   availableKbps: number | null;
   /** 映像エンコーダが絞られている理由（bandwidth / cpu / none） */
   limitation: string | null;
+  /** サーバーからの受信報告が最後に増えてからの秒。大きいほど「届いていない」 */
+  ackGapSec: number;
+  /** サーバーの受信報告から計算した往復遅延（音声） */
+  remoteRttMs: number | null;
 }
 
 export interface UploadResult {
@@ -40,6 +50,10 @@ export interface UploadResult {
   medianVideoKbps: number | null;
   medianRttMs: number | null;
   maxRttMs: number | null;
+  /** 測定中に受信報告が途絶えた最長の秒数 */
+  maxAckGapSec: number;
+  /** 測定中に一度も受信報告がなかった（届いたことを確認できない） */
+  neverAcked: boolean;
   reconnects: number;
   /** 接続開始からの秒。負の値は制御通信（WebSocket）だけの再接続 */
   reconnectAtSec: number[];
@@ -58,6 +72,8 @@ const SAMPLE_MS = 2000;
 export const STALLED_AUDIO_KBPS = 20;
 /** 映像の送信がこれを下回ったら「ほぼ止まっている」。テスト映像は 800kbps 以上出る */
 export const STALLED_VIDEO_KBPS = 100;
+/** サーバーの受信報告がこれ以上途絶えたら「届いていない」。正常時は 1〜2 秒ごとに届く */
+export const ACK_GAP_LIMIT_SEC = 6;
 
 /** 送信の測定中に起きた再接続（メディア経路の張り直し）の回数 */
 export function reconnectsWhileMeasuring(r: UploadResult): number {
@@ -124,12 +140,17 @@ interface StatsTotals {
   availableKbps: number | null;
   limitation: string | null;
   path: string | null;
+  /** サーバーから届いた受信報告の累計（音声＋映像） */
+  acks: number;
+  remoteRttMs: number | null;
 }
 
-/** 送信側 RTCPeerConnection の統計から、送信バイト累計と選ばれた経路を読む */
+/** 送信側 RTCPeerConnection の統計から、送信バイト累計・受信報告・選ばれた経路を読む */
 function readStats(reports: RTCStatsReport[]): StatsTotals {
   let audioBytes = 0;
   let videoBytes = 0;
+  let acks = 0;
+  let remoteRttMs: number | null = null;
   let limitation: string | null = null;
   let pair: RTCIceCandidatePairStats | undefined;
   const byId = new Map<string, RTCStats>();
@@ -144,6 +165,11 @@ function readStats(reports: RTCStatsReport[]): StatsTotals {
       if (o.kind === 'video' && o.qualityLimitationReason && o.qualityLimitationReason !== 'none') {
         limitation = o.qualityLimitationReason;
       }
+    }
+    if (s.type === 'remote-inbound-rtp') {
+      const ri = s as RTCStats & { kind?: string; roundTripTime?: number; roundTripTimeMeasurements?: number };
+      acks += ri.roundTripTimeMeasurements ?? 0;
+      if (ri.kind === 'audio' && ri.roundTripTime != null) remoteRttMs = Math.round(ri.roundTripTime * 1000);
     }
     if (s.type === 'transport') {
       const id = (s as RTCTransportStats).selectedCandidatePairId;
@@ -176,7 +202,35 @@ function readStats(reports: RTCStatsReport[]): StatsTotals {
       pair?.availableOutgoingBitrate != null ? Math.round(pair.availableOutgoingBitrate / 1000) : null,
     limitation,
     path,
+    acks,
+    remoteRttMs,
   };
+}
+
+/**
+ * TURN/TLS へ切り替える。SDK の ConnectionCheck (switchProtocol) と同じく
+ * サーバーに候補の切り替えを頼み、再接続が終わるのを待つ
+ */
+async function switchToTls(room: Room): Promise<void> {
+  let reconnecting = false;
+  let reconnected = false;
+  const onReconnecting = () => { reconnecting = true; };
+  const onReconnected = () => { reconnected = true; };
+  room.on(RoomEvent.Reconnecting, onReconnecting);
+  room.on(RoomEvent.Reconnected, onReconnected);
+  try {
+    await room.simulateScenario('force-tls');
+    await new Promise((r) => setTimeout(r, 1000));
+    if (!reconnecting) return;
+    const deadline = performance.now() + 15000;
+    while (!reconnected && performance.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!reconnected) throw new Error('TLS への切り替えが 15 秒以内に終わりませんでした');
+  } finally {
+    room.off(RoomEvent.Reconnecting, onReconnecting);
+    room.off(RoomEvent.Reconnected, onReconnected);
+  }
 }
 
 export async function runUploadTest(
@@ -199,6 +253,8 @@ export async function runUploadTest(
     medianVideoKbps: null,
     medianRttMs: null,
     maxRttMs: null,
+    maxAckGapSec: 0,
+    neverAcked: false,
     reconnects: 0,
     reconnectAtSec: [],
     measureStartSec: null,
@@ -224,7 +280,8 @@ export async function runUploadTest(
   let video: ReturnType<typeof createTestVideo> | null = null;
   let audio: ReturnType<typeof createTestAudio> | null = null;
   try {
-    await room.connect(url, token, mode === 'relay' ? { rtcConfig: { iceTransportPolicy: 'relay' } } : {});
+    await room.connect(url, token, mode === 'auto' ? {} : { rtcConfig: { iceTransportPolicy: 'relay' } });
+    if (mode === 'tls') await switchToTls(room);
     video = createTestVideo();
     audio = createTestAudio();
     const vPub = await room.localParticipant.publishTrack(video.track, {
@@ -246,6 +303,8 @@ export async function runUploadTest(
     let prev = await read();
     let prevAt = performance.now();
     const startedAt = prevAt;
+    let lastAckAt = startedAt;
+    const firstAcks = prev.acks;
     result.measureStartSec = Math.round((startedAt - connectStartedAt) / 100) / 10;
     hiddenInInterval = document.hidden;
     while (performance.now() - startedAt < seconds * 1000) {
@@ -256,6 +315,7 @@ export async function runUploadTest(
       const kbpsOf = (bytes: number) => Math.max(0, Math.round((bytes * 8) / (now - prevAt)));
       const audioKbps = kbpsOf(cur.audioBytes - prev.audioBytes);
       const videoKbps = kbpsOf(cur.videoBytes - prev.videoBytes);
+      if (cur.acks > prev.acks) lastAckAt = now;
       const sample: UploadSample = {
         t: Math.round((now - startedAt) / 1000),
         kbps: audioKbps + videoKbps,
@@ -265,7 +325,10 @@ export async function runUploadTest(
         rttMs: cur.rttMs,
         availableKbps: cur.availableKbps,
         limitation: cur.limitation,
+        ackGapSec: Math.round((now - lastAckAt) / 1000),
+        remoteRttMs: cur.remoteRttMs,
       };
+      result.neverAcked = cur.acks === firstAcks;
       if (cur.path) result.path = cur.path;
       result.samples.push(sample);
       onSample(sample);
@@ -293,5 +356,6 @@ export async function runUploadTest(
   result.medianVideoKbps = median(steady.filter((s) => !s.hidden).map((s) => s.videoKbps));
   result.medianRttMs = median(rtts);
   result.maxRttMs = rtts.length ? Math.max(...rtts) : null;
+  result.maxAckGapSec = result.samples.length ? Math.max(...result.samples.map((s) => s.ackGapSec)) : 0;
   return result;
 }

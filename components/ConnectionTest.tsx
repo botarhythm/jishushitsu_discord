@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { CheckStatus, ConnectionCheck, type CheckInfo } from 'livekit-client';
 import {
+  ACK_GAP_LIMIT_SEC,
   reconnectsWhileMeasuring,
   runUploadTest,
   STALLED_AUDIO_KBPS,
@@ -21,14 +22,27 @@ const SDK_CHECKS: { key: keyof ConnectionCheck; label: string }[] = [
   { key: 'checkWebRTC', label: '映像・音声の通り道（WebRTC）' },
   { key: 'checkTURN', label: '中継サーバー経由の接続（TURN）' },
   { key: 'checkReconnect', label: '切れたときの再接続' },
-  { key: 'checkConnectionProtocol', label: 'UDP と TCP の送信比較（各 10 秒）' },
+  // SDK には UDP を強制する手段がなく、「UDP」側は自動接続のまま測られる
+  { key: 'checkConnectionProtocol', label: '自動接続と TCP の送信比較（各 10 秒）' },
   { key: 'checkCloudRegion', label: '近い拠点と応答時間' },
 ];
 
+const UPLOAD_MODES: UploadMode[] = ['auto', 'relay', 'tls'];
+
 const UPLOAD_LABEL: Record<UploadMode, string> = {
   auto: `送信の持続（自動接続・${UPLOAD_SECONDS} 秒）`,
-  relay: `送信の持続（中継に固定・${UPLOAD_SECONDS} 秒）`,
+  relay: `送信の持続（中継・UDP・${UPLOAD_SECONDS} 秒）`,
+  tls: `送信の持続（中継・TLS／TCP 443・${UPLOAD_SECONDS} 秒）`,
 };
+
+/** その経路が UDP / TCP のどちらで運ばれたか。自動接続は実際に選ばれた経路で決まる */
+function transportOf(r: UploadResult): 'UDP' | 'TCP' | null {
+  if (r.mode === 'relay') return 'UDP';
+  if (r.mode === 'tls') return 'TCP';
+  if (/\budp\b/.test(r.path)) return 'UDP';
+  if (/\btcp\b/.test(r.path)) return 'TCP';
+  return null;
+}
 
 type Phase = 'idle' | 'running' | 'done';
 
@@ -42,7 +56,20 @@ const STATUS_TEXT: Record<CheckStatus, string> = {
 
 function uploadVerdict(r: UploadResult): { ok: boolean; text: string } {
   if (r.error) return { ok: false, text: `接続できませんでした（${r.error}）` };
+  if (r.mode === 'tls' && !/tls/.test(r.path)) {
+    return { ok: false, text: `TLS の中継に切り替わりませんでした（経路 ${r.path}）` };
+  }
   const rates = `音声 ${r.medianAudioKbps} kbps・映像 ${r.medianVideoKbps ?? '測定外'} kbps`;
+  // 送り出せていても、サーバーから受信の報告が戻らなければ届いていない
+  if (r.neverAcked) {
+    return { ok: false, text: `サーバーに届いたことを確認できません（受信の報告なし。送り出し ${rates}）` };
+  }
+  if (r.maxAckGapSec >= ACK_GAP_LIMIT_SEC) {
+    return {
+      ok: false,
+      text: `サーバーからの受信の報告が ${r.maxAckGapSec} 秒途絶えました（届いていない時間があります。送り出し ${rates}）`,
+    };
+  }
   if (r.medianAudioKbps < STALLED_AUDIO_KBPS) {
     return { ok: false, text: `送信がほぼ止まっています（${rates}）` };
   }
@@ -60,17 +87,35 @@ function uploadVerdict(r: UploadResult): { ok: boolean; text: string } {
   return { ok: true, text: `正常に送れています（${rates}）` };
 }
 
-/** 2 つの持続検査の組み合わせから、次に何を疑うかを一文で出す */
-function overallVerdict(auto?: UploadResult, relay?: UploadResult): string | null {
-  if (!auto || !relay) return null;
-  const a = uploadVerdict(auto).ok;
-  const r = uploadVerdict(relay).ok;
-  if (a && r) return '今は正常です。症状が出ているときにもう一度実行してください。';
-  if (!a && r) {
-    return '自動接続だけが詰まり、中継では送れています。この PC・回線から LiveKit への UDP が絞られている可能性が高く、中継への切り替えで回避できる見込みです。';
+/** 3 つの持続検査の組み合わせから、次に何を疑うかを出す */
+function overallVerdict(uploads: Partial<Record<UploadMode, UploadResult>>): string | null {
+  const results = UPLOAD_MODES.map((m) => uploads[m]);
+  if (results.some((r) => !r)) return null;
+  const done = results as UploadResult[];
+  const ok = done.filter((r) => uploadVerdict(r).ok);
+  const bad = done.filter((r) => !uploadVerdict(r).ok);
+  if (!bad.length) return '今は正常です。症状が出ているときにもう一度実行してください。';
+  if (!ok.length) return 'どの経路でも送れていません。この PC か回線の上り全体を疑ってください。';
+
+  const auto = uploads.auto!;
+  const autoOk = uploadVerdict(auto).ok;
+  const udpBad = bad.some((r) => transportOf(r) === 'UDP');
+  const tcpOk = ok.some((r) => transportOf(r) === 'TCP');
+  const parts: string[] = [];
+  if (udpBad && tcpOk) {
+    parts.push('UDP の経路で詰まり、TCP の経路では送れています。この PC・回線から LiveKit への UDP が絞られている可能性が高いです。');
+  } else {
+    parts.push(
+      `送れた経路：${ok.map((r) => UPLOAD_LABEL[r.mode]).join('、')}。` +
+        `詰まった経路：${bad.map((r) => UPLOAD_LABEL[r.mode]).join('、')}。`
+    );
   }
-  if (a && !r) return '自動接続は正常で、中継だけが不調です。通話への影響は小さいと考えられます。';
-  return 'どちらの経路でも送れていません。この PC か回線の上り全体を疑ってください。';
+  if (autoOk) {
+    parts.push(`自動接続は ${transportOf(auto) ?? '不明な経路'} を選んで送れているので、今の通話への影響は小さいと考えられます。`);
+  } else if (uploads.tls && uploadVerdict(uploads.tls).ok) {
+    parts.push('自動接続も詰まっています。TLS（TCP 443）の中継に切り替えれば通話できる見込みです。');
+  }
+  return parts.join('');
 }
 
 function formatSamples(samples: UploadSample[]): string {
@@ -79,6 +124,8 @@ function formatSamples(samples: UploadSample[]): string {
       (s) =>
         `${s.t}s=a${s.audioKbps}+v${s.videoKbps}kbps` +
         (s.rttMs != null ? `/rtt${s.rttMs}` : '') +
+        (s.remoteRttMs != null ? `/rr${s.remoteRttMs}` : '') +
+        (s.ackGapSec >= 3 ? `/報告なし${s.ackGapSec}s` : '') +
         (s.limitation ? `/${s.limitation}` : '') +
         (s.hidden ? '/裏' : '')
     )
@@ -132,7 +179,7 @@ export default function ConnectionTest() {
         }
       }
 
-      for (const mode of ['auto', 'relay'] as const) {
+      for (const mode of UPLOAD_MODES) {
         setRunning(UPLOAD_LABEL[mode]);
         const result = await runUploadTest(livekitUrl, token, mode, UPLOAD_SECONDS, (s) =>
           setLive((prev) => ({ ...prev, [mode]: [...(prev[mode] ?? []), s] }))
@@ -159,12 +206,12 @@ export default function ConnectionTest() {
         const logs = info.logs.map((l) => `${l.level === 'info' ? '' : `[${l.level}] `}${l.message}`).join(' / ');
         return `- ${c.label}: ${STATUS_TEXT[info.status]}${logs ? `（${logs}）` : ''}`;
       }),
-      ...(['auto', 'relay'] as const).map((m) => {
+      ...UPLOAD_MODES.map((m) => {
         const r = uploads[m];
         if (!r) return `- ${UPLOAD_LABEL[m]}: 未実行`;
         return (
           `- ${UPLOAD_LABEL[m]}: ${uploadVerdict(r).text} / 経路 ${r.path} / ` +
-          `RTT 中央 ${r.medianRttMs ?? '-'}ms 最大 ${r.maxRttMs ?? '-'}ms / 再接続 ${r.reconnects}` +
+          `RTT 中央 ${r.medianRttMs ?? '-'}ms 最大 ${r.maxRttMs ?? '-'}ms / 受信報告の途絶 最大 ${r.maxAckGapSec}s / 再接続 ${r.reconnects}` +
           (r.reconnectAtSec.length
             ? `（${r.reconnectAtSec.join(', ')}s、測定開始 ${r.measureStartSec ?? '-'}s）`
             : '') +
@@ -172,7 +219,7 @@ export default function ConnectionTest() {
         );
       }),
       '',
-      `判定: ${overallVerdict(uploads.auto, uploads.relay) ?? '未完了'}`,
+      `判定: ${overallVerdict(uploads) ?? '未完了'}`,
     ];
     return lines.join('\n');
   }, [checks, startedAt, uploads]);
@@ -182,7 +229,7 @@ export default function ConnectionTest() {
     setCopied(true);
   }, [summaryText]);
 
-  const verdict = overallVerdict(uploads.auto, uploads.relay);
+  const verdict = overallVerdict(uploads);
 
   return (
     <div className="min-h-dvh bg-stone-950">
@@ -192,7 +239,7 @@ export default function ConnectionTest() {
           <p className="mt-3 max-w-[50em] text-pretty text-sm leading-relaxed text-stone-400">
             {'この PC から自習室のサーバー（LiveKit）へ、映像と音声を送れるかを調べます。' +
               'テスト用の別の部屋を使うので、通話中に実行しても通話は切れません。' +
-              '所要時間は 2 分ほどです。カメラとマイクは使いません。'}
+              '所要時間は 3 分ほどです。カメラとマイクは使いません。'}
           </p>
           <p className="mt-2 max-w-[50em] text-pretty text-sm leading-relaxed text-stone-400">
             {'映像が固まる・声が届かないときに実行し、終わったら「結果をコピー」で開発側へ送ってください。' +
@@ -248,7 +295,7 @@ export default function ConnectionTest() {
                 </ResultRow>
               );
             })}
-            {(['auto', 'relay'] as const).map((m) => {
+            {UPLOAD_MODES.map((m) => {
               const r = uploads[m];
               const samples = r?.samples ?? live[m] ?? [];
               const status = r
@@ -263,7 +310,7 @@ export default function ConnectionTest() {
                   {r && (
                     <li className="text-stone-300">
                       {uploadVerdict(r).text}。経路 {r.path}、往復遅延 中央 {r.medianRttMs ?? '-'} ms・最大{' '}
-                      {r.maxRttMs ?? '-'} ms
+                      {r.maxRttMs ?? '-'} ms、受信の報告の途絶 最大 {r.maxAckGapSec} 秒
                       {r.reconnectAtSec.length > 0 &&
                         `、再接続 ${r.reconnectAtSec.join(', ')} 秒（測定開始 ${r.measureStartSec ?? '-'} 秒）`}
                     </li>
