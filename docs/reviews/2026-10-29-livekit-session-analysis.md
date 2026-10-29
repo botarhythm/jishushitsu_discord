@@ -168,3 +168,23 @@ SDK の「UDP と TCP の比較」は、SDK に `force-udp` がないため UDP 
 - 時系列の数値は、ページを `RSC: 1` ヘッダー付きで取得すると `timeSeriesName` / `value` / `timestamp` の組で取り出せる。系列の並びは「品質 → カメラ fps → カメラ bitrate → カメラ loss → マイク bitrate → マイク loss → 受信 bitrate → 受信 loss → 受信 fps」（カメラがない回はカメラの 3 系列が抜ける）
 - 退出理由の読み方：`CLIENT_INITIATED`＝自分で退出、`CONNECTION_TIMEOUT`＝サーバーとの通信が途絶、`DUPLICATE_IDENTITY`＝同じアカウントで入り直した、`SIGNAL_CLOSE`＝制御通信が閉じた
 - 記録は少なくとも 60 日分残っている。Vercel の実行ログは短期間しか残らず、今回は取得できなかった
+
+## 予防の対策：通話中の送信停止の見張りと TLS 中継への自動切り替え（10/29 実装）
+
+店主の判断（10/29）で、9/30 の「`force-tls` を本番の接続切替に使わない」方針を改め、次の 2 つを入れた。
+
+| 対策 | 中身 |
+|---|---|
+| 自動切り替え（`lib/uplink-watchdog.ts`・`hooks/useUplinkWatchdog.ts`） | 通話中、2 秒ごとに自分の送信トラックの統計を読む。送り出しているのにサーバーの受信報告（`remote-inbound-rtp`）が 8 秒戻らなければ「止まった」とみなし、1 回だけ `simulateScenario('force-tls')` で TURN/TLS（TCP 443）へその場で切り替える。12 秒後に受信報告が戻っていれば成功。録画・チャット・画面の状態は保たれる。本人には画面上部に案内を出す |
+| 記録（`/api/call-incident`） | 停止・切り替えの結果・回復を、表示名・ロール・部屋・経路・往復遅延・ブラウザの範囲で記録する。Vercel のログに出し、`CALL_INCIDENT_WEBHOOK_URL` があれば Discord にも送る（メンションは飛ばさない）。映像・音声・IP アドレスは送らない |
+
+判定しない場合：マイクもカメラも OFF（送っていない）、再接続中、すでに TLS 中継で使っているとき（案内だけ出す）。切り替えは 1 つの部屋につき 1 回まで。
+
+検証（10/29、ローカル dev・検証専用の回 `devcheck--main`・普段の Chrome 156 を偽のカメラ・マイクで起動）：
+- `?simulateStall`（開発環境だけで有効。入室 10 秒後から受信報告を戻っていないものとして扱う）で、入室 16 秒後に案内が出て、経路が `host / udp` → `prflx / udp / 中継 tls` に切り替わり、30 秒後に「届くようになりました」が出た。`/api/call-incident` に停止と切り替え成功の 2 件が記録された。
+- 擬似停止なしの通常の通話 75 秒では、案内も記録も出なかった（誤判定なし）。
+- 実際の UDP の詰まりでの動作は、まだ確かめていない。
+
+注意：
+- `force-tls` は SDK の試験用の機能。`livekit-client` を更新したら、`/connection-test` の「中継・TLS」で経路に `中継 tls` と出ることを確かめる。
+- 切り替えはその場での入り直し（Reconnecting → Reconnected）なので、録画中なら相手の音声に一瞬の途切れが入りうる。

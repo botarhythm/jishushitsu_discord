@@ -52,6 +52,9 @@ Last synced: 2026-08-30
   2.4 GHz の Wi-Fi を 1 枚の無線で併用したことと見ている（店主が投影を確認、Windows の WLAN/PnP ログと時刻が一致）。
   通話中はワイヤレス投影を使わない（HDMI 有線で投影）。同じ形の不良は 9/7 から繰り返しているが、過去の回には投影の記録はなく、別の要因。
   読み方と集計結果は `docs/reviews/2026-10-29-livekit-session-analysis.md`
+- 送信停止の見張り（2026-10-29）: 通話中、自分の送信の受信報告が 8 秒戻らなければ TURN/TLS へ 1 回だけその場で切り替え、
+  本人に案内を出し、`/api/call-incident` に記録する（`CALL_INCIDENT_WEBHOOK_URL` があれば Discord へ）。`force-tls` は SDK の試験用機能なので、
+  livekit-client を更新したら `/connection-test` の「中継・TLS」で切り替わることを確かめる。開発環境では `/room?simulateStall` で流れを試せる
 - 接続テスト `/connection-test`（2026-10-29）: ログイン済みなら誰でも実行でき、通話中でも切れない。SDK の ConnectionCheck と、
   本番設定で 20 秒送り続ける持続検査（自動接続／中継固定）を比べる。症状が出た PC で実行し「結果をコピー」を送ってもらう
 
