@@ -133,7 +133,7 @@ function createTestAudio(): { track: MediaStreamTrack; stop: () => void } {
   return { track, stop: () => { track.stop(); void ctx.close(); } };
 }
 
-interface StatsTotals {
+export interface StatsTotals {
   audioBytes: number;
   videoBytes: number;
   rttMs: number | null;
@@ -145,8 +145,11 @@ interface StatsTotals {
   remoteRttMs: number | null;
 }
 
-/** 送信側 RTCPeerConnection の統計から、送信バイト累計・受信報告・選ばれた経路を読む */
-function readStats(reports: RTCStatsReport[]): StatsTotals {
+/**
+ * 送信側 RTCPeerConnection の統計から、送信バイト累計・受信報告・選ばれた経路を読む。
+ * 通話中の送信停止の見張り (lib/uplink-watchdog.ts) でも使う
+ */
+export function readUplinkStats(reports: RTCStatsReport[]): StatsTotals {
   let audioBytes = 0;
   let videoBytes = 0;
   let acks = 0;
@@ -209,9 +212,11 @@ function readStats(reports: RTCStatsReport[]): StatsTotals {
 
 /**
  * TURN/TLS へ切り替える。SDK の ConnectionCheck (switchProtocol) と同じく
- * サーバーに候補の切り替えを頼み、再接続が終わるのを待つ
+ * サーバーに候補の切り替えを頼み、再接続が終わるのを待つ。
+ * `force-tls` は SDK の試験用の機能。通話中の自動切り替え (lib/uplink-watchdog.ts) でも使うため、
+ * livekit-client を更新したら /connection-test の「中継・TLS」で切り替わることを確かめる
  */
-async function switchToTls(room: Room): Promise<void> {
+export async function switchToTls(room: Room, timeoutMs = 15000): Promise<void> {
   let reconnecting = false;
   let reconnected = false;
   const onReconnecting = () => { reconnecting = true; };
@@ -222,11 +227,13 @@ async function switchToTls(room: Room): Promise<void> {
     await room.simulateScenario('force-tls');
     await new Promise((r) => setTimeout(r, 1000));
     if (!reconnecting) return;
-    const deadline = performance.now() + 15000;
+    const deadline = performance.now() + timeoutMs;
     while (!reconnected && performance.now() < deadline) {
       await new Promise((r) => setTimeout(r, 100));
     }
-    if (!reconnected) throw new Error('TLS への切り替えが 15 秒以内に終わりませんでした');
+    if (!reconnected) {
+      throw new Error(`TLS への切り替えが ${Math.round(timeoutMs / 1000)} 秒以内に終わりませんでした`);
+    }
   } finally {
     room.off(RoomEvent.Reconnecting, onReconnecting);
     room.off(RoomEvent.Reconnected, onReconnected);
@@ -297,7 +304,7 @@ export async function runUploadTest(
       const reports = await Promise.all(
         [vPub.track, aPub.track].map((t) => t?.getRTCStatsReport() ?? Promise.resolve(undefined))
       );
-      return readStats(reports.filter((r): r is RTCStatsReport => !!r));
+      return readUplinkStats(reports.filter((r): r is RTCStatsReport => !!r));
     };
 
     let prev = await read();

@@ -27,6 +27,7 @@ import InstructorDashboard from './InstructorDashboard';
 import { useRoomsStatus } from '@/hooks/useRoomsStatus';
 import { useEndSession } from '@/hooks/useEndSession';
 import { useAutoLogout } from '@/hooks/useAutoLogout';
+import { useUplinkWatchdog } from '@/hooks/useUplinkWatchdog';
 import { useLocalRecording, type RecordingQuality } from '@/hooks/useLocalRecording';
 import { EndSessionModal } from './EndSessionModal';
 import { RecordingToast } from './RecordingToast';
@@ -237,6 +238,9 @@ function RoomInner({
 
   /** 講師の操作など、エラーではないが本人に知らせたいこと */
   const [deviceNotice, setDeviceNotice] = useState<string | null>(null);
+
+  // 自分の送信がサーバーに届かなくなったら知らせ、TLS 中継へ切り替える
+  const uplink = useUplinkWatchdog(room, currentRoom);
 
   /**
    * publish 済みのトラックが OS 側で終了している (readyState === 'ended') なら取り直す。
@@ -1280,6 +1284,9 @@ function RoomInner({
         {deviceNotice && !deviceError && (
           <DeviceErrorBanner tone="info" message={deviceNotice} onDismiss={() => setDeviceNotice(null)} />
         )}
+        {uplink.notice && !deviceError && !deviceNotice && (
+          <DeviceErrorBanner tone={uplink.notice.tone} message={uplink.notice.message} onDismiss={uplink.dismiss} />
+        )}
         {/* 収録ステージ列。サイドパネルは flex 兄弟ではなく position: fixed の
             オーバーレイなので、開閉してもこの列 (= クロップ対象) は一切動かない。 */}
         <div className="flex min-h-0 w-full flex-1">
@@ -1613,6 +1620,9 @@ function RoomInner({
       )}
       {deviceNotice && !deviceError && (
         <DeviceErrorBanner tone="info" message={deviceNotice} onDismiss={() => setDeviceNotice(null)} />
+      )}
+      {uplink.notice && !deviceError && !deviceNotice && (
+        <DeviceErrorBanner tone={uplink.notice.tone} message={uplink.notice.message} onDismiss={uplink.dismiss} />
       )}
 
       {/* 録音/録画ステータストースト (全員) */}
