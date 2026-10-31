@@ -239,9 +239,6 @@ function RoomInner({
   /** 講師の操作など、エラーではないが本人に知らせたいこと */
   const [deviceNotice, setDeviceNotice] = useState<string | null>(null);
 
-  // 自分の送信がサーバーに届かなくなったら知らせ、TLS 中継へ切り替える
-  const uplink = useUplinkWatchdog(room, currentRoom);
-
   /**
    * publish 済みのトラックが OS 側で終了している (readyState === 'ended') なら取り直す。
    *
@@ -421,6 +418,10 @@ function RoomInner({
     // LiveKitから人間・AIの全音声を取得するため、OS側のタブ音声ループバックは不要。
     captureTabAudio: false,
   });
+
+  // 自分の接続が劣化したら、映像を止めて音声を守り、TLS 中継へ切り替える。
+  // 収録はタブの画面を録るので、収録中は自分の映像を止めない
+  const uplink = useUplinkWatchdog(room, currentRoom, isLocalRecording || isLocalRecordingStarting);
   /**
    * サイドパネル (チャット・AI設定) を開閉できるか。
    *

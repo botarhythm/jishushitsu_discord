@@ -16,7 +16,10 @@ export function createCallRoomOptions(): RoomOptions {
       forceStereo: false,
       audioPreset: AudioPresets.speech,
       videoEncoding: { maxBitrate: 700_000, maxFramerate: 20, priority: 'low' },
-      videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360],
+      // 上りの総量を抑える。540p・360p・180p の 3 層では合計約 1.3 Mbps を常に送っており、
+      // 弱い Wi-Fi で上りが詰まる一因になっていた (docs/reviews/2026-10-30-zoom-vs-livekit.md)。
+      // 中間の 360p 層をやめ、540p（上限 700 kbps）と 180p（160 kbps）の 2 層にする
+      videoSimulcastLayers: [VideoPresets.h180],
       simulcast: true,
       degradationPreference: 'balanced',
     },

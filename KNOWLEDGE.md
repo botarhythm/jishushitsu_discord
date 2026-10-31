@@ -48,11 +48,14 @@ Last synced: 2026-08-30
   収集器 `lib/call-diagnostics.ts`・`components/CallDiagnosticsBar.tsx`・`scripts/verify-call-diagnostics.mjs` は残してある。
   再発時は `RoomView` に収集器の生成と `start()`、`setMode` の effect、バー2箇所（通常画面・収録画面）を戻す
 - 通話不良の調査は、まず LiveKit Cloud ダッシュボード（プロジェクト `Jishushitsu` / `p_2zgonqytyc6`）の参加者別記録を見る（60 日分残る）。
-  2026-10-29 の不良は もっちゃん（店主のメインのノート PC）の上り送信だけが止まる形だった。原因は、通話中の画面のワイヤレス投影（Miracast）と
-  2.4 GHz の Wi-Fi を 1 枚の無線で併用したことと見ている（店主が投影を確認、Windows の WLAN/PnP ログと時刻が一致）。
-  通話中はワイヤレス投影を使わない（HDMI 有線で投影）。同じ形の不良は 9/7 から繰り返しているが、過去の回には投影の記録はなく、別の要因。
+  2026-10-29 の不良は もっちゃん（店主のメインのノート PC）の上り送信だけが細る形だった。きっかけは、画面のワイヤレス投影（Miracast）と
+  2.4 GHz の Wi-Fi の併用（Windows の WLAN/PnP ログと時刻が一致）。同じ形の不良は 9/7 から繰り返している。
+  同じ PC・回線で Zoom は使えたため、**通信の揺れに耐えられないのはアプリ側の課題**として扱う（店主の結論、10/30）。Zoom との差は
+  `docs/reviews/2026-10-30-zoom-vs-livekit.md`。
   読み方と集計結果は `docs/reviews/2026-10-29-livekit-session-analysis.md`
-- 送信停止の見張り（2026-10-29）: 通話中、自分の送信の受信報告が 8 秒戻らなければ TURN/TLS へ 1 回だけその場で切り替え、
+- 劣化の見張り（2026-10-29、10/30 改）: 自分の接続品質 Poor/Lost・往復遅延 1 秒以上・受信報告なしを「劣化」とし、6 秒続けばカメラ映像を止めて音声を守り
+  （収録中は止めない）、10 秒続けば TURN/TLS へ 1 回だけその場で切り替える。品質が戻って 20 秒で映像を戻す。TLS で直った端末は 14 日間、
+  入室直後に TLS へ切り替える（localStorage `jishushitsu:prefer-tls-until`）。simulcast は 540p＋180p の 2 層（360p をやめた）。
   本人に案内を出し、`/api/call-incident` に記録する（`CALL_INCIDENT_WEBHOOK_URL` があれば Discord へ）。`force-tls` は SDK の試験用機能なので、
   livekit-client を更新したら `/connection-test` の「中継・TLS」で切り替わることを確かめる。開発環境では `/room?simulateStall` で流れを試せる
 - 接続テスト `/connection-test`（2026-10-29）: ログイン済みなら誰でも実行でき、通話中でも切れない。SDK の ConnectionCheck と、
