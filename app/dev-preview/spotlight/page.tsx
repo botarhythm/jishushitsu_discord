@@ -36,6 +36,11 @@ function Preview() {
   const [slots, setSlots] = useState<(string | null)[]>(['host', 'guest', null]);
   const [names, setNames] = useState(true);
   const [viewer, setViewer] = useState(false);
+  const [mics, setMics] = useState([
+    { identity: 'guest', name: 'ゲスト', micOn: true },
+    { identity: 'audience', name: '参加者', micOn: true },
+    { identity: 'late', name: '途中参加の受講生', micOn: false },
+  ]);
   const changeSlot = (index: number, token: string | null) => setSlots((prev) => prev.map((v, i) => i === index ? token : v));
   return (
     <RoomContext.Provider value={room}>
@@ -59,6 +64,7 @@ function Preview() {
             { token: 'host', name: 'ホスト' }, { token: 'guest', name: 'ゲスト' },
             { token: 'audience', name: '参加者' }, { token: 'ai:preview-ai', name: 'ChatGPT' },
           ]}
+          studentMics={mics} onSetStudentMic={(id, on) => setMics((ms) => ms.map((m) => (m.identity === id ? { ...m, micOn: on } : m)))}
           showNameplates={names} showAudience={false} chatOpen={false} chatUnreadCount={0}
           onToggleChat={noop} onToggleMic={noop} onToggleCamera={noop} onToggleScreenShare={noop}
           onToggleLocalRecording={noop} onChangeRecordingQuality={noop} onChangeLayout={setLayout}

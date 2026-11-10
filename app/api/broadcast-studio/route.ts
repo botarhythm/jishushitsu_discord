@@ -32,6 +32,11 @@ interface BroadcastStudioRequest {
   /** 下段に視聴者サムネを表示するか（録画には含めない、表示のみ） */
   showAudience: boolean;
   /**
+   * ホストが収録モードで録画中か。後から入室した参加者はこれを見て、
+   * マイクを OFF の状態で入室する（録画に不意の音声が入らないように）。
+   */
+  recording?: boolean;
+  /**
    * 旧クライアント互換のために受け取るが**使わない**。ホストの identity は
    * サーバ側でセッションから導出する（クライアントの自称を信用しない）。
    */
@@ -193,6 +198,7 @@ export async function POST(request: NextRequest) {
             slots,
             showNameplates: !!showNameplates,
             showAudience: !!showAudience,
+            recording: body.recording === true,
             host: hostIdentity,
             ...(isV2
               ? {

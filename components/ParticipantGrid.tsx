@@ -18,6 +18,8 @@ import { AiEnergyOrb } from './AiEnergyOrb';
 export interface InstructorActionContext {
   currentRoom: RoomName;
   selfIdentity: string;
+  /** 講師が参加者のマイクを ON/OFF する (タイルのマイク表示がボタンになる) */
+  onSetMic?: (participantIdentity: string, enabled: boolean) => void;
 }
 
 interface ParticipantGridProps {
@@ -308,6 +310,13 @@ function Tile({
     if (participant.metadata) meta = JSON.parse(participant.metadata);
   } catch {}
 
+  // 講師が見ているときは、自分と AI 以外のマイク表示を押せるボタンにする
+  const onSetMic = instructorContext?.onSetMic;
+  const onToggleMic =
+    onSetMic && participant.identity !== instructorContext.selfIdentity && !isAi
+      ? (enabled: boolean) => onSetMic(participant.identity, enabled)
+      : undefined;
+
   // 画面共有は内容が切れないよう contain、カメラは枠いっぱいに埋める cover。
   const videoFit = source === 'screen' ? 'object-contain' : 'object-cover';
 
@@ -337,7 +346,7 @@ function Tile({
           {source === 'screen' && (
             <span className="text-[10px] uppercase tracking-wide text-amber-400">screen</span>
           )}
-          <MicIndicator participant={participant} />
+          <MicIndicator participant={participant} name={name} onToggle={onToggleMic} />
         </div>
 
         {instructorContext &&
@@ -375,7 +384,7 @@ function Tile({
         {source === 'screen' && (
           <span className="text-[10px] uppercase tracking-wide text-amber-400">screen</span>
         )}
-        <MicIndicator participant={participant} />
+        <MicIndicator participant={participant} name={name} onToggle={onToggleMic} />
       </div>
 
       {extraTopRight && <div className="absolute top-2 right-2">{extraTopRight}</div>}
@@ -399,9 +408,41 @@ function AvatarPlaceholder({ name, isAi = false }: { name: string; isAi?: boolea
   );
 }
 
-function MicIndicator({ participant }: { participant: Participant }) {
+function MicIndicator({
+  participant,
+  name,
+  onToggle,
+}: {
+  participant: Participant;
+  name: string;
+  /** 指定時はボタンになり、押すと反対の状態を指示する (講師用) */
+  onToggle?: (enabled: boolean) => void;
+}) {
   const micPub = participant.getTrackPublication(Track.Source.Microphone);
   const muted = !micPub || micPub.isMuted;
+  if (onToggle) {
+    const label = `${name}のマイクを${muted ? 'ON' : 'OFF'}にする`;
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          // タイル本体のクリック (スポットライト切替) を起こさない
+          e.stopPropagation();
+          onToggle(muted);
+        }}
+        className={`rounded px-1 py-0.5 text-xs leading-none transition-colors ${
+          muted
+            ? 'bg-stone-700/80 text-stone-400 hover:bg-stone-600'
+            : 'bg-emerald-700/50 text-emerald-300 hover:bg-emerald-700/80'
+        }`}
+        data-testid="tile-mic-toggle"
+        aria-label={label}
+        title={label}
+      >
+        {muted ? '🔇' : '🎤'}
+      </button>
+    );
+  }
   return (
     <span
       className={`text-xs leading-none ${muted ? 'text-stone-500' : 'text-emerald-400'}`}

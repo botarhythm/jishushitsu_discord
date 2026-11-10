@@ -15,6 +15,7 @@ import {
   type SlotGeometry,
 } from '@/lib/studio-layouts';
 import { parseSlotToken, type AiTileState } from '@/lib/studio-participants';
+import { isAiLiveKitIdentity } from '@/lib/ai/livekit-participant';
 import { AiAvatarTile } from './AiAvatarTile';
 import { AiEnergyOrb } from './AiEnergyOrb';
 
@@ -247,7 +248,17 @@ export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTi
  * ステージ (16:9, Region Capture のクロップ対象) の外に置かれるため、
  * 表示はされるが録画フレームには含まれない。
  */
-export function AudienceStrip({ excludeIdentities }: { excludeIdentities: (string | null)[] }) {
+export function AudienceStrip({
+  excludeIdentities,
+  onSetMic,
+}: {
+  excludeIdentities: (string | null)[];
+  /**
+   * 講師用。指定すると、自分と AI 以外のサムネにマイクの ON/OFF ボタンを出す。
+   * このストリップは録画ステージ (16:9) の外にあるので、ボタンは録画に映らない。
+   */
+  onSetMic?: (participantIdentity: string, enabled: boolean) => void;
+}) {
   const tracks = useTracks([Track.Source.Camera], { onlySubscribed: false });
   const participants = useParticipants();
   const exclude = useMemo(() => {
@@ -293,6 +304,21 @@ export function AudienceStrip({ excludeIdentities }: { excludeIdentities: (strin
             <span className="absolute inset-x-0 bottom-0 truncate bg-black/50 px-1 py-0.5 text-[9px] text-white">
               {name}
             </span>
+            {onSetMic && !p.isLocal && !isAiLiveKitIdentity(p.identity) && (
+              <button
+                type="button"
+                onClick={() => onSetMic(p.identity, !p.isMicrophoneEnabled)}
+                className={`absolute right-1 top-1 rounded px-1 py-0.5 text-xs leading-none transition-colors ${
+                  p.isMicrophoneEnabled
+                    ? 'bg-emerald-700/70 text-emerald-200 hover:bg-emerald-700'
+                    : 'bg-black/60 text-stone-300 hover:bg-black/80'
+                }`}
+                aria-label={`${name}のマイクを${p.isMicrophoneEnabled ? 'OFF' : 'ON'}にする`}
+                title={`${name}のマイクを${p.isMicrophoneEnabled ? 'OFF' : 'ON'}にする`}
+              >
+                {p.isMicrophoneEnabled ? '🎤' : '🔇'}
+              </button>
+            )}
           </div>
         );
       })}

@@ -14,6 +14,7 @@ import {
 import {
   Track,
   RoomEvent,
+  ConnectionState,
   type AudioCaptureOptions,
   type LocalAudioTrack,
   type LocalVideoTrack,
@@ -23,6 +24,8 @@ import { downloadChatHistory } from '@/lib/chat-export';
 import { describeMediaDeviceFailure, isPermissionFailure } from '@/lib/media-device-error';
 import { errorDetail, reportDeviceFailure } from '@/lib/device-report';
 import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS, mergeParticipantMetadata } from '@/lib/types';
+import { isAiLiveKitIdentity } from '@/lib/ai/livekit-participant';
+import { isStudioRecordingFor } from '@/lib/studio-recording';
 import InstructorDashboard from './InstructorDashboard';
 import { useRoomsStatus } from '@/hooks/useRoomsStatus';
 import { useEndSession } from '@/hooks/useEndSession';
@@ -124,7 +127,10 @@ export default function RoomView(props: RoomViewProps) {
       token={props.token}
       serverUrl={props.livekitUrl}
       connect={true}
-      audio={initialMicOn}
+      // 受講生・ゲストのマイクは接続後に RoomInner が入れる。収録モードで録画中の
+      // ルームでは OFF のまま入室させるため、接続前に自動 publish しない
+      // (接続してからでないと room metadata の録画状態が読めない)。
+      audio={props.role === 'instructor' ? initialMicOn : false}
       video={initialCameraOn}
       className="h-dvh flex flex-col bg-stone-900"
       options={roomOptions}
@@ -151,6 +157,7 @@ function RoomInner({
   currentRoom,
   initialRec = 'off',
   onRoomChange,
+  initialMicOn = true,
   aiEnabled,
   setAiEnabled,
   setAiMonitoredExternally,
@@ -318,6 +325,33 @@ function RoomInner({
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [localParticipant, reviveEndedTrack]);
+
+  // ── 受講生・ゲストの入室時のマイク ──
+  // LiveKitRoom には audio=false で接続させ、接続後に room metadata を見て決める。
+  // 講師が収録モードで録画中なら OFF のまま入室させる (録画に不意の音声が入らないように)。
+  // 録画中でなければ、入室前の画面で選んだとおりに ON にする。
+  // RoomInner はルーム移動のたびに再マウントされるので、移動先でも同じ判定が走る。
+  const initialMicAppliedRef = useRef(false);
+  useEffect(() => {
+    if (isInstructor || !initialMicOn) return;
+    const apply = () => {
+      if (initialMicAppliedRef.current) return;
+      if (room.state !== ConnectionState.Connected) return;
+      initialMicAppliedRef.current = true;
+      if (isStudioRecordingFor(room.metadata, localParticipant.identity)) {
+        setDeviceNotice(
+          '収録中のため、マイクを OFF にして入室しました。話すときは下のマイクボタンで ON にしてください。'
+        );
+        return;
+      }
+      void setLocalDevice('mic', true);
+    };
+    apply();
+    room.on(RoomEvent.Connected, apply);
+    return () => {
+      room.off(RoomEvent.Connected, apply);
+    };
+  }, [isInstructor, initialMicOn, room, localParticipant, setLocalDevice]);
 
   useEffect(() => {
     if (!isInstructor) return;
@@ -604,6 +638,26 @@ function RoomInner({
     }
     return opts;
   }, [participants, aiEnabled, aiConfig.displayName]);
+
+  // 収録モードのバーから操作する受講生のマイク一覧 (自分・AI・講師は除く)
+  const studentMics = useMemo(
+    () =>
+      participants
+        .filter((p) => {
+          if (p.isLocal || isAiLiveKitIdentity(p.identity)) return false;
+          try {
+            return (JSON.parse(p.metadata ?? '{}') as { role?: string }).role !== 'instructor';
+          } catch {
+            return true;
+          }
+        })
+        .map((p) => ({
+          identity: p.identity,
+          name: p.name?.trim() || p.identity,
+          micOn: p.isMicrophoneEnabled,
+        })),
+    [participants]
+  );
 
   const instructorIdentities = useMemo(
     () =>
@@ -1001,6 +1055,8 @@ function RoomInner({
         slots: studioSlots,
         showNameplates,
         showAudience,
+        // 開始処理中から立てておく (開始直後に入室した人のマイクも OFF にするため)
+        recording: studioMode && (isLocalRecording || isLocalRecordingStarting),
         senderIdentity: localParticipant.identity,
         schemaVersion: 2,
         revision: studioRevisionRef.current,
@@ -1022,7 +1078,7 @@ function RoomInner({
       .catch(() => {
         setStudioSyncError('収録設定の同期に失敗しました (通信エラー)');
       });
-  }, [isInstructor, studioMode, studioLayout, studioSlots, showNameplates, showAudience, currentRoom, localParticipant, aiDescriptor]);
+  }, [isInstructor, studioMode, studioLayout, studioSlots, showNameplates, showAudience, isLocalRecording, isLocalRecordingStarting, currentRoom, localParticipant, aiDescriptor]);
 
   // 全参加者は room metadata から studio 状態を反映する (後入室・再接続でも確実に同期)。
   // 自分がホストとして設定中の studio は適用しない (ローカルの studioMode で制御するため)。
@@ -1246,6 +1302,13 @@ function RoomInner({
     [currentRoom]
   );
 
+  const setParticipantMic = useCallback(
+    (participantIdentity: string, enabled: boolean) => {
+      void setParticipantDevice(participantIdentity, 'mic', enabled);
+    },
+    [setParticipantDevice]
+  );
+
   const returnToMain = useCallback(() => {
     void changeRoom('main');
   }, [changeRoom]);
@@ -1307,6 +1370,7 @@ function RoomInner({
             {showAudience && studioLayout !== 'spotlight-strip' && (
               <AudienceStrip
                 excludeIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
+                onSetMic={setParticipantMic}
               />
             )}
           </div>
@@ -1368,6 +1432,9 @@ function RoomInner({
           layout={studioLayout}
           slotIdentities={studioSlots}
           participantOptions={participantOptions}
+          studentMics={studentMics}
+          onSetStudentMic={setParticipantMic}
+          studentMicsDisabled={panelsLocked}
           showNameplates={showNameplates}
           showAudience={showAudience}
           onToggleMic={toggleMic}
@@ -1492,6 +1559,7 @@ function RoomInner({
                   ? {
                       currentRoom,
                       selfIdentity: localParticipant.identity,
+                      onSetMic: setParticipantMic,
                     }
                   : undefined
               }

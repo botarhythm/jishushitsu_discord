@@ -14,6 +14,12 @@ export interface StudioParticipantOption {
   name: string;
 }
 
+export interface StudioStudentMic {
+  identity: string;
+  name: string;
+  micOn: boolean;
+}
+
 interface StudioBarProps {
   isMicOn: boolean;
   isCameraOn: boolean;
@@ -47,6 +53,11 @@ interface StudioBarProps {
   layout: StudioLayout;
   slotIdentities: (string | null)[];
   participantOptions: StudioParticipantOption[];
+  /** 受講生のマイク状態 (講師がバーから OFF/ON する) */
+  studentMics?: StudioStudentMic[];
+  onSetStudentMic?: (identity: string, enabled: boolean) => void;
+  /** true の間は受講生マイクの一覧を開けない (panelLockReason 参照。ステージに重なるため) */
+  studentMicsDisabled?: boolean;
   showNameplates: boolean;
   showAudience: boolean;
   /** 左のチャットパネルが開いているか */
@@ -96,6 +107,9 @@ export function StudioBar(props: StudioBarProps) {
     layout,
     slotIdentities,
     participantOptions,
+    studentMics = [],
+    onSetStudentMic,
+    studentMicsDisabled = false,
     showNameplates,
     showAudience,
     chatOpen,
@@ -117,6 +131,7 @@ export function StudioBar(props: StudioBarProps) {
   } = props;
 
   const [visible, setVisible] = useState(true);
+  const [micsOpen, setMicsOpen] = useState(false);
   const hoveringRef = useRef(false);
   const focusedRef = useRef(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -124,7 +139,10 @@ export function StudioBar(props: StudioBarProps) {
   const scheduleHide = useCallback(() => {
     if (hideTimer.current) clearTimeout(hideTimer.current);
     hideTimer.current = setTimeout(() => {
-      if (!hoveringRef.current && !focusedRef.current) setVisible(false);
+      if (!hoveringRef.current && !focusedRef.current) {
+        setVisible(false);
+        setMicsOpen(false);
+      }
     }, 3000);
   }, []);
 
@@ -179,6 +197,58 @@ export function StudioBar(props: StudioBarProps) {
         scheduleHide();
       }}
     >
+      <div className="relative max-w-full">
+      {/* 受講生のマイク一覧。バー本体は横スクロールするので、その外に重ねる。
+          ステージに重なるが、Element Capture 録画中はステージのサブツリー外なので映らない。
+          Region Capture へ落ちたときと開始処理中は studentMicsDisabled で開かせない。 */}
+      {micsOpen && !studentMicsDisabled && onSetStudentMic && (
+        <div
+          role="dialog"
+          aria-label="受講生のマイク"
+          className="absolute bottom-full left-1/2 mb-2 w-72 max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-xl border border-stone-700/70 bg-stone-900/95 p-3 shadow-2xl backdrop-blur-md"
+        >
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-xs font-medium text-stone-300">受講生のマイク</span>
+            <button
+              type="button"
+              onClick={() => {
+                for (const m of studentMics) if (m.micOn) onSetStudentMic(m.identity, false);
+              }}
+              disabled={!studentMics.some((m) => m.micOn)}
+              className="rounded-md bg-stone-700 px-2 py-1 text-xs text-stone-100 hover:bg-stone-600 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              全員 OFF
+            </button>
+          </div>
+          {studentMics.length === 0 ? (
+            <p className="py-2 text-xs text-stone-500">受講生はいません</p>
+          ) : (
+            <ul className="max-h-64 space-y-1 overflow-y-auto">
+              {studentMics.map((m) => (
+                <li key={m.identity} className="flex items-center justify-between gap-2 rounded-md bg-stone-800/70 px-2 py-1.5">
+                  <span className="min-w-0 truncate text-sm text-stone-200">{m.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => onSetStudentMic(m.identity, !m.micOn)}
+                    aria-label={`${m.name}のマイクを${m.micOn ? 'OFF' : 'ON'}にする`}
+                    title={m.micOn ? 'マイクを OFF にする' : 'マイクを ON にする'}
+                    className={`shrink-0 rounded px-2 py-0.5 text-xs transition-colors ${
+                      m.micOn
+                        ? 'bg-green-700/50 text-green-200 hover:bg-green-700/70'
+                        : 'bg-stone-600 text-stone-300 hover:bg-stone-500'
+                    }`}
+                  >
+                    {m.micOn ? '🎤 ON' : '🔇 OFF'}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-2 text-[11px] leading-relaxed text-stone-500">
+            OFF にしても、受講生は自分で ON に戻せます。
+          </p>
+        </div>
+      )}
       <div className="flex max-w-full items-center gap-2 overflow-x-auto rounded-2xl border border-stone-700/70 bg-stone-900/85 px-3 py-2 shadow-2xl backdrop-blur-md">
         {/* チャット表示切替 (左端の全高オーバーレイ。Element Capture で収録から除外される)。
             chatDisabled = true になるのは開始処理中と region フォールバック時だけで、
@@ -217,6 +287,29 @@ export function StudioBar(props: StudioBarProps) {
         <BarButton active={isScreenSharing} label="画面共有" onClick={onToggleScreenShare}>
           🖥️
         </BarButton>
+        {onSetStudentMic && (
+          <div className="relative shrink-0">
+            <BarButton
+              active={micsOpen && !studentMicsDisabled}
+              disabled={studentMicsDisabled}
+              label={
+                studentMicsDisabled
+                  ? `受講生のマイク: ${panelLockNote}`
+                  : micsOpen
+                    ? '受講生のマイク一覧を閉じる'
+                    : '受講生のマイクを操作する'
+              }
+              onClick={() => setMicsOpen((v) => !v)}
+            >
+              🎙️
+            </BarButton>
+            {studentMics.some((m) => m.micOn) && (
+              <span className="absolute -right-1 -top-1 flex min-w-[1.1rem] items-center justify-center rounded-full bg-green-600 px-1 text-[10px] font-bold text-white">
+                {studentMics.filter((m) => m.micOn).length}
+              </span>
+            )}
+          </div>
+        )}
 
         <Divider />
 
@@ -372,6 +465,7 @@ export function StudioBar(props: StudioBarProps) {
             セッション終了
           </button>
         )}
+      </div>
       </div>
     </div>
   );
