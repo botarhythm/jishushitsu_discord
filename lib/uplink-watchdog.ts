@@ -45,6 +45,8 @@ export interface UplinkWatchdogOptions {
   onEvent: (event: UplinkEvent) => void;
   /** 映像を止めてよいか。収録中は false（講師の映像が収録から消えるため） */
   canPauseVideo?: () => boolean;
+  /** 止めた映像を戻す。カメラが応答しないときの立て直しを含める (lib/camera-recovery.ts)。既定は unmute */
+  resumeVideo?: () => Promise<unknown>;
   /** 開発用: 品質 Poor・受信報告なしとして扱い、止める→切り替える→戻すの流れを試す */
   simulateStall?: boolean;
 }
@@ -194,7 +196,8 @@ export class UplinkWatchdog {
             pausedAt = null;
             resumeSec = Math.min(resumeSec * 2, RESUME_SEC_MAX);
             try {
-              await cam.unmute();
+              if (this.opts.resumeVideo) await this.opts.resumeVideo();
+              else await cam.unmute();
               this.opts.onEvent({ type: 'video-resumed', pausedSec, path });
             } catch (e) {
               this.opts.onEvent({

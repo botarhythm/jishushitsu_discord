@@ -58,6 +58,10 @@ Last synced: 2026-08-30
   入室直後に TLS へ切り替える（localStorage `jishushitsu:prefer-tls-until`）。simulcast は 540p＋180p の 2 層（360p をやめた）。
   本人に案内を出し、`/api/call-incident` に記録する（`CALL_INCIDENT_WEBHOOK_URL` があれば Discord へ）。`force-tls` は SDK の試験用機能なので、
   livekit-client を更新したら `/connection-test` の「中継・TLS」で切り替わることを確かめる。開発環境では `/room?simulateStall` で流れを試せる
+- カメラが応答しないときの立て直し（2026-11-21）: 11/20 夜、講師のカメラが通話の途中で止まり、以後 1 時間 ON が
+  `AbortError: Timeout starting video source` で失敗し続けた（device-log に 12 回。最初に止めたのは見張りではない。見張りの映像停止の記録は終了直前 21:44 の 1 件だけ）。
+  LiveKit の ON は止まった publication を同じカメラで取り直すだけなので、`lib/camera-recovery.ts` で「起動しない」失敗に限り
+  作り直し → ほかの実機カメラ（仮想カメラは除く）の順に試す。見張りが映像を戻すときも同じ経路。止まった瞬間は device-log の `track-ended` に残る
 - 接続テスト `/connection-test`（2026-10-29）: ログイン済みなら誰でも実行でき、通話中でも切れない。SDK の ConnectionCheck と、
   本番設定で 20 秒送り続ける持続検査（自動接続／中継固定）を比べる。症状が出た PC で実行し「結果をコピー」を送ってもらう
 

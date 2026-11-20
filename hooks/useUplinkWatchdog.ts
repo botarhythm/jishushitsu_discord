@@ -5,6 +5,7 @@ import { ConnectionState, RoomEvent, type Room } from 'livekit-client';
 import { UplinkWatchdog, type UplinkEvent } from '@/lib/uplink-watchdog';
 import { switchToTls } from '@/lib/connection-test';
 import { rememberTls, shouldStartWithTls } from '@/lib/prefer-tls';
+import { CAMERA_STUCK_MESSAGE, enableCameraWithRecovery } from '@/lib/camera-recovery';
 
 export interface UplinkNotice {
   tone: 'error' | 'info';
@@ -26,7 +27,7 @@ function noticeFor(event: UplinkEvent): UplinkNotice | null {
       };
     case 'video-resumed':
       return event.error
-        ? { tone: 'error', message: 'カメラ映像を戻せませんでした。カメラのボタンで ON にしてください。' }
+        ? { tone: 'error', message: `通信は安定しましたが、カメラ映像を戻せませんでした。\n${CAMERA_STUCK_MESSAGE}` }
         : { tone: 'info', message: '通信が安定したので、カメラ映像を戻しました。', autoHide: true };
     case 'stalled':
       if (event.willSwitch) {
@@ -61,6 +62,7 @@ export function useUplinkWatchdog(room: Room, roomName: string, isRecording: boo
     const watchdog = new UplinkWatchdog(room, {
       simulateStall,
       canPauseVideo: () => !recordingRef.current,
+      resumeVideo: () => enableCameraWithRecovery(room),
       onEvent: (event) => {
         if (event.type === 'switched' && event.ok) rememberTls();
         const next = noticeFor(event);

@@ -15,11 +15,16 @@ import {
   Track,
   RoomEvent,
   ConnectionState,
+  ParticipantEvent,
+  TrackEvent,
   type AudioCaptureOptions,
   type LocalAudioTrack,
+  type LocalTrack,
+  type LocalTrackPublication,
   type LocalVideoTrack,
 } from 'livekit-client';
 import { createCallRoomOptions } from '@/lib/call-media-options';
+import { CAMERA_STUCK_MESSAGE, enableCameraWithRecovery, isCameraStartFailure } from '@/lib/camera-recovery';
 import { downloadChatHistory } from '@/lib/chat-export';
 import { describeMediaDeviceFailure, isPermissionFailure } from '@/lib/media-device-error';
 import { errorDetail, reportDeviceFailure } from '@/lib/device-report';
@@ -275,7 +280,23 @@ function RoomInner({
       const source = isMic ? Track.Source.Microphone : Track.Source.Camera;
       try {
         if (isMic) await localParticipant.setMicrophoneEnabled(enabled);
-        else await localParticipant.setCameraEnabled(enabled);
+        else if (enabled) {
+          // カメラが応答しないときは、取り直し → 別のカメラの順に立て直す (lib/camera-recovery.ts)
+          const result = await enableCameraWithRecovery(room, (message) => setDeviceNotice(message));
+          if (result.recovered) {
+            setDeviceErrorState(null);
+            setDeviceNotice(
+              result.recovered === 'other-device'
+                ? `カメラが応答しなかったため、「${result.label ?? '別のカメラ'}」に切り替えました。`
+                : 'カメラが応答しなかったため、起動し直しました。'
+            );
+            void reportDeviceFailure('camera', `recovered-${result.recovered}`, 'camera recovered', {
+              label: result.label?.slice(0, 24) ?? null,
+            });
+          } else {
+            setDeviceNotice(null);
+          }
+        } else await localParticipant.setCameraEnabled(false);
         if (enabled) await reviveEndedTrack(source);
         const actual = isMic ? localParticipant.isMicrophoneEnabled : localParticipant.isCameraEnabled;
         if (actual !== enabled) {
@@ -296,16 +317,47 @@ function RoomInner({
       } catch (e) {
         console.warn(`[device] ${label}の切り替えに失敗`, e);
         const err = e instanceof Error ? e : undefined;
-        void reportDeviceFailure(device, enabled ? 'enable' : 'disable', e);
+        const stuck = !isMic && enabled && isCameraStartFailure(e);
+        setDeviceNotice(null);
+        void reportDeviceFailure(device, enabled ? 'enable' : 'disable', e, {
+          label: localParticipant.getTrackPublication(source)?.track?.mediaStreamTrack?.label?.slice(0, 24) ?? null,
+          recoveryTried: stuck,
+        });
         setDeviceErrorState({
-          message: `${describeMediaDeviceFailure(err, label)}\n（詳細: ${errorDetail(e)}）`,
-          showReload: isPermissionFailure(err),
+          message: `${stuck ? CAMERA_STUCK_MESSAGE : describeMediaDeviceFailure(err, label)}\n（詳細: ${errorDetail(e)}）`,
+          showReload: stuck || isPermissionFailure(err),
         });
         return false;
       }
     },
-    [localParticipant, reviveEndedTrack]
+    [room, localParticipant, reviveEndedTrack]
   );
+
+  // マイク/カメラが通話の途中でブラウザや OS に止められたら記録する。
+  // 11/20 夜はカメラがいつ・なぜ止まったかを示す記録が無く、ON の失敗しか残っていなかった。
+  // (LiveKit は止まったトラックを取り直し、失敗したらミュートにする)
+  useEffect(() => {
+    const watched = new Map<LocalTrack, () => void>();
+    const watch = (pub: LocalTrackPublication) => {
+      const track = pub.track;
+      if (!track || watched.has(track)) return;
+      if (pub.source !== Track.Source.Camera && pub.source !== Track.Source.Microphone) return;
+      const device = pub.source === Track.Source.Camera ? 'camera' : 'mic';
+      const onEnded = () => {
+        void reportDeviceFailure(device, 'track-ended', 'track ended by browser/OS', {
+          label: track.mediaStreamTrack?.label?.slice(0, 24) ?? null,
+        });
+      };
+      track.on(TrackEvent.Ended, onEnded);
+      watched.set(track, () => track.off(TrackEvent.Ended, onEnded));
+    };
+    localParticipant.trackPublications.forEach(watch);
+    localParticipant.on(ParticipantEvent.LocalTrackPublished, watch);
+    return () => {
+      localParticipant.off(ParticipantEvent.LocalTrackPublished, watch);
+      watched.forEach((off) => off());
+    };
+  }, [localParticipant]);
 
   // バックグラウンドから戻ったとき、OS に止められたトラックを取り直す
   useEffect(() => {
