@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocalParticipant } from '@livekit/components-react';
 import type { ReceivedChatMessage } from '@livekit/components-react';
 import type { SendTextOptions } from 'livekit-client';
+import { chatMessageKey } from '@/lib/chat-deletion';
+import { ChatMessageItem, type ChatDeletionProps } from './ChatMessageItem';
 
 interface StudioChatPanelProps {
   /** 表示中か。false の間も実装上マウントし続け、未読数を数えてバッジに反映する */
@@ -14,6 +16,7 @@ interface StudioChatPanelProps {
   chatMessages: ReceivedChatMessage[];
   send: (message: string, options?: SendTextOptions) => Promise<ReceivedChatMessage>;
   isSending: boolean;
+  deletion: ChatDeletionProps;
 }
 
 /**
@@ -34,6 +37,7 @@ export function StudioChatPanel({
   chatMessages,
   send,
   isSending,
+  deletion,
 }: StudioChatPanelProps) {
   const { localParticipant } = useLocalParticipant();
   const [text, setText] = useState('');
@@ -95,32 +99,16 @@ export function StudioChatPanel({
         {chatMessages.length === 0 && (
           <p className="py-8 text-center text-xs text-stone-500">メッセージはまだありません</p>
         )}
-        {chatMessages.map((m) => {
-          const isSelf = m.from?.identity === localParticipant?.identity;
-          const name = m.from?.name || m.from?.identity || '匿名';
-          const time = new Date(m.timestamp).toLocaleTimeString('ja-JP', {
-            hour: '2-digit',
-            minute: '2-digit',
-          });
-          return (
-            <div
-              key={`${m.timestamp}-${m.from?.identity ?? 'x'}`}
-              className={`flex flex-col ${isSelf ? 'items-end' : 'items-start'}`}
-            >
-              <div className="flex items-baseline gap-2 text-[10px] text-stone-500">
-                <span className="font-medium text-stone-400">{isSelf ? '自分' : name}</span>
-                <span>{time}</span>
-              </div>
-              <div
-                className={`mt-0.5 max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-1.5 text-sm ${
-                  isSelf ? 'bg-amber-600 text-white' : 'bg-stone-700 text-stone-100'
-                }`}
-              >
-                {m.message}
-              </div>
-            </div>
-          );
-        })}
+        {chatMessages.map((m) => (
+          <ChatMessageItem
+            key={`${m.timestamp}-${m.from?.identity ?? 'x'}`}
+            message={m}
+            isSelf={m.from?.identity === localParticipant?.identity}
+            deleted={deletion.deletedKeys.has(chatMessageKey(m))}
+            canDelete={deletion.canDelete(m)}
+            onDelete={deletion.onDelete}
+          />
+        ))}
       </div>
 
       <form

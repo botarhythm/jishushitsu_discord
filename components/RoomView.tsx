@@ -26,6 +26,7 @@ import {
 import { createCallRoomOptions } from '@/lib/call-media-options';
 import { CAMERA_STUCK_MESSAGE, enableCameraWithRecovery, isCameraStartFailure } from '@/lib/camera-recovery';
 import { downloadChatHistory } from '@/lib/chat-export';
+import { chatMessageKey, useChatDeletion } from '@/lib/chat-deletion';
 import { describeMediaDeviceFailure, isPermissionFailure } from '@/lib/media-device-error';
 import { errorDetail, reportDeviceFailure } from '@/lib/device-report';
 import { RoomName, UserRole, ParticipantMetadata, ROOM_LABELS, mergeParticipantMetadata } from '@/lib/types';
@@ -596,13 +597,26 @@ function RoomInner({
 
   // ── チャット ──
   const chat = useChat();
+  const chatDeletion = useChatDeletion(room);
+  const chatDeletionProps = useMemo(
+    () => ({
+      deletedKeys: chatDeletion.deletedKeys,
+      canDelete: chatDeletion.canDelete,
+      onDelete: chatDeletion.deleteMessage,
+    }),
+    [chatDeletion.deletedKeys, chatDeletion.canDelete, chatDeletion.deleteMessage]
+  );
   const chatMessagesRef = useRef(chat.chatMessages);
+  const chatDeletedKeysRef = useRef(chatDeletion.deletedKeys);
   useEffect(() => {
     chatMessagesRef.current = chat.chatMessages;
-  }, [chat.chatMessages]);
+    chatDeletedKeysRef.current = chatDeletion.deletedKeys;
+  }, [chat.chatMessages, chatDeletion.deletedKeys]);
   const exportChatIfAny = useCallback(() => {
     try {
-      downloadChatHistory(chatMessagesRef.current);
+      // 削除されたメッセージはログにも残さない
+      const deleted = chatDeletedKeysRef.current;
+      downloadChatHistory(chatMessagesRef.current.filter((m) => !deleted.has(chatMessageKey(m))));
     } catch (e) {
       console.error('[chat-export] failed', e);
     }
@@ -1440,6 +1454,7 @@ function RoomInner({
           chatMessages={chat.chatMessages}
           send={chat.send}
           isSending={chat.isSending}
+          deletion={chatDeletionProps}
         />
         {aiSetupOpen && (
           <AiParticipantSetupModal
@@ -1659,6 +1674,7 @@ function RoomInner({
         chatMessages={chat.chatMessages}
         send={chat.send}
         isSending={chat.isSending}
+        deletion={chatDeletionProps}
       />
 
       {/* Device settings modal */}
