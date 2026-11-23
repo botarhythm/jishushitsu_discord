@@ -132,6 +132,28 @@ export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTi
     return <EmptySlot />;
   };
 
+  /** ステージ下部の全参加者の帯。onSelect を渡すと各小窓がスポットライト切替のボタンになる */
+  const renderAllParticipantsStrip = (testId: string, onSelect?: (token: string) => void) =>
+    stripTokens.length > 0 && (
+      <div className="flex h-1/5 shrink-0 items-center justify-center gap-px bg-stone-950" aria-label="全参加者" data-testid={testId}>
+        {stripTokens.map((token) => (
+          <div key={token} className="relative h-full min-w-0 flex-1 overflow-hidden" style={{ maxWidth: '20%' }}>
+            {renderTile(token, { compact: true, cover: false })}
+            {onSelect && (
+              <button
+                type="button"
+                className="absolute inset-0 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-400"
+                aria-label={`${tokenName(token)}をスポットライトに固定`}
+                aria-pressed={spotlightToken === token}
+                title={`${tokenName(token)}をスポットライトに固定`}
+                onClick={() => onSelect(token)}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+    );
+
   return (
     <div className="flex h-full w-full items-center justify-center overflow-hidden bg-black">
       {/* 16:9 レターボックスステージ。max-width を vh 基準にして縦がはみ出さないよう調整。
@@ -155,25 +177,20 @@ export function StudioStage({ layout, slotTokens, showNameplates, stageRef, aiTi
                 </div>
               )}
             </div>
-            {spec.id === 'spotlight-strip' && stripTokens.length > 0 && (
-              <div className="flex h-1/5 shrink-0 items-center justify-center gap-px bg-stone-950" aria-label="全参加者" data-testid="spotlight-strip">
-                {stripTokens.map((token) => (
-                  <div key={token} className="relative h-full min-w-0 flex-1 overflow-hidden" style={{ maxWidth: '20%' }}>
-                    {renderTile(token, { compact: true, cover: false })}
-                    {onSpotlight && (
-                      <button
-                        type="button"
-                        className="absolute inset-0 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-400"
-                        aria-label={`${tokenName(token)}をスポットライトに固定`}
-                        aria-pressed={spotlightToken === token}
-                        title={`${tokenName(token)}をスポットライトに固定`}
-                        onClick={() => onSpotlight(token)}
-                      />
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+            {spec.id === 'spotlight-strip' && renderAllParticipantsStrip('spotlight-strip', onSpotlight)}
+          </div>
+        ) : spec.kind === 'screen-strip' ? (
+          <div className="absolute inset-0 flex flex-col bg-black">
+            {/* 上: 画面共有 (object-contain で全体を表示) */}
+            <div className="relative flex min-h-0 flex-1 items-center justify-center" data-testid="screen-strip-main">
+              {screenRef ? (
+                <VideoTrack trackRef={screenRef} className="h-full w-full object-contain" />
+              ) : (
+                <div className="text-sm text-stone-500" role="status">画面共有を待機中…</div>
+              )}
+            </div>
+            {/* 下: 全参加者 (割当不要)。スポットライトの切替は無いのでボタンは付けない */}
+            {renderAllParticipantsStrip('screen-strip')}
           </div>
         ) : spec.kind === 'screen-main' ? (
           <div className="absolute inset-0 bg-stone-950">

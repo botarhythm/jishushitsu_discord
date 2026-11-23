@@ -9,7 +9,7 @@
  * 同一の見た目になる値で移植している（AC-007）。変更時はスクショ比較で回帰確認すること。
  */
 
-export type StudioLayout = 'split' | 'screen-main' | 'solo' | 'speaker' | 'trio' | 'triple' | 'spotlight' | 'spotlight-strip';
+export type StudioLayout = 'split' | 'screen-main' | 'screen-strip' | 'solo' | 'speaker' | 'trio' | 'triple' | 'spotlight' | 'spotlight-strip';
 
 export interface SlotGeometry {
   /** grid-column の値 (例 '1 / 3') 。省略時は自動配置 */
@@ -31,8 +31,9 @@ export interface StudioLayoutSpec {
    * 描画方式:
    *  - 'grid': gridTemplate* に従って slots を敷き詰める
    *  - 'screen-main': 背景に画面共有、右下に slots を小窓で縦積み（専用描画）
+   *  - 'screen-strip': 上に画面共有、下の帯に全参加者を自動で横並び（割当不要・slots は空）
    */
-  kind: 'grid' | 'screen-main' | 'spotlight';
+  kind: 'grid' | 'screen-main' | 'screen-strip' | 'spotlight';
   gridTemplateColumns?: string;
   gridTemplateRows?: string;
   slots: SlotGeometry[];
@@ -69,6 +70,13 @@ export const STUDIO_LAYOUTS: Record<StudioLayout, StudioLayoutSpec> = {
       { cover: true, compact: true },
       { cover: true, compact: true },
     ],
+  },
+  // 新規: 画面共有を上に大きく + 下の帯に全参加者 (spotlight-strip と同じ帯)。出演者の割当は不要
+  'screen-strip': {
+    id: 'screen-strip',
+    label: '共有画面＋全参加者を下部に表示',
+    kind: 'screen-strip',
+    slots: [],
   },
   // 従来: 1名フル (cover)
   solo: {
@@ -129,6 +137,14 @@ export const STUDIO_LAYOUT_SLOTS: Record<StudioLayout, number> = Object.fromEntr
 export const MAX_STUDIO_SLOTS = Math.max(
   ...Object.values(STUDIO_LAYOUTS).map((s) => s.slots.length)
 );
+
+/**
+ * 録画ステージの中に全参加者の帯を持つレイアウトか。
+ * このときステージ外の視聴者サムネ（AudienceStrip）は重複するので出さない。
+ */
+export function hasAllParticipantsStrip(layout: string | null | undefined): boolean {
+  return layout === 'spotlight-strip' || layout === 'screen-strip';
+}
 
 /**
  * 未知のレイアウトIDを安全に解決する（旧クライアント/不正metadata対策）。

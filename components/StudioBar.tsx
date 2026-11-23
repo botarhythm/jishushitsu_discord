@@ -5,6 +5,7 @@ import type { RecordingQuality } from '@/hooks/useLocalRecording';
 import {
   STUDIO_LAYOUT_LABELS,
   STUDIO_LAYOUTS,
+  hasAllParticipantsStrip,
   type StudioLayout,
 } from '@/lib/studio-layouts';
 
@@ -434,7 +435,7 @@ export function StudioBar(props: StudioBarProps) {
         <BarButton active={showNameplates} label="名前表示" onClick={onToggleNameplates}>
           🏷️
         </BarButton>
-        <BarButton active={showAudience || layout === 'spotlight-strip'} disabled={layout === 'spotlight-strip'} label={layout === 'spotlight-strip' ? '全参加者を録画内の下部に表示中' : '視聴者を下段に表示'} onClick={onToggleAudience}>
+        <BarButton active={showAudience || hasAllParticipantsStrip(layout)} disabled={hasAllParticipantsStrip(layout)} label={hasAllParticipantsStrip(layout) ? '全参加者を録画内の下部に表示中' : '視聴者を下段に表示'} onClick={onToggleAudience}>
           👥
         </BarButton>
 

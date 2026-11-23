@@ -26,6 +26,7 @@ import {
 import { createCallRoomOptions } from '@/lib/call-media-options';
 import { CAMERA_STUCK_MESSAGE, enableCameraWithRecovery, isCameraStartFailure } from '@/lib/camera-recovery';
 import { downloadChatHistory } from '@/lib/chat-export';
+import { hasAllParticipantsStrip } from '@/lib/studio-layouts';
 import { chatMessageKey, useChatDeletion } from '@/lib/chat-deletion';
 import { describeMediaDeviceFailure, isPermissionFailure } from '@/lib/media-device-error';
 import { errorDetail, reportDeviceFailure } from '@/lib/device-report';
@@ -1085,7 +1086,8 @@ function RoomInner({
     if (!studioMode) return;
     if (screenShareActive) {
       setStudioLayout((prev) => {
-        if (prev === 'spotlight' || prev === 'spotlight-strip') return prev;
+        // スポットライト系と「共有画面＋全参加者」は手動の選択を優先して切り替えない
+        if (prev === 'spotlight' || prev === 'spotlight-strip' || prev === 'screen-strip') return prev;
         if (prev !== 'screen-main') preShareLayoutRef.current = prev;
         return 'screen-main';
       });
@@ -1433,7 +1435,7 @@ function RoomInner({
               />
             </div>
             {/* 視聴者サムネは録画ステージ (16:9) の外。表示されるが録画には含まれない。 */}
-            {showAudience && studioLayout !== 'spotlight-strip' && (
+            {showAudience && !hasAllParticipantsStrip(studioLayout) && (
               <AudienceStrip
                 excludeIdentities={studioSlots.slice(0, STUDIO_LAYOUT_SLOTS[studioLayout])}
                 onSetMic={setParticipantMic}
@@ -1607,7 +1609,7 @@ function RoomInner({
                   aiOrb={roomAiTile}
                 />
               </div>
-              {remoteStudio.showAudience && remoteStudio.layout !== 'spotlight-strip' && (
+              {remoteStudio.showAudience && !hasAllParticipantsStrip(remoteStudio.layout) && (
                 <AudienceStrip
                   excludeIdentities={remoteStudio.slots.slice(
                     0,
