@@ -11,10 +11,12 @@ type RoomsStatusPayload = {
   rooms: { roomName: RoomName; participants: { identity: string; name: string; role: string }[] }[];
 };
 
-// 同じスペースへの問い合わせを短い間まとめる。参加者が何人いても、1 つの関数インスタンスから
-// LiveKit へ listParticipants を投げるのは 2 秒に 1 回（6 部屋分）までにする。
+// 同じスペースへの問い合わせを短い間まとめる。入退室のイベントで全員のタブが同時に
+// 取り直す瞬間の重複を、1 つの関数インスタンスにつき LiveKit への 1 回（6 部屋分）にまとめる。
 // 応答はスペースごとに同じ内容（閲覧者によらない）なので、まとめても漏れは無い。
-const CACHE_TTL_MS = 2_000;
+// TTL は、イベント後の取り直し（RoomView 800ms・講師ダッシュボード 1,000ms）より短くしておく。
+// 長いと、その取り直しがイベント前の古い結果を受け取り、次の定期取得まで一覧が古いまま残る。
+const CACHE_TTL_MS = 700;
 const cache = new Map<string, { at: number; promise: Promise<RoomsStatusPayload> }>();
 
 export async function GET(_request: NextRequest) {
