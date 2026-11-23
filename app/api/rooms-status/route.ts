@@ -7,6 +7,18 @@ import { livekitRoomFor } from '@/lib/space';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
+type RoomsStatusPayload = {
+  rooms: { roomName: RoomName; participants: { identity: string; name: string; role: string }[] }[];
+};
+
+// 同じスペースへの問い合わせを短い間まとめる。入退室のイベントで全員のタブが同時に
+// 取り直す瞬間の重複を、1 つの関数インスタンスにつき LiveKit への 1 回（6 部屋分）にまとめる。
+// 応答はスペースごとに同じ内容（閲覧者によらない）なので、まとめても漏れは無い。
+// TTL は、イベント後の取り直し（RoomView 800ms・講師ダッシュボード 1,000ms）より短くしておく。
+// 長いと、その取り直しがイベント前の古い結果を受け取り、次の定期取得まで一覧が古いまま残る。
+const CACHE_TTL_MS = 700;
+const cache = new Map<string, { at: number; promise: Promise<RoomsStatusPayload> }>();
+
 export async function GET(_request: NextRequest) {
   // セッションがあるユーザー（受講生・講師）のみ許可
   const auth = await requireSession();
@@ -21,6 +33,38 @@ export async function GET(_request: NextRequest) {
       return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
     }
 
+    const space = auth.session.space;
+    const cacheKey = String(space ?? '');
+    const now = Date.now();
+    const hit = cache.get(cacheKey);
+    let promise: Promise<RoomsStatusPayload>;
+    if (hit && now - hit.at < CACHE_TTL_MS) {
+      promise = hit.promise;
+    } else {
+      promise = loadRoomsStatus(livekitUrl, apiKey, apiSecret, space);
+      cache.set(cacheKey, { at: now, promise });
+      // 失敗した結果は使い回さない
+      promise.catch(() => {
+        if (cache.get(cacheKey)?.promise === promise) cache.delete(cacheKey);
+      });
+    }
+    const payload = await promise;
+
+    return NextResponse.json(payload, {
+      headers: { 'Cache-Control': 'no-store, max-age=0' },
+    });
+  } catch (error) {
+    console.error('Fetch room status error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+async function loadRoomsStatus(
+  livekitUrl: string,
+  apiKey: string,
+  apiSecret: string,
+  space: Parameters<typeof livekitRoomFor>[0]
+): Promise<RoomsStatusPayload> {
     const roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
     const rooms: RoomName[] = ['main', ...BREAKOUT_ROOMS];
 
@@ -28,7 +72,7 @@ export async function GET(_request: NextRequest) {
       rooms.map(async (roomName) => {
         try {
           const participants = await roomService.listParticipants(
-            livekitRoomFor(auth.session.space, roomName)
+            livekitRoomFor(space, roomName)
           );
           
           const users = participants.flatMap((p) => {
@@ -71,12 +115,5 @@ export async function GET(_request: NextRequest) {
       })
     );
 
-    return NextResponse.json(
-      { rooms: roomStatuses },
-      { headers: { 'Cache-Control': 'no-store, max-age=0' } }
-    );
-  } catch (error) {
-    console.error('Fetch room status error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
+    return { rooms: roomStatuses };
 }

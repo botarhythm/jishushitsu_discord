@@ -186,7 +186,6 @@ function RoomInner({
   // ルーム内に画面共有が存在するか (収録モードの自動レイアウト切替に使用)
   const screenShareTracks = useTracks([Track.Source.ScreenShare], { onlySubscribed: false });
   const screenShareActive = screenShareTracks.some((t) => isTrackReference(t));
-  const { roomsStatus, refetch: refetchRoomsStatus } = useRoomsStatus();
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   // 画面共有で音声も共有するか (端末ごとの設定、既定 ON)。次回の共有開始から反映される
   const [screenShareAudio, setScreenShareAudio] = useState(() => loadScreenShareAudio());
@@ -198,6 +197,13 @@ function RoomInner({
   const [focusedParticipant, setFocusedParticipant] = useState<string | null>(null);
   const isInstructor = role === 'instructor';
   const isBreakout = currentRoom !== 'main';
+  // 部屋ごとの在室一覧を出すのは、講師（講師ダッシュボード）と、メインルームにいる受講生
+  // （BreakoutList）だけ。ブレイクアウト中・ゲストは一覧を出さないので取りに行かない
+  const roomsStatusEnabled = isInstructor || (!isBreakout && !isGuest);
+  const { roomsStatus, refetch: refetchRoomsStatus } = useRoomsStatus({
+    enabled: roomsStatusEnabled,
+    intervalMs: isInstructor ? 5_000 : 15_000,
+  });
 
   // ── カメラ/マイク取得失敗の可視化 ──
   // 入室時の自動publish (video/audio=true) も setCameraEnabled/setMicrophoneEnabled による
@@ -407,8 +413,9 @@ function RoomInner({
     };
   }, [isInstructor, initialMicOn, room, localParticipant, setLocalDevice]);
 
+  // 入退室・部屋の移動（メタデータの変化）があったら、定期取得を待たずに一覧を取り直す
   useEffect(() => {
-    if (!isInstructor) return;
+    if (!roomsStatusEnabled) return;
 
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const refreshRoomsStatus = () => {
@@ -429,7 +436,7 @@ function RoomInner({
       room.off(RoomEvent.ParticipantDisconnected, refreshRoomsStatus);
       room.off(RoomEvent.ParticipantMetadataChanged, refreshRoomsStatus);
     };
-  }, [isInstructor, refetchRoomsStatus, room]);
+  }, [roomsStatusEnabled, refetchRoomsStatus, room]);
 
   // チャットパネルの開閉。収録モードではクロップが確保できなかった瞬間に
   // 強制的に閉じる必要があるため (録画タブ全体に映り込んでしまう)、録画フックより先に宣言する。
